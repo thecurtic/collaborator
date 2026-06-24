@@ -13,6 +13,8 @@ yarn-error.log*
 .env
 .env.local
 .env.*.local
+.config.yaml  # Local overrides (ignored)
+config.yaml  # User's config file
 
 # OS files
 .DS_Store
