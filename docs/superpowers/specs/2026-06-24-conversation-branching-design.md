@@ -85,6 +85,72 @@ CREATE TABLE branches (
 
 **Alternative considered:** A separate `session_state` table would add unnecessary complexity for a single scalar value.
 
+**⚠️ CRITICAL BUG DETECTED:** The `branches` table schema above references an `active` column in the Switch query, but the actual column name is `is_active`. This is a design-time bug that must be fixed before implementation:
+
+```sql
+-- INCORRECT (will fail):
+UPDATE branches SET active = 1 WHERE branch_id = ?;
+
+-- CORRECT:
+UPDATE branches SET is_active = 1 WHERE branch_id = ?;
+UPDATE branches SET is_active = 0 WHERE branch_id != ?;
+```
+
+This bug affects the design and implementation plan for Phase 2's switch branch functionality.
+
+### Config Layer Design
+
+**Decision:** Single `config.yaml` at project root for shared configuration between backend and Pi.
+
+**Structure:**
+```yaml
+# Inference configuration
+inference:
+  endpoint_url: "http://<inference-host>:1234/v1"
+  model_id: "qwen/qwen3-coder-next"
+  temperature: 0.7
+  max_tokens: 2048
+  thinking_mode: false
+  streaming: true
+
+# Memory configuration
+memory:
+  default_context_window: 5
+  db_path: "/home/chat/collaborator/backend/data/conversations.db"
+
+# Server configuration
+server:
+  backend_host: "0.0.0.0"
+  backend_port: 8000
+  cors_origins:
+    - "http://192.168.0.50:3000"  # Frontend tailnet address
+    - "http://localhost:3000"
+
+# System prompt configuration
+system_prompt:
+  text: "You are Collaborator, a helpful assistant."
+  file_path: null  # Alternative to text - path to prompt template file
+```
+
+**Benefits:**
+- Single source of truth for all configuration
+- Pi can use same config as backend for consistent model selection
+- Easy to swap models without code changes
+- Configurable per-runtime-context (development, production)
+
+**Loading Strategy:**
+1. Load `config.yaml` from project root
+2. Fall back to environment variables if not found
+3. Hardcoded defaults as last resort
+
+**⚠️ PHASE 1 CONCERN:** This config layer is Phase 2 material but worth noting:
+- Don't hardcode `LLM_ENDPOINT` or `LLM_MODEL` in code
+- Create config loader that both backend and Pi use
+- Backend will read this for inference settings
+- Pi should use the same config for consistent model selection
+
+### Config Layer Design
+
 ### Synthesis Phase
 
 **Decision:** Move synthesis to Phase 3+ (after linear turns and basic branching work).
