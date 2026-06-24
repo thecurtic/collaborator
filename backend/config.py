@@ -42,8 +42,24 @@ def load_config() -> dict:
     config = defaults.copy()
     
     # Load from config.yaml if exists
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    config_path = os.path.join(project_root, "config.yaml")
+    # Search for config.yaml in common locations
+    project_root = None
+    
+    # Try common relative paths from backend directory
+    possible_paths = [
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.yaml"),
+        os.path.join(os.getcwd(), "../..", "config.yaml"),  # 2 dirs up from backend
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            project_root = os.path.dirname(path)
+            config_path = path
+            break
+    else:
+        # If no config.yaml found, use the default project path
+        project_root = "/home/chat/collaborator"
+        config_path = os.path.join(project_root, "config.yaml")
     
     if os.path.exists(config_path):
         try:
@@ -53,9 +69,11 @@ def load_config() -> dict:
                     # Deep merge
                     config = deep_merge(config, file_config)
         except yaml.YAMLError as e:
-            print(f"Warning: Failed to parse config.yaml: {e}")
+            print(f"Warning: Failed to parse config.yaml at {config_path}: {e}")
         except IOError as e:
-            print(f"Warning: Failed to read config.yaml: {e}")
+            print(f"Warning: Failed to read config.yaml at {config_path}: {e}")
+    else:
+        print(f"Warning: config.yaml not found at {config_path}, using defaults")
     
     # Override with environment variables
     _apply_env_overrides(config)
