@@ -66,16 +66,38 @@ CREATE TABLE branches (
     fork_turn_id INTEGER NOT NULL,  -- Turn where this branch was created
     root_turn_id INTEGER NOT NULL,  -- First turn in this branch path
     title TEXT,                     -- Auto-generated or user-set
+    is_active BOOLEAN NOT NULL DEFAULT 0,  -- Currently active branch path
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     
     FOREIGN KEY (fork_turn_id) REFERENCES turns(id),
     FOREIGN KEY (root_turn_id) REFERENCES turns(id)
 );
 ```
+```
 
-## Rationale
+## Design Rationale
 
-### Why `branch_id` and `turn_index`
+### Active Branch Tracking
+
+**Decision:** Use an explicit `is_active` flag on branches table rather than inferred from turn_index.
+
+**Reasoning:** The branch with the highest `turn_index` is not necessarily the user's current location - they may have navigated away and back. The `is_active` flag explicitly tracks the current position.
+
+**Alternative considered:** A separate `session_state` table would add unnecessary complexity for a single scalar value.
+
+### Synthesis Phase
+
+**Decision:** Move synthesis to Phase 3+ (after linear turns and basic branching work).
+
+**Reasoning:** Synthesis is genuinely complex:
+- Requires UI to select multiple branches for comparison
+- Needs diff visualization for conflicting information
+- Context assembly must pull from multiple branch paths
+- Higher risk feature that could delay core functionality
+
+**Risk Mitigation:** The schema design already supports branching natively. Linear conversations are just single-branch trees, so we're not painting ourselves into a corner by deferring synthesis.
+
+### commits are immutable - once persisted, content cannot be changed
 - `branch_id`: All turns in a linear path share the same branch_id
 - `turn_index`: Position within that path (0 = first turn, N = Nth turn)
 - Together they uniquely identify any turn's position in the tree
@@ -141,8 +163,8 @@ ORDER BY t.created_at;
 
 ### Switch Active Branch
 ```sql
-UPDATE branches SET active = 1 WHERE branch_id = ?;
-UPDATE branches SET active = 0 WHERE branch_id != ?;
+UPDATE branches SET is_active = 0;
+UPDATE branches SET is_active = 1 WHERE branch_id = ?;
 ```
 
 ### Synthesis Turn
@@ -264,17 +286,26 @@ Initiate a synthesis turn that draws from multiple branches.
 ### Get Active Branch Path
 ```python
 def get_active_branch_path(db, user_id):
-    # Find the branch with max turn_index (most recent)
+    # Find the currently active branch
     cursor = db.cursor()
     cursor.execute("""
-        SELECT branch_id, MAX(turn_index) as max_idx
-        FROM turns
-        WHERE user_id = ? AND committed = 1
-        GROUP BY branch_id
+        SELECT branch_id FROM branches WHERE is_active = 1
     """)
+    row = cursor.fetchone()
+    if not row:
+        return None  # No active branch
     
-    # Get the turn at that index for each branch
-    # Return the path as list of turns
+    branch_id = row[0]
+    
+    # Get all turns on this branch in order
+    cursor.execute("""
+        SELECT * FROM turns 
+        WHERE user_id = ? AND branch_id = ?
+        ORDER BY turn_index
+    """, (user_id, branch_id))
+    
+    columns = ['id', 'parent_turn_id', 'branch_id', 'turn_index', ...]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
 ```
 
 ### Get Context from Active Branch
@@ -297,6 +328,33 @@ def get_context_from_active_branch(db, user_id, limit=5):
     
     return cursor.fetchall()
 ```
+
+## Phase Plan
+
+### Phase 1: Core Linear System (Current)
+- [ ] SQLite schema with `turns` table
+- [ ] Basic message → inference → persist flow
+- [ ] Discard mechanism (`committed` flag)
+- [ ] Context assembly from last N committed turns
+
+### Phase 2: Branching Foundation
+- [ ] Add `branch_id` and `turn_index` to turns table
+- [ ] Add `branches` table with `is_active` flag
+- [ ] Fork endpoint (create new branch at any turn)
+- [ ] Switch endpoint (change active branch)
+- [ ] Context assembly along active path
+
+### Phase 3: UI for Branching (PWA)
+- [ ] Vertical tree visualization
+- [ ] Fork point highlighting
+- [ ] Branch switching interface
+- [ ] Branch metadata display
+
+### Phase 4: Synthesis
+- [ ] Multi-branch selection UI
+- [ ] Diff visualization for conflicting info
+- [ ] Synthesis turn creation endpoint
+- [ ] Context assembly from multiple branches
 
 ## Migration Path
 
