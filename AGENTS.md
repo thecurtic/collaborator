@@ -44,3 +44,13 @@ Conversations form a tree, not a linear list. This is a core architectural featu
 - Privacy-first, no external services unless explicitly requested
 - Self-hosted everything
 - Local inference only
+
+## Config Layer
+
+The project uses a single `config.yaml` at the project root for shared configuration:
+- **Inference** - Endpoint, model ID, temperature, max tokens, thinking mode, streaming
+- **Memory** - Default context window size, database path
+- **Server** - Backend host/port, allowed CORS origins
+- **System prompt** - Text or file path for system prompt template
+
+Both the backend and Pi read from this config. The model can be swapped without touching code, allowing Pi to use a more powerful coding model while Collaborator uses a conversational one.
