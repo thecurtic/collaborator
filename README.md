@@ -6,15 +6,24 @@ A self-hosted personal chat interface backed by local LLM inference.
 
 **Current Phase:** Planning and Architecture - Conversation Branching
 
-- [x] Updated AGENTS.md with new architecture
+### Completed Documentation:
+- [x] Updated AGENTS.md with new architecture and branching features
 - [x] Updated README.md with monorepo structure  
-- [ ] Define SQLite schema for conversation turns
-- [x] Set up backend project structure with minimal FastAPI app
-- [ ] Wire single endpoint for user message → inference → persist flow
-- [ ] Implement memory model with discard capability
-- [ ] Extend schema to support conversation branching (tree structure)
-- [ ] Implement context assembly for tree traversal
-- [ ] Add API endpoints for branching operations (fork, switch, synthesize)
+- [x] Added conversation branching design document
+- [x] Fixed schema bugs (added is_active flag for branches table)
+- [x] Created implementation plan for Phase 1 (linear system with discard mechanism)
+
+### Current Status:
+- [x] Backend project structure established (FastAPI + SQLite)
+- [ ] Phase 1: Core linear system with SQLite persistence
+- [ ] Phase 2: Branching foundation (branch_id, turn_index columns)
+- [ ] Phase 3: UI for branching (PWA with vertical tree visualization)
+- [ ] Phase 4: Synthesis (combine insights from multiple branches)
+
+### Implementation Status:
+- [x] Mock tests passing (`backend/test_basic_loop.py`)
+- [ ] Backend implementation (Phase 1) - work in progress
+- [ ] Frontend implementation (basic chat UI)
 
 See the [Contributing](#contributing) section for how to help.
 

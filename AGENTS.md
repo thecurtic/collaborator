@@ -1,8 +1,17 @@
-# Project Context
+## Project Context
 
 Collaborator is a self-hosted personal chat interface backed by local LLM inference.
 
-## Architecture
+### Current Phase: Conversation Branching (Phase 1)
+
+We're implementing conversation branching as a tree structure built on top of SQLite. The implementation is staged in phases:
+
+1. **Phase 1 (Current)**: Core linear system with SQLite persistence and discard mechanism
+2. **Phase 2**: Branching foundation (branch_id, turn_index columns)
+3. **Phase 3**: PWA UI for branching (vertical tree visualization)
+4. **Phase 4**: Synthesis turns combining multiple branches
+
+### Architecture
 
 This is a monorepo with two runtime contexts:
 
