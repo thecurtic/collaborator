@@ -115,28 +115,22 @@ CREATE TABLE IF NOT EXISTS turns (
 - A) Add them now with default values (forward-compatible but adds complexity)
 - B) Keep schema linear for Phase 1, add branching columns in Phase 2 (simpler MVP)
 
-**Answer from user:** Schema is designed for branching already - linear conversation is single branch. Add `branch_id` and `turn_index` with sensible defaults.
+**Decision:** Keep schema LINEAR for Phase 1. Branching columns are added in Phase 2.
 
-### Task 0b: Add missing columns to turns table
+### Task 0b: Verify SQLite version compatibility
 
 **Files:**
-- Modify: `backend/db.py:init_db()`
+- Create/modify: `backend/db.py:init_db()`
 
-**Changes:**
-```python
-# Add after existing schema:
-ALTER TABLE turns ADD COLUMN branch_id TEXT DEFAULT 'linear';
-ALTER TABLE turns ADD COLUMN turn_index INTEGER DEFAULT 0;
-CREATE INDEX IF NOT EXISTS idx_turns_branch ON turns(branch_id);
+**SQLite ALTER TABLE requirements:**
+- SQLite supports `ADD COLUMN` without DEFAULT on all versions
+- Adding columns with DEFAULT requires SQLite 3.37+
+- We'll use `DEFAULT NULL` for optional columns to ensure compatibility
+
+**Check SQLite version:**
+```bash
+sqlite3 --version  # Must be >= 3.24.0 (supports basic ALTER TABLE)
 ```
-
-**But wait - SQLite doesn't support ALTER TABLE ADD COLUMN with DEFAULT after table exists for some versions. Alternative:**
-
-```python
-# Drop and recreate table (requires migration strategy)
-```
-
-**Recommendation:** Keep linear for Phase 1, add branching columns in Phase 2.
 
 ---
 
@@ -194,16 +188,26 @@ def test_create_turn_returns_inserted_data():
 - Modify: `backend/db.py`
 
 ```python
-def get_context_for_turn(db, after_turn_id, limit=5):
-    """Get committed turns after a specific turn."""
+def get_context_for_turn(db, after_turn_id: int, limit: int = 5) -> list:
+    """Get committed turns BEFORE a specific turn_id (leading up to it).
+
+    Args:
+        db: Database connection
+        after_turn_id: The turn ID to get context BEFORE (not after)
+        limit: Maximum number of turns to return
+
+    Returns:
+        List of turn dictionaries ordered chronologically (oldest first)
+    """""
 ```
 
 **Tests:**
 ```python
 def test_get_context_returns_last_n_committed_turns():
     # Create 10 turns, discard some
-    context = get_context_for_turn(db, turn_id=5, limit=3)
+    context = get_context_for_turn(db, after_turn_id=5, limit=3)
     # Verify only committed turns within limit
+    # Verify order is chronological (oldest first)
 ```
 
 ### Task 1d: Implement get_recent_turns function

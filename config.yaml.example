@@ -5,7 +5,7 @@
 
 # Inference settings
 inference:
-  endpoint_url: "http://<inference-host>:1234/v1"
+  endpoint_url: "http://<your-tailnet-ip>:1234/v1"  # Replace with your LM Studio's tailnet IP
   model_id: "qwen/qwen3-coder-next"
   temperature: 0.7
   max_tokens: 2048
@@ -22,8 +22,8 @@ server:
   backend_host: "0.0.0.0"
   backend_port: 8000
   cors_origins:
-    - "http://192.168.0.50:3000"  # Frontend tailnet address
-    - "http://localhost:3000"
+    - "http://<frontend-tailnet-ip>:3000"  # Replace with your frontend's tailnet IP
+    - "http://localhost:3000"  # Development only, remove for production
 
 # System prompt configuration
 system_prompt:

@@ -402,13 +402,18 @@ def get_context_from_active_branch(db, user_id, limit=5):
 - [ ] Basic message → inference → persist flow
 - [ ] Discard mechanism (`committed` flag)
 - [ ] Context assembly from last N committed turns
+- [ ] **Config layer**: Create `config.yaml` before writing any inference code
 
 ### Phase 2: Branching Foundation
 - [ ] Add `branch_id` and `turn_index` to turns table
-- [ ] Add `branches` table with `is_active` flag
+- [ ] Add `branches` table with `is_active` flag (NOT `active`)
 - [ ] Fork endpoint (create new branch at any turn)
-- [ ] Switch endpoint (change active branch)
+- [ ] Switch endpoint (change active branch) - uses `is_active` column
 - [ ] Context assembly along active path
+
+**Phase 2 Known Issues:**
+1. **Active branch detection**: Cannot use `MAX(turn_index)` - requires explicit `is_active` column
+2. **Active column bug**: Design referenced `active` but column is named `is_active`
 
 ### Phase 3: UI for Branching (PWA)
 - [ ] Vertical tree visualization
