@@ -6,8 +6,8 @@ Collaborator is a self-hosted personal chat interface backed by local LLM infere
 
 This is a monorepo with two runtime contexts:
 
-- **backend/** — runs on this VM. Manages SQLite conversation persistence, context assembly, and proxies inference to the local LLM endpoint. Exposes a simple HTTP API.
-- **frontend/** — served from a separate machine on the tailnet. Web UI for sending messages, viewing responses, editing or discarding turns before they commit to memory.
+- **backend/** — runs on this VM. Manages SQLite conversation persistence (with tree-structured branching), context assembly, and proxies inference to the local LLM endpoint. Exposes a simple HTTP API.
+- **frontend/** — served from a separate machine on the tailnet. Web UI (PWA) for sending messages, viewing responses, editing or discarding turns before they commit to memory. Supports conversation branching with a vertical tree visualization optimized for mobile devices.
 
 They are loosely coupled. The frontend talks to the backend over HTTP. Either side can be swapped without breaking the other.
 
@@ -21,7 +21,14 @@ The web UI must be accessible from any network via the tailnet. The frontend is 
 
 ## Memory Model
 
-Conversations are stored in SQLite. Each turn records the user message and the final model response (not intermediate tool calls). The user can discard any turn before it commits — discarded turns never enter memory or future context. Context for each new turn is assembled from the last N committed turns.
+Conversations are stored as a tree structure in SQLite. Each turn records the user message and the final model response (not intermediate tool calls). The user can discard any turn before it commits — discarded turns never enter memory or future context. Context for each new turn is assembled from the active branch (path from root to current turn).
+
+### Conversation Branching
+
+Conversations form a tree, not a linear list. This is a core architectural feature:
+- **Forking** — Users can fork at any point to explore alternative threads
+- **Branch switching** — When exhausted, users return to the fork point and switch to another branch
+- **Synthesis** — Users can combine insights from multiple branches into a unified response
 
 ## Principles
 - Minimal dependencies

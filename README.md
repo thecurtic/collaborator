@@ -4,14 +4,17 @@ A self-hosted personal chat interface backed by local LLM inference.
 
 ## Project Status
 
-**Current Phase:** Planning and Architecture
+**Current Phase:** Planning and Architecture - Conversation Branching
 
 - [x] Updated AGENTS.md with new architecture
-- [x] Updated README.md with monorepo structure
+- [x] Updated README.md with monorepo structure  
 - [ ] Define SQLite schema for conversation turns
-- [ ] Set up backend project structure with minimal FastAPI app
+- [x] Set up backend project structure with minimal FastAPI app
 - [ ] Wire single endpoint for user message → inference → persist flow
 - [ ] Implement memory model with discard capability
+- [ ] Extend schema to support conversation branching (tree structure)
+- [ ] Implement context assembly for tree traversal
+- [ ] Add API endpoints for branching operations (fork, switch, synthesize)
 
 See the [Contributing](#contributing) section for how to help.
 
@@ -19,8 +22,8 @@ See the [Contributing](#contributing) section for how to help.
 
 This is a monorepo with two runtime contexts:
 
-- **backend/** — runs on this VM. Manages SQLite conversation persistence, context assembly, and proxies inference to the local LLM endpoint. Exposes a simple HTTP API.
-- **frontend/** — served from a separate machine on the tailnet. Web UI for sending messages, viewing responses, editing or discarding turns before they commit to memory.
+- **backend/** — runs on this VM. Manages SQLite conversation persistence (with tree-structured branching), context assembly, and proxies inference to the local LLM endpoint. Exposes a simple HTTP API.
+- **frontend/** — served from a separate machine on the tailnet. Web UI (PWA) for sending messages, viewing responses, editing or discarding turns before they commit to memory. Supports conversation branching with a vertical tree visualization optimized for mobile devices.
 
 They are loosely coupled. The frontend talks to the backend over HTTP. Either side can be swapped without breaking the other.
 
@@ -75,13 +78,14 @@ This project is designed for self-hosted deployment. The web UI is served from a
 
 1. **Backend** — Deploy to this VM:
    - Set up Python environment with FastAPI dependencies
-   - Configure `LLM_ENDPOINT` and other environment variables
+   - Configure `LLM_ENDPOINT`, `DB_PATH`, and other environment variables
    - Run the FastAPI server (e.g., with `uvicorn` or `gunicorn`)
 
 2. **Frontend** — Deploy to the tailnet machine:
    - Run `npm run build`
    - Serve the `out/` directory with a static file server (e.g., nginx, Caddy)
    - Configure the frontend to point to your backend's tailnet IP
+   - The web UI is a PWA with vertical tree visualization for conversation branching
 
 3. **Configuration**:
    - Backend: `LLM_ENDPOINT`, `DB_PATH`, `PORT`
@@ -92,13 +96,13 @@ This project is designed for self-hosted deployment. The web UI is served from a
 ```
 .
 ├── backend/                # Python FastAPI server
-│   ├── main.py            # Entry point
-│   ├── db.py              # SQLite database operations
+│   ├── main.py            # Entry point (includes branching endpoints)
+│   ├── db.py              # SQLite database operations (with tree support)
 │   ├── inference.py       # LLM inference proxy
 │   └── requirements.txt
-├── frontend/              # Next.js web UI
+├── frontend/              # Next.js web UI (PWA)
 │   ├── src/
-│   │   ├── components/    # Reusable UI components
+│   │   ├── components/    # Reusable UI components (branch tree views)
 │   │   ├── pages/         # Page components (Next.js)
 │   │   ├── services/      # API client code
 │   │   └── utils/         # Utility functions
