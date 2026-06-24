@@ -23,6 +23,51 @@
 - All existing tests must continue to pass
 - No breaking changes to current API behavior
 - Discard mechanism must work without requiring branch structure
+- Config layer must be established BEFORE any hardcoded values in code
+
+---
+
+## Pre-Implementation Tasks (CRITICAL)
+
+These must be completed before writing any inference or database code:
+
+### Pre-Task 1: Config Layer Design
+
+**Files:**
+- Create: `config.yaml` (project root)
+- Create: `backend/config.py` or `utils/config.py`
+
+**Requirements:**
+```yaml
+# config.yaml
+inference:
+  endpoint_url: "http://<inference-host>:1234/v1"
+  model_id: "qwen/qwen3-coder-next"
+  temperature: 0.7
+  max_tokens: 2048
+  thinking_mode: false
+  streaming: true
+
+memory:
+  default_context_window: 5
+  db_path: "/home/chat/collaborator/backend/data/conversations.db"
+
+server:
+  backend_host: "0.0.0.0"
+  backend_port: 8000
+  cors_origins:
+    - "http://192.168.0.50:3000"
+
+system_prompt:
+  text: "You are Collaborator, a helpful assistant."
+```
+
+**Implementation Requirements:**
+- Load config from `config.yaml` in project root
+- Fall back to environment variables if file missing
+- Hardcoded defaults only as absolute last resort
+- Backend reads this for all inference settings
+- Pi should use same config for consistent model selection
 
 ---
 
