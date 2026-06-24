@@ -2,6 +2,15 @@
 
 Based on my review of [skills.sh](https://skills.sh) and the [Superpowers framework](https://github.com/obra/superpowers), here are my recommendations for your workflow building a self-hosted personal web application with local inference.
 
+## Current Project Context: Collaborator
+
+Collaborator is a **chat interface** backed by local LLM inference with this architecture:
+
+- **backend/** — FastAPI server on this VM handling SQLite persistence, context assembly, and LLM proxying
+- **frontend/** — Next.js web UI served from a tailnet machine for chatting, reviewing responses, discarding turns
+- **Local inference only** — Uses `qwen/qwen3-coder-next` via LM Studio at `http://<inference-host>:1234/v1`
+- **Tailnet networking** — All communication stays within your private network; no public internet exposure
+
 ## Core Philosophy Alignment
 
 Both skills.sh and Superpowers emphasize:
@@ -139,3 +148,55 @@ skills.sh has excellent tools, but many focus on external service integration or
 5. Debug issues with `systematic-debugging`
 
 This creates a repeatable, maintainable process for all your self-hosted projects.
+
+## Collaborator-Specific Recommendations
+
+For building the Collaborator backend and frontend, here's how to apply these skills:
+
+### Backend Development (FastAPI + SQLite)
+
+1. **superpowers:brainstorming**
+   - Define the SQLite schema (see memory model above)
+   - Decide on API endpoint structure
+   - Design error handling strategy
+   - Plan context assembly logic
+
+2. **superpowers:writing-plans**
+   - Break down backend features (DB setup → API endpoints → inference proxy)
+   - Create test-before-code sequence
+
+3. **superpowers:test-driven-development**
+   - Write SQLite schema tests first
+   - Test the inference proxy against mock LLM responses
+   - Verify error handling for network failures
+
+4. **superpowers:systematic-debugging**
+   - Diagnose database connection issues
+   - Trace inference proxy failures
+   - Investigate tailnet connectivity problems
+
+### Frontend Development (Next.js)
+
+1. **superpowers:brainstorming**
+   - Design chat UI layout and turn editing experience
+   - Plan discard/commit behavior for conversation turns
+   - Decide on context preview display
+
+2. **superpowers:test-driven-development**
+   - Test message sending flow
+   - Verify discard behavior before commit
+   - Test offline/failure scenarios
+
+3. **skills.sh:playwright-cli**
+   - End-to-end tests for chat workflow
+   - Verify discards don't affect future context
+
+## Next Steps
+
+1. **Install Superpowers in Pi** (already done via `git:github.com/obra/superpowers`)
+2. **Use brainstorming** to refine the SQLite schema and API design
+3. **Create implementation plan** for the first phase:
+   - Define SQLite schema
+   - Set up FastAPI backend with minimal structure
+   - Wire inference endpoint
+   - Persist turns to SQLite

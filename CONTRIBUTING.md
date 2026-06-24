@@ -14,6 +14,8 @@ Thank you for your interest in contributing! This is a personal, self-hosted pro
 3. **Run tests**
    ```bash
    npm test
+   npm run lint
+   cd backend && pytest
    ```
 
 4. **Lint your code**
@@ -41,11 +43,12 @@ All features should include tests:
 - Unit tests for utility functions
 - Component tests for UI elements
 - Integration tests for key user flows
+- Backend: pytest for FastAPI endpoints and database operations
 
 ## Pull Request Process
 
 1. Update documentation if needed
-2. Ensure all tests pass
+2. Ensure all tests pass (frontend and backend)
 3. Get approval from project owner
 4. Squash commits if requested
 5. Merge to main
