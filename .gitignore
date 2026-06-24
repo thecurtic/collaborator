@@ -71,3 +71,6 @@ MANIFEST
 *.db
 *.sqlite
 *.sqlite3
+
+# Worktrees (keep hidden)
+.worktrees/
