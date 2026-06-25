@@ -1,5 +1,6 @@
+import os
 import sqlite3
-from typing import Optional
+from typing import Optional, List
 from contextlib import contextmanager
 
 DB_PATH = os.environ.get("DB_PATH", "/home/chat/collaborator/backend/data/conversations.db")
@@ -41,7 +42,7 @@ def init_db():
                 tags TEXT
             )
         """)
-        
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +74,7 @@ def create_turn(
         (user_id, role, content, context_turns, committed, model_name, token_count)
     )
     db.commit()
-    
+
     turn_id = cursor.lastrowid
     return get_turn_by_id(db, turn_id)
 
@@ -83,27 +84,27 @@ def get_turn_by_id(db, turn_id: int) -> Optional[dict]:
     cursor = db.cursor()
     cursor.execute("SELECT * FROM turns WHERE id = ?", (turn_id,))
     row = cursor.fetchone()
-    
+
     if not row:
         return None
-    
+
     columns = ['id', 'user_id', 'role', 'content', 'context_turns', 'committed', 'created_at', 'model_name', 'token_count', 'tags']
     return dict(zip(columns, row))
 
 
-def get_recent_turns(db, limit: int = 10, offset: int = 0) -> list:
-    """Get recent committed turns."""
+def get_recent_turns(db, limit: int = 10, offset: int = 0) -> List[dict]:
+    """Get recent committed turns with pagination."""
     cursor = db.cursor()
     cursor.execute(
         """
-        SELECT * FROM turns 
-        WHERE committed = 1 
-        ORDER BY id DESC 
+        SELECT * FROM turns
+        WHERE committed = 1
+        ORDER BY id DESC
         LIMIT ? OFFSET ?
         """,
         (limit, offset)
     )
-    
+
     rows = cursor.fetchall()
     columns = ['id', 'user_id', 'role', 'content', 'context_turns', 'committed', 'created_at', 'model_name', 'token_count', 'tags']
     return [dict(zip(columns, row)) for row in rows]
@@ -117,19 +118,29 @@ def update_turn_committed(db, turn_id: int, committed: bool) -> bool:
     return cursor.rowcount > 0
 
 
-def get_context_for_turn(db, after_turn_id: int, limit: int = 5) -> list:
-    """Get committed turns after a specific turn ID."""
+def get_context_for_turn(db, after_turn_id: int, limit: int = 5) -> List[dict]:
+    """Get committed turns BEFORE a specific turn_id (leading up to it).
+
+    Args:
+        db: Database connection
+        after_turn_id: The turn ID to get context BEFORE (not after)
+        limit: Maximum number of turns to return
+
+    Returns:
+        List of turn dictionaries ordered chronologically (oldest first)
+    """
     cursor = db.cursor()
     cursor.execute(
         """
-        SELECT * FROM turns 
-        WHERE committed = 1 AND id > ?
-        ORDER BY id DESC 
+        SELECT * FROM turns
+        WHERE committed = 1 AND id < ?
+        ORDER BY id DESC
         LIMIT ?
         """,
         (after_turn_id, limit)
     )
-    
+
     rows = cursor.fetchall()
     columns = ['id', 'user_id', 'role', 'content', 'context_turns', 'committed', 'created_at', 'model_name', 'token_count', 'tags']
-    return [dict(zip(columns, row)) for row in rows]
+    turns = [dict(zip(columns, row)) for row in rows]
+    return list(reversed(turns))  # Return oldest first

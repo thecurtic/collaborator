@@ -18,12 +18,19 @@ if [ ! -f "config.yaml" ]; then
     exit 1
 fi
 
-# Check Python dependencies
-echo "Checking Python dependencies..."
-python3 -c "import fastapi" 2>/dev/null || {
-    echo "Installing Python dependencies..."
-    pip install --quiet fastapi uvicorn pydantic requests pyyaml
-}
+# Create and activate Python venv if needed
+echo "Setting up Python virtual environment..."
+if [ ! -d ".venv" ]; then
+    python3 -m venv .venv
+fi
+
+# Use venv Python and pip
+VENV_PYTHON=".venv/bin/python3"
+VENV_PIP=".venv/bin/pip"
+
+# Install Python dependencies
+echo "Installing Python dependencies..."
+$VENV_PIP install --quiet fastapi uvicorn pydantic requests pyyaml
 
 # Check Node.js dependencies
 echo "Checking Node.js dependencies..."
@@ -35,11 +42,11 @@ fi
 # Build frontend (production)
 echo "Building frontend..."
 npm run build || {
-    echo "Build failed - trying with dev"
+    echo "Build failed, retrying with npm install..."
     npm install
     npm run build
 }
 
 # Start backend (production)
-echo "Starting Collaborator Backend on $(grep -o 'backend_port.*[0-9]*' config.yaml | grep -o '[0-9]*')..."
-python3 backend/main.py
+echo "Starting Collaborator Backend..."
+$VENV_PYTHON backend/main.py
