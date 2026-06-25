@@ -47,6 +47,14 @@ npm run build || {
     npm run build
 }
 
-# Start backend (production)
-echo "Starting Collaborator Backend..."
-$VENV_PYTHON backend/main.py
+# Determine port from config or use defaults
+BACKEND_PORT=$(grep -E '^\s*backend_port:' config.yaml 2>/dev/null | grep -oE '[0-9]+' || echo "8001")
+PORT=${PORT:-3000}
+
+# Start the standalone Next.js server (serves both static assets and API proxy)
+echo "Starting Collaborator with Next.js standalone server..."
+echo "Frontend: http://localhost:$PORT"
+echo "Backend API (via Next.js proxy): http://localhost:$BACKEND_PORT"
+
+# Run the standalone server
+exec node .next/standalone/server.js
