@@ -1,5 +1,29 @@
 # Collaborator Deployment Guide
 
+## Development vs Production Environments
+
+### Development Environment
+- **Location**: `/home/chat/collaborator`
+- **Runs on**: localhost:3000
+- **Usage**: Local testing, feature development, running tests
+- **Commands**:
+  ```bash
+  # Start dev server
+  npm run dev
+  
+  # Build for production
+  npm run build
+  
+  # Run tests
+  npx playwright test
+  ```
+
+### Production Environment
+- **Location**: `/home/chat/collaborator` (on webserver)
+- **Runs on**: collaborator.example.com:3000
+- **Usage**: Public-facing deployment
+- **Deployment**: Use the deploy script (see below)
+
 ## Quick Start on Webserver
 
 1. Pull the latest code from git:
@@ -60,6 +84,30 @@ The deploy script now runs `node .next/standalone/server.js` which:
 2. Serves static assets on port 3000 (or custom PORT)
 3. Proxies API calls to the Python backend on port 8001 (or custom)
 
+## Development Workflow
+
+### Making Changes Locally
+1. Work on your feature in the development environment
+2. **Always test before committing/pushing**:
+   ```bash
+   npm run build
+   npm start  # or use ./deploy.sh for production testing
+   npx playwright test
+   ```
+3. Verify all functionality works in local build
+4. Commit and push changes
+
+### Deploying to Production
+1. Pull latest code on webserver:
+   ```bash
+   git pull origin main
+   ```
+2. Ensure config.yaml and .env.local are configured
+3. Run deploy script:
+   ```bash
+   ./deploy.sh
+   ```
+
 ## Troubleshooting
 
 ### Static Assets 404
@@ -76,3 +124,11 @@ lsof -i :3000
 # Kill it
 kill -9 <PID>
 ```
+
+### Send Button Not Working (Production)
+If the send button is disabled on production:
+1. Check browser console for JavaScript errors
+2. Verify Next.js build completed successfully: `npm run build`
+3. Check that static assets exist in `.next/static/`
+4. Ensure the deploy script ran successfully
+5. Restart with `./deploy.sh` to ensure fresh build is served
