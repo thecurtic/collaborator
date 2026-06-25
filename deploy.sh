@@ -47,6 +47,10 @@ npm run build || {
     npm run build
 }
 
+# Copy static assets into standalone directory (Fix 1)
+echo "Copying static assets to standalone directory..."
+cp -r .next/static .next/standalone/.next/static
+
 # Determine port from config or use defaults
 BACKEND_PORT=$(grep -E '^\s*backend_port:' config.yaml 2>/dev/null | grep -oE '[0-9]+' || echo "8001")
 PORT=${PORT:-3000}

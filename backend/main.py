@@ -13,6 +13,10 @@ from inference import call_llm
 # Initialize config
 config = get_config()
 
+# Initialize database on startup
+from db import init_db
+init_db()
+
 # Pydantic models for API requests/responses
 class UserMessage(BaseModel):
     message: str

@@ -3,18 +3,28 @@ import sqlite3
 from typing import Optional, List
 from contextlib import contextmanager
 
-DB_PATH = os.environ.get("DB_PATH", "/home/chat/collaborator/backend/data/conversations.db")
+
+def _db_path() -> str:
+    """Get database path from config or environment."""
+    env = os.environ.get("DB_PATH")
+    if env:
+        return env
+    try:
+        from config import get_config
+        return get_config().get("memory", {}).get("db_path", "/srv/collaborator/Collaborator/backend/data/conversations.db")
+    except Exception:
+        return "/srv/collaborator/Collaborator/backend/data/conversations.db"
 
 
 def get_db():
     """Get a database connection."""
-    return sqlite3.connect(DB_PATH)
+    return sqlite3.connect(_db_path())
 
 
 @contextmanager
 def get_db_cursor():
     """Context manager for database connections."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(_db_path())
     try:
         yield conn.cursor()
         conn.commit()
