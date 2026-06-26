@@ -1,0 +1,38 @@
+@import 'tailwindcss';
+
+/* shadcn/ui-style design tokens, wired into Tailwind v4's @theme so utilities
+   like bg-background / text-muted-foreground resolve. */
+@theme {
+  --color-background: hsl(222 47% 7%);
+  --color-foreground: hsl(210 40% 96%);
+  --color-card: hsl(222 47% 9%);
+  --color-card-foreground: hsl(210 40% 96%);
+  --color-muted: hsl(217 33% 17%);
+  --color-muted-foreground: hsl(215 20% 65%);
+  --color-primary: hsl(217 91% 60%);
+  --color-primary-foreground: hsl(222 47% 11%);
+  --color-secondary: hsl(217 33% 17%);
+  --color-secondary-foreground: hsl(210 40% 96%);
+  --color-accent: hsl(217 33% 20%);
+  --color-accent-foreground: hsl(210 40% 96%);
+  --color-destructive: hsl(0 72% 51%);
+  --color-destructive-foreground: hsl(210 40% 98%);
+  --color-border: hsl(217 33% 20%);
+  --color-input: hsl(217 33% 20%);
+  --color-ring: hsl(217 91% 60%);
+  --radius: 0.625rem;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
