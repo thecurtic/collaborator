@@ -1,6 +1,6 @@
 import { Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import { cn, parseApiDate } from '@/lib/utils';
 import type { Turn } from '@/domain/models';
 
 interface MessageBubbleProps {
@@ -33,7 +33,7 @@ export function MessageBubble({ turn, onDiscard }: MessageBubbleProps) {
         <p className="whitespace-pre-wrap break-words">{text}</p>
 
         <div className="mt-1 flex items-center gap-2 text-[10px] opacity-60">
-          <span>{new Date(turn.createdAt).toLocaleTimeString()}</span>
+          <span>{parseApiDate(turn.createdAt).toLocaleTimeString()}</span>
           {turn.tokenCount != null && <span>· {turn.tokenCount} tok</span>}
           {turn.tags.map((tag) => (
             <span

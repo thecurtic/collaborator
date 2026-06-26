@@ -21,13 +21,19 @@ function parseTags(tags: string | null): string[] {
 }
 
 export function toTurn(api: ApiTurn): Turn {
+  // The as-built backend sends one `content` column; API-SPEC instead splits
+  // into message/response. Normalize both into our role-keyed message/response.
+  const body =
+    api.content ??
+    (api.role === 'user' ? api.message : api.response) ??
+    '';
   return {
     id: api.id,
     userId: api.user_id,
     role: api.role,
-    message: api.message,
-    response: api.response,
-    committed: api.committed,
+    message: api.role === 'user' ? body : (api.message ?? ''),
+    response: api.role === 'assistant' ? body : (api.response ?? ''),
+    committed: Boolean(api.committed),
     contextTurns: api.context_turns,
     createdAt: api.created_at,
     modelName: api.model_name,

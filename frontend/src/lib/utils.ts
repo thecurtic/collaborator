@@ -5,3 +5,15 @@ import { twMerge } from 'tailwind-merge';
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+/**
+ * Parse an API timestamp into a Date. The as-built backend emits SQLite's
+ * "YYYY-MM-DD HH:MM:SS" (UTC, no zone), which browsers parse inconsistently /
+ * as local time. Normalize it to ISO-UTC; pass through real ISO strings.
+ */
+export function parseApiDate(value: string): Date {
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    return new Date(`${value.replace(' ', 'T')}Z`);
+  }
+  return new Date(value);
+}

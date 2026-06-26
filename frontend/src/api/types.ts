@@ -14,19 +14,27 @@ export interface ApiHealth {
   version: string;
 }
 
-/** A turn as returned by GET /api/messages. */
+/**
+ * A turn as returned by GET /api/messages.
+ *
+ * IMPORTANT: API-SPEC.md documents `message`/`response`, but the AS-BUILT
+ * backend (db.py + main.py get_messages) actually returns a single `content`
+ * column per turn. We accept both shapes so the adapter is robust to either,
+ * and `committed` may arrive as 0/1 (SQLite) rather than a real boolean.
+ */
 export interface ApiTurn {
   id: number;
   user_id: string | null;
   role: ApiRole;
-  message: string; // user input text; empty for assistant turns
-  response: string; // model output; empty for user turns
-  committed: boolean;
+  content?: string; // as-built field (one column, role decides meaning)
+  message?: string; // per API-SPEC (not actually sent on GET)
+  response?: string; // per API-SPEC (not actually sent on GET)
+  committed: boolean | number;
   context_turns: number;
   created_at: string; // ISO 8601
   model_name: string | null;
   token_count: number | null;
-  tags: string | null; // NOTE: API-SPEC types this as a single nullable string
+  tags: string | null;
 }
 
 /** GET /api/messages?limit&offset */

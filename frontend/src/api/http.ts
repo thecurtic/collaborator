@@ -20,8 +20,23 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
 async function parseError(res: Response): Promise<string> {
   try {
-    const body = (await res.json()) as Partial<ApiError>;
+    const body = (await res.json()) as Partial<ApiError> & {
+      detail?: unknown;
+    };
+    // API-SPEC says { error }, but the as-built FastAPI backend sends { detail }
+    // (a string for HTTPException, or an array for 422 validation errors).
     if (body && typeof body.error === 'string') return body.error;
+    if (typeof body?.detail === 'string') return body.detail;
+    if (Array.isArray(body?.detail)) {
+      const msg = body.detail
+        .map((d) =>
+          d && typeof d === 'object' && 'msg' in d
+            ? String((d as { msg: unknown }).msg)
+            : String(d),
+        )
+        .join('; ');
+      if (msg) return msg;
+    }
   } catch {
     // fall through to status text
   }

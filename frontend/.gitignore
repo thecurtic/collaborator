@@ -27,3 +27,8 @@ pnpm-debug.log*
 .vscode/
 .idea/
 *.swp
+
+# Safety net: the backend lives in a SIBLING dir (../collaborator-backend) and
+# must never be vendored here (see AGENTS.md). Ignore it if ever nested by mistake.
+/collaborator-backend/
+/backend-local/
