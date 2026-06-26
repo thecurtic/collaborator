@@ -75,7 +75,22 @@ def load_config() -> dict:
     else:
         print(f"Warning: config.yaml not found at {config_path}, using defaults")
     
-    # Override with environment variables
+    # Load machine-specific override from .config.yaml if exists
+    if project_root:
+        dot_config_path = os.path.join(project_root, ".config.yaml")
+        if os.path.exists(dot_config_path):
+            try:
+                with open(dot_config_path, 'r') as f:
+                    dot_config = yaml.safe_load(f)
+                    if dot_config:
+                        # Deep merge .config.yaml on top of config.yaml
+                        config = deep_merge(config, dot_config)
+            except yaml.YAMLError as e:
+                print(f"Warning: Failed to parse .config.yaml at {dot_config_path}: {e}")
+            except IOError as e:
+                print(f"Warning: Failed to read .config.yaml at {dot_config_path}: {e}")
+    
+    # Override with environment variables (highest precedence)
     _apply_env_overrides(config)
     
     return config

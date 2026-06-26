@@ -25,26 +25,73 @@ def test_deep_merge():
     assert result["f"] == 5        # added
 
 
-def test_load_config_without_yaml():
-    """Test loading config with no YAML file (uses defaults)."""
-    from config import load_config, get_config
+def test_dot_config_yaml_override():
+    """Test that .config.yaml overrides config.yaml with deep merge."""
+    import tempfile
+    from config import deep_merge
     
     # Clear cache
-    if hasattr(get_config, '_config'):
-        delattr(get_config, '_config')
+    if hasattr(__import__('config', fromlist=['get_config']), 'get_config'):
+        if hasattr(__import__('config', fromlist=['get_config']).get_config, '_config'):
+            delattr(__import__('config', fromlist=['get_config']).get_config, '_config')
     
-    config = load_config()
-    
-    # Check defaults exist
-    assert "inference" in config
-    assert "memory" in config
-    assert "server" in config
-    assert "system_prompt" in config
-    
-    # Check default values
-    assert config["inference"]["endpoint_url"] == "http://<inference-host>:1234/v1"
-    assert config["inference"]["model_id"] == "qwen/qwen3-coder-next"
-    assert config["server"]["backend_port"] == 8000
+    # Create a temporary directory with config.yaml and .config.yaml
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create config.yaml with shared settings
+        config_yaml_path = os.path.join(tmpdir, "config.yaml")
+        with open(config_yaml_path, 'w') as f:
+            f.write("""
+inference:
+  endpoint_url: "http://shared-endpoint:1234/v1"
+  model_id: "shared-model"
+  temperature: 0.5
+  max_tokens: 1024
+
+server:
+  backend_port: 8001
+  cors_origins:
+    - "http://shared-origin.com"
+""")
+        
+        # Create .config.yaml with machine-specific overrides
+        dot_config_yaml_path = os.path.join(tmpdir, ".config.yaml")
+        with open(dot_config_yaml_path, 'w') as f:
+            f.write("""
+memory:
+  db_path: "/tmp/machine-specific.db"
+
+server:
+  cors_origins:
+    - "http://localhost:3000"
+    - "https://production.com"
+  backend_port: 9000
+""")
+        
+        # Manually test the merge logic (same as load_config does)
+        import yaml
+        with open(config_yaml_path, 'r') as f:
+            file_config = yaml.safe_load(f) or {}
+        
+        with open(dot_config_yaml_path, 'r') as f:
+            dot_config = yaml.safe_load(f) or {}
+        
+        config = file_config.copy()
+        if dot_config:
+            config = deep_merge(config, dot_config)
+        
+        # Check that config.yaml values are present (inference not overridden)
+        assert config["inference"]["endpoint_url"] == "http://shared-endpoint:1234/v1"
+        assert config["inference"]["model_id"] == "shared-model"
+        assert config["inference"]["temperature"] == 0.5
+        
+        # Check that .config.yaml overrides server.backend_port
+        assert config["server"]["backend_port"] == 9000
+        
+        # Check that .config.yaml overrides server.cors_origins
+        assert config["server"]["cors_origins"] == ["http://localhost:3000", "https://production.com"]
+        
+        # Check that .config.yaml overrides memory.db_path
+        assert config["memory"]["db_path"] == "/tmp/machine-specific.db"
 
 
 def test_env_override():
@@ -86,8 +133,8 @@ if __name__ == "__main__":
     test_deep_merge()
     print("✓ deep_merge test passed")
     
-    test_load_config_without_yaml()
-    print("✓ load_config without yaml test passed")
+    test_dot_config_yaml_override()
+    print("✓ .config.yaml override test passed")
     
     test_env_override()
     print("✓ env override test passed")

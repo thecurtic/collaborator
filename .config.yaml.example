@@ -1,0 +1,22 @@
+# Collaborator Per-Machine Override Configuration
+#
+# This file contains machine-specific overrides for the shared config.yaml.
+# It is gitignored and should be created per-machine.
+#
+# Precedence order: defaults < config.yaml < .config.yaml < env vars
+#
+# Only the following 3 fields should be overridden here:
+#   - memory.db_path        (absolute path to database on this machine)
+#   - server.cors_origins   (comma-separated list of allowed origins)
+#   - server.backend_port   (port number for the backend API)
+#
+# Example .config.yaml:
+
+# memory:
+#   db_path: "/home/chat/collaborator/backend/data/conversations.db"
+
+# server:
+#   cors_origins:
+#     - "http://localhost:3000"
+#     - "https://collaborator.example.com"
+#   backend_port: 8001
