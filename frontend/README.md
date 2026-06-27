@@ -13,6 +13,8 @@ contract this app codes against.
 
 - Vite + React 19 + TypeScript
 - Tailwind CSS v4 + shadcn/ui-style components
+- **Mobile-first** layout (primary target is phone; desktop supported)
+- **Installable PWA** (vite-plugin-pwa: manifest, service worker, offline shell)
 - Thin typed API layer with a swappable service seam
 
 ## Getting started
