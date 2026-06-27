@@ -8,7 +8,31 @@ import secrets
 from datetime import datetime, timedelta
 
 
-PASSKEYS_DB_PATH = "/home/chat/collaborator/backend/data/authentication/passkeys.db"
+def _get_project_root() -> str:
+    """Get the project root directory (two dirs up from backend)."""
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _get_passkeys_db_path() -> str:
+    """Get authentication database path from config or default."""
+    try:
+        from config import get_config
+        passkey_db_path = get_config().get("authentication", {}).get("passkeys_db_path")
+        
+        if not passkey_db_path:
+            # Default relative path
+            return os.path.join(_get_project_root(), "backend", "data", "authentication", "passkeys.db")
+        
+        # If absolute path, use as-is; otherwise relative to project root
+        if os.path.isabs(passkey_db_path):
+            return passkey_db_path
+        return os.path.join(_get_project_root(), passkey_db_path)
+    except ImportError:
+        # Fallback
+        return os.path.join(_get_project_root(), "backend", "data", "authentication", "passkeys.db")
+
+
+PASSKEYS_DB_PATH = _get_passkeys_db_path()
 
 
 def get_db_connection():
@@ -140,3 +164,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

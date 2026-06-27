@@ -4,16 +4,41 @@ from typing import Optional, List, Dict
 from contextlib import contextmanager
 
 
+def _get_project_root() -> str:
+    """Get the project root directory (one level up from backend)."""
+    return os.path.dirname(os.getcwd())
+
+
+def _resolve_path(path: str) -> str:
+    """Resolve a relative path - if it starts with backend/, it's already relative to project root.
+    Otherwise, add 'backend/' prefix."""
+    if os.path.isabs(path):
+        return path
+    
+    # If path already starts with backend/, it's correct
+    if path.startswith("backend/"):
+        return os.path.join(_get_project_root(), path)
+    
+    # Otherwise, it's relative to project root but doesn't have backend/ prefix
+    return os.path.join(_get_project_root(), "backend", path)
+
+
 def _db_path() -> str:
     """Get database path from config or environment."""
     env = os.environ.get("DB_PATH")
     if env:
-        return env
+        return _resolve_path(env)
+    
     try:
         from config import get_config
-        return get_config().get("memory", {}).get("db_path", "/srv/collaborator/Collaborator/backend/data/conversations.db")
+        db_path = get_config().get("memory", {}).get("db_path")
+        
+        if not db_path:
+            return os.path.join(_get_project_root(), "backend", "data", "conversations.db")
+        
+        return _resolve_path(db_path)
     except Exception:
-        return "/srv/collaborator/Collaborator/backend/data/conversations.db"
+        return os.path.join(_get_project_root(), "backend", "data", "conversations.db")
 
 
 def get_db():
@@ -37,55 +62,65 @@ def get_db_cursor():
 
 def init_db():
     """Initialize the database with required tables."""
-    with get_db_cursor() as cursor:
-        # Create passkeys table (for auth)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS passkeys (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                hash TEXT UNIQUE NOT NULL,
-                salt TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                disabled BOOLEAN NOT NULL DEFAULT 0,
-                expires_at TEXT
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_passkeys_hash ON passkeys(hash)")
-        
-        # Create users table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                passkey_hash TEXT UNIQUE NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                FOREIGN KEY (passkey_hash) REFERENCES passkeys(hash)
-            )
-        """)
-        
-        # Create turns table (per-user)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS turns (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-                content TEXT NOT NULL,
-                context_turns INTEGER NOT NULL DEFAULT 5,
-                committed BOOLEAN NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                model_name TEXT,
-                token_count INTEGER,
-                tags TEXT
-            )
-        """)
+    db_path = _db_path()
+    
+    # Ensure parent directory exists
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Create passkeys table (for auth)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS passkeys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hash TEXT UNIQUE NOT NULL,
+            salt TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            disabled BOOLEAN NOT NULL DEFAULT 0,
+            expires_at TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_passkeys_hash ON passkeys(hash)")
+    
+    # Create users table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            passkey_hash TEXT UNIQUE NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (passkey_hash) REFERENCES passkeys(hash)
+        )
+    """)
+    
+    # Create turns table (per-user)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS turns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+            content TEXT NOT NULL,
+            context_turns INTEGER NOT NULL DEFAULT 5,
+            committed BOOLEAN NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            model_name TEXT,
+            token_count INTEGER,
+            tags TEXT
+        )
+    """)
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
-                first_turn_id INTEGER,
-                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
-                FOREIGN KEY (first_turn_id) REFERENCES turns(id)
-            )
-        """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            first_turn_id INTEGER,
+            last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (first_turn_id) REFERENCES turns(id)
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
 
 
 def create_turn(

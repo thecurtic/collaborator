@@ -8,13 +8,18 @@ import os
 import yaml
 
 
+def _get_project_root() -> str:
+    """Get the project root directory (two dirs up from backend)."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def load_config() -> dict:
     """Load configuration from config.yaml with fallback to env vars and defaults.
     
     Returns:
         dict containing all configuration values
     """
-    # Default configuration
+    # Default configuration - use relative paths that work on any machine
     defaults = {
         "inference": {
             "endpoint_url": "http://<inference-host>:1234/v1",
@@ -26,7 +31,7 @@ def load_config() -> dict:
         },
         "memory": {
             "default_context_window": 5,
-            "db_path": "/home/chat/collaborator/backend/data/conversations.db"
+            "db_path": os.path.join(_get_project_root(), "backend", "data", "conversations.db")
         },
         "server": {
             "backend_host": "0.0.0.0",
@@ -34,9 +39,9 @@ def load_config() -> dict:
             "cors_origins": ["http://localhost:3000"]
         },
         "authentication": {
-            "enabled": False,
-            "passkeys_db_path": "/home/chat/collaborator/backend/data/authentication/passkeys.db",
-            "users_dir": "/home/chat/collaborator/backend/data/users"
+            "enabled": True,
+            "passkeys_db_path": os.path.join(_get_project_root(), "backend", "data", "authentication", "passkeys.db"),
+            "users_dir": os.path.join(_get_project_root(), "backend", "data", "users")
         },
         "system_prompt": {
             "text": "You are Collaborator, a helpful assistant.",
@@ -53,7 +58,7 @@ def load_config() -> dict:
     # Try common relative paths from backend directory
     possible_paths = [
         os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.yaml"),
-        os.path.join(os.getcwd(), "../..", "config.yaml"),  # 2 dirs up from backend
+        os.path.join(_get_project_root(), "config.yaml"),
     ]
     
     for path in possible_paths:
@@ -63,7 +68,7 @@ def load_config() -> dict:
             break
     else:
         # If no config.yaml found, use the default project path
-        project_root = "/home/chat/collaborator"
+        project_root = _get_project_root()
         config_path = os.path.join(project_root, "config.yaml")
     
     if os.path.exists(config_path):

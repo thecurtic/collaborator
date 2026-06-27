@@ -9,6 +9,8 @@ import os
 # Set test environment before importing app
 os.environ["BACKEND_HOST"] = "127.0.0.1"
 os.environ["PORT"] = "8001"
+# Disable auth for tests
+os.environ["AUTH_ENABLED"] = "false"
 
 from main import app, config
 

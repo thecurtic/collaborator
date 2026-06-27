@@ -92,7 +92,18 @@ async def send_message(
     
     try:
         # Create/get user database
-        db_path = create_user_db(passkey) if auth_enabled else config.get("memory", {}).get("db_path")
+        db_path_config = config.get("memory", {}).get("db_path")
+        # Resolve path if not using passkey (auth disabled)
+        if auth_enabled:
+            db_path = create_user_db(passkey)
+        else:
+            # Resolve relative path to absolute
+            import os
+            if db_path_config and not os.path.isabs(db_path_config):
+                from db import _resolve_path
+                db_path = _resolve_path(db_path_config)
+            else:
+                db_path = db_path_config
         
         # Import db with correct path
         import sqlite3
@@ -157,7 +168,18 @@ async def get_messages(
     
     try:
         # Create/get user database
-        db_path = create_user_db(passkey) if auth_enabled else config.get("memory", {}).get("db_path")
+        db_path_config = config.get("memory", {}).get("db_path")
+        # Resolve path if not using passkey (auth disabled)
+        if auth_enabled:
+            db_path = create_user_db(passkey)
+        else:
+            # Resolve relative path to absolute
+            import os
+            if db_path_config and not os.path.isabs(db_path_config):
+                from db import _resolve_path
+                db_path = _resolve_path(db_path_config)
+            else:
+                db_path = db_path_config
         
         # Import db with correct path
         import sqlite3
@@ -188,7 +210,18 @@ async def discard_turn(
     
     try:
         # Create/get user database
-        db_path = create_user_db(passkey) if auth_enabled else config.get("memory", {}).get("db_path")
+        db_path_config = config.get("memory", {}).get("db_path")
+        # Resolve path if not using passkey (auth disabled)
+        if auth_enabled:
+            db_path = create_user_db(passkey)
+        else:
+            # Resolve relative path to absolute
+            import os
+            if db_path_config and not os.path.isabs(db_path_config):
+                from db import _resolve_path
+                db_path = _resolve_path(db_path_config)
+            else:
+                db_path = db_path_config
         
         # Import db with correct path
         import sqlite3

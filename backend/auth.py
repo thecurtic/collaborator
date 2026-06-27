@@ -7,17 +7,34 @@ import sqlite3
 from config import get_config
 
 
-PASSKEYS_DB_PATH = "/home/chat/collaborator/backend/data/authentication/passkeys.db"
+def _get_project_root() -> str:
+    """Get the project root directory (two dirs up from backend)."""
+    # Backend is at /project/backend, so go up two levels
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _get_passkeys_db_path() -> str:
+    """Get authentication database path from config or default."""
+    config = get_config()
+    passkey_db = config.get("authentication", {}).get("passkeys_db_path")
+    
+    if not passkey_db:
+        # Default relative path
+        return os.path.join(_get_project_root(), "backend", "data", "authentication", "passkeys.db")
+    
+    # If absolute path, use as-is; otherwise relative to project root
+    if os.path.isabs(passkey_db):
+        return passkey_db
+    return os.path.join(_get_project_root(), passkey_db)
 
 
 def get_auth_db():
     """Get authentication database connection."""
-    return sqlite3.connect(PASSKEYS_DB_PATH)
+    return sqlite3.connect(_get_passkeys_db_path())
 
 
 def hash_passkey(passkey: str) -> tuple:
     """Hash a passkey with salt. Returns (hash, salt)."""
-    # First try to get from database
     conn = get_auth_db()
     cursor = conn.cursor()
     cursor.execute("SELECT hash, salt FROM passkeys WHERE disabled = 0")
@@ -69,10 +86,17 @@ def validate_passkey(passkey: str) -> bool:
     return is_passkey_active(passkey)
 
 
-def get_user_db_path(passkey: str) -> str:
+def _get_user_db_path(passkey: str) -> str:
     """Get the user database path for a passkey."""
     config = get_config()
-    users_dir = config.get("authentication", {}).get("users_dir", "/home/chat/collaborator/backend/data/users")
+    users_dir = config.get("authentication", {}).get("users_dir")
+    
+    if not users_dir:
+        # Default relative path
+        users_dir = os.path.join(_get_project_root(), "backend", "data", "users")
+    elif not os.path.isabs(users_dir):
+        # Relative to project root
+        users_dir = os.path.join(_get_project_root(), users_dir)
     
     # Hash the passkey to get user directory name
     conn = get_auth_db()
@@ -98,7 +122,14 @@ def create_user_db(passkey: str) -> str:
     from db import init_db
     
     config = get_config()
-    users_dir = config.get("authentication", {}).get("users_dir", "/home/chat/collaborator/backend/data/users")
+    users_dir = config.get("authentication", {}).get("users_dir")
+    
+    if not users_dir:
+        # Default relative path
+        users_dir = os.path.join(_get_project_root(), "backend", "data", "users")
+    elif not os.path.isabs(users_dir):
+        # Relative to project root
+        users_dir = os.path.join(_get_project_root(), users_dir)
     
     # Get or create user hash
     conn = get_auth_db()
