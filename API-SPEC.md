@@ -260,3 +260,147 @@ system_prompt:
    - 403 Forbidden = missing or invalid passkey
    - Always include `X-Passkey` header on all requests
 5. ** revocation**: Admin can revoke passkeys via CLI, invalidating all devices using that key
+
+---
+
+## Frontend Integration Guide
+
+### 1. Storing Passkeys
+- Store passkey in browser localStorage or session storage
+- Consider encrypting if storing long-term
+
+### 2. Passing Passkey on Requests
+```typescript
+// Example: API client setup
+const PASSKEY = localStorage.getItem('collaborator_passkey');
+
+async function apiRequest(endpoint: string, options?: RequestInit) {
+  const headers = new Headers(options?.headers);
+  if (PASSKEY) {
+    headers.set('X-Passkey', PASSKEY);
+  }
+  
+  const response = await fetch(`http://localhost:8001${endpoint}`, {
+    ...options,
+    headers
+  });
+  
+  if (response.status === 403) {
+    // Passkey invalid - prompt user to re-authenticate
+    handlePasskeyError();
+  }
+  
+  return response;
+}
+```
+
+### 3. Authentication Flow
+
+**When auth is DISABLED (default):**
+- Passkey header can be omitted
+- All users share same database
+
+**When auth is ENABLED:**
+- Passkey required on ALL endpoints
+- Missing/invalid passkey = 403 Forbidden
+- Show clear error: "Invalid or expired passkey. Please contact admin."
+
+### 4. Passkey Input UI
+
+```tsx
+interface PasskeyModalProps {
+  onVerify: (passkey: string) => Promise<boolean>;
+}
+
+function PasskeyModal({ onVerify }: PasskeyModalProps) {
+  const [passkey, setPasskey] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Store passkey
+    localStorage.setItem('collaborator_passkey', passkey);
+    
+    // Verify with backend
+    const isValid = await onVerify(passkey);
+    
+    if (!isValid) {
+      setError('Invalid passkey. Please try again.');
+      localStorage.removeItem('collaborator_passkey');
+    }
+  };
+
+  return (
+    <div className="passkey-modal">
+      <form onSubmit={handleSubmit}>
+        <h2>Enter Passkey</h2>
+        <input
+          type="password"
+          value={passkey}
+          onChange={(e) => setPasskey(e.target.value)}
+          placeholder="Enter passkey..."
+        />
+        {error && <p className="error">{error}</p>}
+        <button type="submit">Enter</button>
+      </form>
+    </div>
+  );
+}
+```
+
+### 5. Error Handling
+
+```typescript
+// Handle passkey errors globally
+async function handleApiError(response: Response) {
+  if (response.status === 403) {
+    const errorData = await response.json();
+    
+    if (errorData.detail?.includes('passkey')) {
+      // Clear passkey and redirect to auth screen
+      localStorage.removeItem('collaborator_passkey');
+      window.location.href = '/auth';
+    }
+  }
+  
+  throw new Error(`API error: ${response.status}`);
+}
+```
+
+### 6. Testing Locally (Auth Disabled)
+
+1. Ensure `config.yaml` has:
+```yaml
+authentication:
+  enabled: false
+```
+
+2. Requests will work without passkey header
+
+### 7. Testing with Auth Enabled
+
+1. Generate passkey on backend:
+```bash
+python -m backend.data.passkey generate
+```
+
+2. Enable auth in config:
+```yaml
+authentication:
+  enabled: true
+  passkeys_db_path: "/home/chat/collaborator/backend/data/authentication/passkeys.db"
+  users_dir: "/home/chat/collaborator/backend/data/users"
+```
+
+3. Restart backend and test with passkey header
+
+---
+
+## Development Tips
+
+1. **Turn off auth during local dev** - Set `authentication.enabled: false`
+2. **Check CORS settings** - Ensure frontend domain is in `cors_origins`
+3. **Database paths** - User databases go to `/backend/data/users/{hash}/conversations.db`
+4. **Clear localStorage** - Reset passkey when switching environments
+5. **Dev vs Prod** - Use different passkeys for dev and production environments
