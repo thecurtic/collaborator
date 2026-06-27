@@ -52,6 +52,22 @@ the source of truth, so update them by re-pulling rather than editing by hand.
 > describes endpoints that currently exist. Build forward-looking UI behind an
 > abstraction so it can light up when the backend ships those endpoints.
 
+## Backend `frontend-updates/` one-pagers (transient inbox)
+
+The backend repo has a `frontend-updates/` directory of single-use one-pagers
+(`{commit-hash}-{desc}.md`) flagging backend changes that affect the frontend.
+Treat it as an **inbox, not an archive**:
+
+1. On pull, read any new one-pagers (via `git show backend/main:frontend-updates/<file>`).
+   Do **not** vendor them into this repo — they're transient.
+2. Implement the change (or confirm it's a no-op for the frontend).
+3. Record a row in `docs/backend-sync.md` (hash, date, action). That ledger is
+   pure coordination — it tracks what's been processed and signals the backend
+   dev which one-pagers are safe to delete. **Durable state is not stored there**
+   — it lands in `API-SPEC.md` / `INTENTS.md`, which we re-pull (see above).
+4. The applied one-pager is then deleted from the backend inbox (backend dev's
+   job — we can't push to the backend).
+
 ## Quick checklist before pushing
 
 - [ ] Push target is `origin` (collaborator-frontend), never `backend`.
