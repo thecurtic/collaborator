@@ -149,6 +149,15 @@ def load_config() -> dict:
     # Override with environment variables (highest precedence)
     _apply_env_overrides(config)
     
+    # Read system prompt from file if specified
+    if config.get("system_prompt", {}).get("file_path"):
+        try:
+            file_path = resolve_path(config["system_prompt"]["file_path"])
+            with open(file_path, 'r') as f:
+                config["system_prompt"]["text"] = f.read().strip()
+        except IOError as e:
+            print(f"Warning: Failed to read system prompt file at {file_path}: {e}")
+    
     return config
 
 
