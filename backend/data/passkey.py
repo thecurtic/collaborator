@@ -9,8 +9,22 @@ from datetime import datetime, timedelta
 
 
 def _get_project_root() -> str:
-    """Get the project root directory (two dirs up from backend)."""
-    return os.path.dirname(os.path.abspath(__file__))
+    """Get the project root directory (one level up from backend)."""
+    return os.path.dirname(os.getcwd())
+
+
+def _resolve_path(path: str) -> str:
+    """Resolve a relative path - if it starts with backend/, it's already relative to project root.
+    Otherwise, add 'backend/' prefix."""
+    if os.path.isabs(path):
+        return path
+    
+    # If path already starts with backend/, it's correct
+    if path.startswith("backend/"):
+        return os.path.join(_get_project_root(), path)
+    
+    # Otherwise, it's relative to project root but doesn't have backend/ prefix
+    return os.path.join(_get_project_root(), "backend", path)
 
 
 def _get_passkeys_db_path() -> str:
@@ -23,12 +37,10 @@ def _get_passkeys_db_path() -> str:
             # Default relative path
             return os.path.join(_get_project_root(), "backend", "data", "authentication", "passkeys.db")
         
-        # If absolute path, use as-is; otherwise relative to project root
-        if os.path.isabs(passkey_db_path):
-            return passkey_db_path
-        return os.path.join(_get_project_root(), passkey_db_path)
+        # Resolve the path
+        return _resolve_path(passkey_db_path)
     except ImportError:
-        # Fallback
+        # Fallback - but this won't work if run from wrong directory
         return os.path.join(_get_project_root(), "backend", "data", "authentication", "passkeys.db")
 
 
