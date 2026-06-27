@@ -8,24 +8,35 @@ from config import get_config
 
 
 def _get_project_root() -> str:
-    """Get the project root directory (two dirs up from backend)."""
-    # Backend is at /project/backend, so go up two levels
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    """Get the project root directory (two dirs up from auth.py)."""
+    # auth.py is at /project/backend/auth.py, so go up one level
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _resolve_path(path: str) -> str:
+    """Resolve a relative path - if it starts with backend/, it's already relative to project root.
+    Otherwise, add 'backend/' prefix."""
+    if os.path.isabs(path):
+        return path
+    
+    # If path already starts with backend/, it's correct
+    if path.startswith("backend/"):
+        return os.path.join(_get_project_root(), path)
+    
+    # Otherwise, it's relative to project root but doesn't have backend/ prefix
+    return os.path.join(_get_project_root(), "backend", path)
 
 
 def _get_passkeys_db_path() -> str:
     """Get authentication database path from config or default."""
     config = get_config()
-    passkey_db = config.get("authentication", {}).get("passkeys_db_path")
+    passkey_db_path = config.get("authentication", {}).get("passkeys_db_path")
     
-    if not passkey_db:
+    if not passkey_db_path:
         # Default relative path
-        return os.path.join(_get_project_root(), "backend", "data", "authentication", "passkeys.db")
+        return os.path.join(_get_project_root(), "data", "authentication", "passkeys.db")
     
-    # If absolute path, use as-is; otherwise relative to project root
-    if os.path.isabs(passkey_db):
-        return passkey_db
-    return os.path.join(_get_project_root(), passkey_db)
+    return _resolve_path(passkey_db_path)
 
 
 def get_auth_db():
@@ -93,28 +104,9 @@ def _get_user_db_path(passkey: str) -> str:
     
     if not users_dir:
         # Default relative path
-        users_dir = os.path.join(_get_project_root(), "backend", "data", "users")
-    elif not os.path.isabs(users_dir):
-        # Relative to project root
-        users_dir = os.path.join(_get_project_root(), users_dir)
+        return os.path.join(_get_project_root(), "data", "users")
     
-    # Hash the passkey to get user directory name
-    conn = get_auth_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT hash FROM passkeys WHERE disabled = 0")
-    rows = cursor.fetchall()
-    conn.close()
-    
-    user_hash = None
-    for stored_hash, salt in rows:
-        if _verify_passkey(passkey, stored_hash, salt):
-            user_hash = stored_hash
-            break
-    
-    if not user_hash:
-        raise ValueError("Invalid passkey")
-    
-    return os.path.join(users_dir, user_hash, "conversations.db")
+    return _resolve_path(users_dir)
 
 
 def create_user_db(passkey: str) -> str:
@@ -126,10 +118,10 @@ def create_user_db(passkey: str) -> str:
     
     if not users_dir:
         # Default relative path
-        users_dir = os.path.join(_get_project_root(), "backend", "data", "users")
-    elif not os.path.isabs(users_dir):
-        # Relative to project root
-        users_dir = os.path.join(_get_project_root(), users_dir)
+        users_dir = os.path.join(_get_project_root(), "data", "users")
+    else:
+        # Resolve the path
+        users_dir = _resolve_path(users_dir)
     
     # Get or create user hash
     conn = get_auth_db()

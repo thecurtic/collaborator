@@ -98,7 +98,6 @@ async def send_message(
             db_path = create_user_db(passkey)
         else:
             # Resolve relative path to absolute
-            import os
             if db_path_config and not os.path.isabs(db_path_config):
                 from db import _resolve_path
                 db_path = _resolve_path(db_path_config)
@@ -106,7 +105,7 @@ async def send_message(
                 db_path = db_path_config
         
         # Import db with correct path
-        import sqlite3
+        import sqlite3  # Already imported at module level
         conn = sqlite3.connect(db_path)
         
         # Get context from recent committed turns (filtered by passkey if enabled)
@@ -174,7 +173,6 @@ async def get_messages(
             db_path = create_user_db(passkey)
         else:
             # Resolve relative path to absolute
-            import os
             if db_path_config and not os.path.isabs(db_path_config):
                 from db import _resolve_path
                 db_path = _resolve_path(db_path_config)
@@ -182,7 +180,7 @@ async def get_messages(
                 db_path = db_path_config
         
         # Import db with correct path
-        import sqlite3
+        import sqlite3  # Already imported at module level
         conn = sqlite3.connect(db_path)
         
         turns = get_recent_turns(conn, limit=limit, offset=offset)
@@ -216,7 +214,6 @@ async def discard_turn(
             db_path = create_user_db(passkey)
         else:
             # Resolve relative path to absolute
-            import os
             if db_path_config and not os.path.isabs(db_path_config):
                 from db import _resolve_path
                 db_path = _resolve_path(db_path_config)
@@ -224,7 +221,7 @@ async def discard_turn(
                 db_path = db_path_config
         
         # Import db with correct path
-        import sqlite3
+        import sqlite3  # Already imported at module level
         conn = sqlite3.connect(db_path)
         
         # Verify turn belongs to user (owner check would be needed in real app)
