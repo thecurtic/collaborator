@@ -80,6 +80,10 @@ Before committing or pushing any changes to Collaborator, you MUST:
 4. Run `npx playwright test` - Ensure API tests pass
 5. Verify no console errors in browser DevTools
 
+**CRITICAL: Frontend developers must be notified before backend changes are pushed**
+- Backend developers: Create frontend-updates one-pagers for any API/config/data changes
+- Frontend developers: Check `frontend-updates/` after pull to understand backend changes
+
 Failure to test before pushing will result in broken deployments and wasted time debugging production issues.
 
 ## Config Layer
@@ -91,3 +95,26 @@ The project uses a single `config.yaml` at the project root for shared configura
 - **System prompt** - Text or file path for system prompt template
 
 Both the backend and Pi read from this config. The model can be swapped without touching code, allowing Pi to use a more powerful coding model while Collaborator uses a conversational one.
+
+## Housekeeping
+
+When making backend changes, follow this housekeeping checklist to keep frontend developers informed:
+
+### For Backend Developers (PREREQUISITE: Always notify frontend engineer before pushing)
+
+1. **Update INTENTS.md** - Update `Last Updated:` date and add any new philosophical or architectural notes
+2. **Create frontend-updates one-pager** - For commits affecting frontend:
+   - File: `frontend-updates/{commit-hash}-{short-description}.md`
+   - Include: API changes, config changes, data model changes, testing checklist
+3. **Update API-SPEC.md** - Document any endpoint or schema changes
+4. **Update config.yaml.example** - Add new configuration options with comments
+5. **Run `npm run build && npm start` locally** - Verify no breaking changes
+6. **Push and deploy** - Only after frontend engineer has been notified
+
+### For Frontend Developers (DURING PULL)
+
+1. **Read frontend-updates/** - Check for new one-pagers since last sync
+2. **Review INTENTS.md** - Check `Last Updated:` for new changes
+3. **Check API-SPEC.md** - Look for endpoint or schema changes
+4. **Test locally** - Verify frontend works with backend changes
+5. **Report issues** - Flag any broken functionality before production deployment
