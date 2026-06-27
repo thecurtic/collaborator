@@ -98,6 +98,37 @@ To install the PWA on your phone, use one of:
 - `devOptions.enabled` is on, so the SW/manifest also work in `npm run dev` on
   localhost.
 
+## Passkey authentication
+
+The backend supports per-user database isolation via a passkey sent as the
+`X-Passkey` header (see `api-spec/API-SPEC.md`).
+
+- **Auth is OFF by default** (`authentication.enabled: false`) — no passkey
+  needed, all requests share one DB. This is the normal local dev mode.
+- The frontend attaches `X-Passkey` to every request automatically when a
+  passkey is stored (`localStorage` key `collaborator_passkey`).
+- On app load it probes `GET /api/messages?limit=1`; a **403 locks the app** and
+  shows the passkey screen. Submitting a passkey re-probes; on success it
+  unlocks, on 403 it clears the key and shows an error. A 403 at any later point
+  re-locks automatically.
+
+### Testing the passkey UI locally
+
+A test passkey **`letmein`** is already provisioned in the local passkeys DB.
+To exercise the flow:
+
+1. In `../collaborator-backend/.config.yaml` set `authentication.enabled: true`.
+2. Restart the backend (`./scripts/start-backend.ps1`).
+3. Load <http://localhost:3000> → you should see the passkey screen. Enter
+   `letmein` to unlock; enter anything else to see the error path.
+4. When done, set `enabled: false` and restart to return to no-auth dev mode.
+
+> **Backend caveat (flag to backend dev):** `backend/auth.py` hardcodes
+> `PASSKEYS_DB_PATH` to a POSIX path and ignores `authentication.passkeys_db_path`
+> from config. On Windows that resolves to `E:\home\chat\collaborator\backend\
+> data\authentication\passkeys.db` (where the test passkey was created). It
+> should read the path from config instead.
+
 ## Smoke tests
 
 ```bash

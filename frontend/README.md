@@ -37,10 +37,11 @@ npm run typecheck    # types only
 ```
 src/
   api/        wire types, HTTP client, and the CollaboratorApi service seam
+  auth/       passkey session, auth gate context, and the passkey screen
   domain/     canonical app models + adapters from the wire format
   features/   chat (history, composer, bubbles) and health indicator
   components/ shadcn-style UI primitives
-  lib/        utilities (cn)
+  lib/        utilities (cn, date parsing)
 ```
 
 **Design intent — built against the API as-built, without blocking the vision.**
@@ -56,6 +57,8 @@ added there (real or mocked) as the backend ships them, with no UI rewrite.
 - Load conversation history
 - Discard a turn (drops it from model context; stays in the DB)
 - Backend health indicator
+- Passkey authentication (`X-Passkey`) with a lock screen on 403 — optional when
+  the backend has auth disabled, enforced when enabled (see `DEV.md`)
 
 ## Roadmap (from INTENTS.md, pending backend)
 

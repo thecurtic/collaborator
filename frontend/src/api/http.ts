@@ -1,3 +1,4 @@
+import { getPasskey, notifyForbidden } from '@/auth/session';
 import type { ApiError } from './types';
 
 /** Thrown for any non-2xx response or network failure. */
@@ -47,21 +48,25 @@ export async function request<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
+  // Build headers explicitly so we always attach JSON + the passkey, and so a
+  // caller's headers merge instead of clobbering ours.
+  const headers = new Headers(init?.headers);
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  const passkey = getPasskey();
+  if (passkey) headers.set('X-Passkey', passkey);
+
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${path}`, {
-      headers: { 'Content-Type': 'application/json' },
-      ...init,
-    });
-  } catch (cause) {
-    throw new ApiRequestError(
-      'Network error — is the backend running?',
-      0,
-    );
+    res = await fetch(`${BASE_URL}${path}`, { ...init, headers });
+  } catch {
+    throw new ApiRequestError('Network error — is the backend running?', 0);
   }
 
   if (!res.ok) {
-    throw new ApiRequestError(await parseError(res), res.status);
+    const message = await parseError(res);
+    // 403 = missing/invalid passkey: clear it and let the UI prompt re-auth.
+    if (res.status === 403) notifyForbidden();
+    throw new ApiRequestError(message, res.status);
   }
 
   if (res.status === 204) return undefined as T;

@@ -1,7 +1,20 @@
+import { Loader2 } from 'lucide-react';
+import { AuthProvider, useAuth } from '@/auth/AuthContext';
+import { PasskeyScreen } from '@/auth/PasskeyScreen';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
 
 export default function App() {
+  return (
+    <AuthProvider>
+      <AppShell />
+    </AuthProvider>
+  );
+}
+
+function AppShell() {
+  const { gate } = useAuth();
+
   return (
     <div className="flex h-full flex-col">
       <header className="pt-safe px-safe border-b border-border">
@@ -20,7 +33,15 @@ export default function App() {
       </header>
 
       <main className="min-h-0 flex-1">
-        <ChatView />
+        {gate === 'checking' ? (
+          <div className="flex h-full items-center justify-center text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : gate === 'locked' ? (
+          <PasskeyScreen />
+        ) : (
+          <ChatView />
+        )}
       </main>
     </div>
   );

@@ -31,6 +31,12 @@ export interface ListTurnsParams {
  */
 export interface CollaboratorApi {
   health(): Promise<HealthStatus>;
+  /**
+   * Probe an authenticated endpoint to check the current passkey (or that auth
+   * is disabled). Resolves if allowed; throws ApiRequestError(403) if the
+   * passkey is missing/invalid. /api/health can't be used — it's unauthenticated.
+   */
+  verifyAuth(): Promise<void>;
   listTurns(params?: ListTurnsParams): Promise<TurnsPage>;
   sendMessage(input: SendMessageInput): Promise<SendMessageResult>;
   discardTurn(turnId: number): Promise<void>;
@@ -45,6 +51,11 @@ export interface CollaboratorApi {
 class HttpCollaboratorApi implements CollaboratorApi {
   async health(): Promise<HealthStatus> {
     return toHealth(await request<ApiHealth>('/api/health'));
+  }
+
+  async verifyAuth(): Promise<void> {
+    // Smallest authenticated call; we only care that it isn't a 403.
+    await request<ApiTurnsResponse>('/api/messages?limit=1');
   }
 
   async listTurns(params: ListTurnsParams = {}): Promise<TurnsPage> {

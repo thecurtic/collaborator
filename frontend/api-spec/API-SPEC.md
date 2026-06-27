@@ -3,12 +3,42 @@
 ## Overview
 Self-hosted personal chat interface backed by local LLM inference. This document defines the REST API endpoints for backend development.
 
+## Authentication (Passkey System)
+
+### Overview
+Collaborator uses a passkey system for user database isolation. Each passkey maps to a unique user conversation database.
+
+### Passkey Management (CLI)
+Admin generates and manages passkeys via CLI:
+```bash
+# Generate new passkey
+python -m backend.data.passkey generate
+
+# List all passkeys
+python -m backend.data.passkey list
+
+# Revoke a passkey
+python -m backend.data.passkey revoke <passkey_hash>
+```
+
+### Passkey Header
+All API requests require the `X-Passkey` header (when authentication is enabled):
+```
+X-Passkey: <your-passkey-here>
+```
+
+### Response (403 Forbidden) - Missing/Invalid Passkey
+```json
+{
+  "detail": "Passkey required"
+}
+```
+
+---
+
 ## Base URL
 - Development: `http://localhost:8001`
 - Production: Configured via `config.yaml`
-
-## Authentication
-None required. CORS is configured to allow specific origins from config.
 
 ---
 
@@ -33,6 +63,7 @@ GET /api/health
 ```
 POST /api/messages
 Content-Type: application/json
+X-Passkey: <your-passkey>
 ```
 
 **Request Body**
@@ -62,18 +93,12 @@ Content-Type: application/json
 }
 ```
 
-**Response (400 Bad Request)** - Invalid input
-```json
-{
-  "error": "message is required"
-}
-```
-
 ---
 
 ### 3. Get Messages
 ```
 GET /api/messages?limit=10&offset=0
+X-Passkey: <your-passkey>
 ```
 
 **Query Parameters:**
@@ -120,6 +145,7 @@ GET /api/messages?limit=10&offset=0
 ### 4. Discard Turn (Remove from Context)
 ```
 DELETE /api/messages/{turn_id}
+X-Passkey: <your-passkey>
 ```
 
 **Path Parameters:**
@@ -130,13 +156,6 @@ DELETE /api/messages/{turn_id}
 {
   "id": 1,
   "committed": false
-}
-```
-
-**Response (404 Not Found)**
-```json
-{
-  "error": "Turn 1 not found"
 }
 ```
 
@@ -169,7 +188,7 @@ All errors return JSON with appropriate HTTP status code:
 
 ```json
 {
-  "error": "Error message describing what went wrong"
+  "detail": "Error message describing what went wrong"
 }
 ```
 
@@ -177,7 +196,7 @@ All errors return JSON with appropriate HTTP status code:
 |-------------|-------------|
 | 200 | Success (GET) / OK (DELETE) |
 | 201 | Created (POST) |
-| 400 | Bad Request - Invalid input |
+| 403 | Forbidden - Missing or invalid passkey |
 | 404 | Not Found - Resource doesn't exist |
 | 500 | Internal Server Error |
 
@@ -185,21 +204,28 @@ All errors return JSON with appropriate HTTP status code:
 
 ## Request Flow
 
-1. **Client sends message** → POST `/api/messages`
-2. **Backend processes:**
+1. **Client sends message** → POST `/api/messages` with `X-Passkey` header
+2. **Backend validates passkey** (if auth enabled)
+3. **Backend processes:**
    - Retrieves recent committed turns for context
    - Calls LLM with prompt + context
    - Saves user turn to database
    - Saves assistant response to database
-3. **Returns response** → JSON with new turn ID and response text
+4. **Returns response** → JSON with new turn ID and response text
 
 ---
 
 ## Configuration (config.yaml)
 
 ```yaml
+# Enable passkey authentication
+authentication:
+  enabled: false
+  passkeys_db_path: "/home/chat/collaborator/backend/data/authentication/passkeys.db"
+  users_dir: "/home/chat/collaborator/backend/data/users"
+
 inference:
-  endpoint_url: "http://<tailnet-ip>:1234/v1"
+  endpoint_url: "http://<inference-host>:1234/v1"
   model_id: "qwen/qwen3-coder-next"
   temperature: 0.7
   max_tokens: 2048
@@ -208,7 +234,7 @@ inference:
 
 memory:
   default_context_window: 5
-  db_path: "/path/to/conversations.db"
+  db_path: "/home/chat/collaborator/backend/data/conversations.db"
 
 server:
   backend_host: "0.0.0.0"
@@ -225,19 +251,156 @@ system_prompt:
 
 ## Notes for Frontend Developers
 
-1. **Context Management**: 
-   - `context_turns` parameter controls how many prior turns are included
-   - Discarding a turn sets `committed=false` (removes from context)
-   
-2. **Role Distinction**:
-   - User messages: `role="user"`, `message` contains text, `response` is empty
-   - Assistant messages: `role="assistant"`, `message` is empty, `response` contains text
-
-3. **Persistence**:
-   - All messages are persisted to SQLite database
-   - Discarded turns remain in DB but have `committed=false`
-
+1. **Passkey Requirement**: All endpoints require `X-Passkey` header when authentication is enabled
+2. **Database Isolation**: Each passkey has its own conversation database - no cross-user visibility
+3. **Initial Setup**:
+   - Admin generates passkey via CLI: `python -m backend.data.passkey generate`
+   - Share passkey with user via secure channel
 4. **Error Handling**:
-   - Always check for 500 errors (backend issues)
-   - Handle network failures gracefully
-   - Show clear error messages to users
+   - 403 Forbidden = missing or invalid passkey
+   - Always include `X-Passkey` header on all requests
+5. ** revocation**: Admin can revoke passkeys via CLI, invalidating all devices using that key
+
+---
+
+## Frontend Integration Guide
+
+### 1. Storing Passkeys
+- Store passkey in browser localStorage or session storage
+- Consider encrypting if storing long-term
+
+### 2. Passing Passkey on Requests
+```typescript
+// Example: API client setup
+const PASSKEY = localStorage.getItem('collaborator_passkey');
+
+async function apiRequest(endpoint: string, options?: RequestInit) {
+  const headers = new Headers(options?.headers);
+  if (PASSKEY) {
+    headers.set('X-Passkey', PASSKEY);
+  }
+  
+  const response = await fetch(`http://localhost:8001${endpoint}`, {
+    ...options,
+    headers
+  });
+  
+  if (response.status === 403) {
+    // Passkey invalid - prompt user to re-authenticate
+    handlePasskeyError();
+  }
+  
+  return response;
+}
+```
+
+### 3. Authentication Flow
+
+**When auth is DISABLED (default):**
+- Passkey header can be omitted
+- All users share same database
+
+**When auth is ENABLED:**
+- Passkey required on ALL endpoints
+- Missing/invalid passkey = 403 Forbidden
+- Show clear error: "Invalid or expired passkey. Please contact admin."
+
+### 4. Passkey Input UI
+
+```tsx
+interface PasskeyModalProps {
+  onVerify: (passkey: string) => Promise<boolean>;
+}
+
+function PasskeyModal({ onVerify }: PasskeyModalProps) {
+  const [passkey, setPasskey] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Store passkey
+    localStorage.setItem('collaborator_passkey', passkey);
+    
+    // Verify with backend
+    const isValid = await onVerify(passkey);
+    
+    if (!isValid) {
+      setError('Invalid passkey. Please try again.');
+      localStorage.removeItem('collaborator_passkey');
+    }
+  };
+
+  return (
+    <div className="passkey-modal">
+      <form onSubmit={handleSubmit}>
+        <h2>Enter Passkey</h2>
+        <input
+          type="password"
+          value={passkey}
+          onChange={(e) => setPasskey(e.target.value)}
+          placeholder="Enter passkey..."
+        />
+        {error && <p className="error">{error}</p>}
+        <button type="submit">Enter</button>
+      </form>
+    </div>
+  );
+}
+```
+
+### 5. Error Handling
+
+```typescript
+// Handle passkey errors globally
+async function handleApiError(response: Response) {
+  if (response.status === 403) {
+    const errorData = await response.json();
+    
+    if (errorData.detail?.includes('passkey')) {
+      // Clear passkey and redirect to auth screen
+      localStorage.removeItem('collaborator_passkey');
+      window.location.href = '/auth';
+    }
+  }
+  
+  throw new Error(`API error: ${response.status}`);
+}
+```
+
+### 6. Testing Locally (Auth Disabled)
+
+1. Ensure `config.yaml` has:
+```yaml
+authentication:
+  enabled: false
+```
+
+2. Requests will work without passkey header
+
+### 7. Testing with Auth Enabled
+
+1. Generate passkey on backend:
+```bash
+python -m backend.data.passkey generate
+```
+
+2. Enable auth in config:
+```yaml
+authentication:
+  enabled: true
+  passkeys_db_path: "/home/chat/collaborator/backend/data/authentication/passkeys.db"
+  users_dir: "/home/chat/collaborator/backend/data/users"
+```
+
+3. Restart backend and test with passkey header
+
+---
+
+## Development Tips
+
+1. **Turn off auth during local dev** - Set `authentication.enabled: false`
+2. **Check CORS settings** - Ensure frontend domain is in `cors_origins`
+3. **Database paths** - User databases go to `/backend/data/users/{hash}/conversations.db`
+4. **Clear localStorage** - Reset passkey when switching environments
+5. **Dev vs Prod** - Use different passkeys for dev and production environments
