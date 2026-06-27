@@ -8,9 +8,33 @@ import os
 import yaml
 
 
-def _get_project_root() -> str:
-    """Get the project root directory (two dirs up from backend)."""
+def get_project_root() -> str:
+    """Get the project root directory (one level up from backend/).
+    
+    For a module in /repo/backend/, returns /repo.
+    Uses dirname(dirname(abspath(__file__))) which goes:
+      - __file__ = /repo/backend/config.py
+      - dirname(__file__) = /repo/backend  
+      - dirname(dirname(__file__)) = /repo
+    """
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def resolve_path(path: str) -> str:
+    """Resolve a path - absolute paths pass through, relative paths joined to project root.
+    
+    Args:
+        path: Path string (absolute or relative)
+        
+    Returns:
+        Absolute path if input was absolute, otherwise project_root + path
+        
+    Note: Relative paths are interpreted relative to PROJECT ROOT (repo root),
+    not relative to the current working directory or the calling module.
+    """
+    if os.path.isabs(path):
+        return path
+    return os.path.join(get_project_root(), path)
 
 
 def load_config() -> dict:
@@ -31,7 +55,7 @@ def load_config() -> dict:
         },
         "memory": {
             "default_context_window": 5,
-            "db_path": os.path.join(_get_project_root(), "backend", "data", "conversations.db")
+            "db_path": resolve_path("backend/data/conversations.db")
         },
         "server": {
             "backend_host": "0.0.0.0",
@@ -40,8 +64,8 @@ def load_config() -> dict:
         },
         "authentication": {
             "enabled": True,
-            "passkeys_db_path": os.path.join(_get_project_root(), "backend", "data", "authentication", "passkeys.db"),
-            "users_dir": os.path.join(_get_project_root(), "backend", "data", "users")
+            "passkeys_db_path": resolve_path("backend/data/authentication/passkeys.db"),
+            "users_dir": resolve_path("backend/data/users")
         },
         "system_prompt": {
             "text": "You are Collaborator, a helpful assistant.",
@@ -58,7 +82,7 @@ def load_config() -> dict:
     # Try common relative paths from backend directory
     possible_paths = [
         os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.yaml"),
-        os.path.join(_get_project_root(), "config.yaml"),
+        resolve_path("config.yaml"),
     ]
     
     for path in possible_paths:
@@ -68,7 +92,7 @@ def load_config() -> dict:
             break
     else:
         # If no config.yaml found, use the default project path
-        project_root = _get_project_root()
+        project_root = get_project_root()
         config_path = os.path.join(project_root, "config.yaml")
     
     if os.path.exists(config_path):
@@ -76,8 +100,19 @@ def load_config() -> dict:
             with open(config_path, 'r') as f:
                 file_config = yaml.safe_load(f)
                 if file_config:
-                    # Deep merge
+                    # Deep merge (config values will be relative, need to resolve after)
                     config = deep_merge(config, file_config)
+                    
+                    # Resolve all path values in authentication section
+                    if "authentication" in config:
+                        auth_section = config["authentication"]
+                        for key in ["passkeys_db_path", "users_dir"]:
+                            if key in auth_section and auth_section[key]:
+                                auth_section[key] = resolve_path(auth_section[key])
+                    
+                    # Resolve path in memory section
+                    if "memory" in config and "db_path" in config["memory"]:
+                        config["memory"]["db_path"] = resolve_path(config["memory"]["db_path"])
         except yaml.YAMLError as e:
             print(f"Warning: Failed to parse config.yaml at {config_path}: {e}")
         except IOError as e:
@@ -95,6 +130,17 @@ def load_config() -> dict:
                     if dot_config:
                         # Deep merge .config.yaml on top of config.yaml
                         config = deep_merge(config, dot_config)
+                        
+                        # Resolve path values in overriden sections
+                        if "authentication" in dot_config:
+                            auth_section = config.get("authentication", {})
+                            for key in ["passkeys_db_path", "users_dir"]:
+                                if key in auth_section and auth_section[key]:
+                                    auth_section[key] = resolve_path(auth_section[key])
+                        
+                        if "memory" in dot_config and "db_path" in dot_config["memory"]:
+                            config["memory"]["db_path"] = resolve_path(dot_config["memory"]["db_path"])
+                            
             except yaml.YAMLError as e:
                 print(f"Warning: Failed to parse .config.yaml at {dot_config_path}: {e}")
             except IOError as e:
@@ -139,7 +185,7 @@ def _apply_env_overrides(config: dict) -> None:
     
     # Memory
     if os.environ.get("DB_PATH"):
-        config["memory"]["db_path"] = os.environ["DB_PATH"]
+        config["memory"]["db_path"] = resolve_path(os.environ["DB_PATH"])
     if os.environ.get("DEFAULT_CONTEXT_WINDOW"):
         try:
             config["memory"]["default_context_window"] = int(os.environ["DEFAULT_CONTEXT_WINDOW"])
@@ -162,6 +208,12 @@ def _apply_env_overrides(config: dict) -> None:
     # Authentication
     if os.environ.get("AUTH_ENABLED"):
         config["authentication"]["enabled"] = os.environ["AUTH_ENABLED"].lower() == "true"
+    
+    # Resolve any remaining path env vars
+    if os.environ.get("AUTH_PASSKEYS_DB"):
+        config["authentication"]["passkeys_db_path"] = resolve_path(os.environ["AUTH_PASSKEYS_DB"])
+    if os.environ.get("AUTH_USERS_DIR"):
+        config["authentication"]["users_dir"] = resolve_path(os.environ["AUTH_USERS_DIR"])
 
 
 def get_config() -> dict:

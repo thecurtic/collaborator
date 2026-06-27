@@ -143,3 +143,80 @@ if __name__ == "__main__":
     print("✓ singleton pattern test passed")
     
     print("\n✓ All config tests passed!")
+
+
+def test_resolve_path():
+    """Test resolve_path helper - should work from any directory."""
+    import os
+    # Import config after setting path to get fresh module
+    from config import resolve_path, get_project_root
+    
+    project_root = get_project_root()
+    
+    # Test relative path resolution
+    result = resolve_path("backend/data/authentication/passkeys.db")
+    assert result == os.path.join(project_root, "backend", "data", "authentication", "passkeys.db")
+    
+    # Test absolute path passthrough
+    abs_path = "/tmp/test.db"
+    result = resolve_path(abs_path)
+    assert result == abs_path
+    
+    # Test from different working directory
+    original_cwd = os.getcwd()
+    try:
+        # Change to project root and test
+        os.chdir(project_root)
+        result = resolve_path("backend/data/conversations.db")
+        assert "backend" in result
+        assert "data" in result
+        
+        # Change to backend dir and test
+        os.chdir(os.path.join(project_root, "backend"))
+        result = resolve_path("data/authentication/passkeys.db")
+        assert "authentication" in result
+    finally:
+        os.chdir(original_cwd)
+
+
+def test_config_paths_consistency():
+    """Test that all modules resolve paths consistently."""
+    import os
+    
+    from config import get_config
+    config = get_config()
+    
+    # Check that all paths resolve to absolute paths containing backend/data
+    auth_path = config["authentication"]["passkeys_db_path"]
+    users_dir = config["authentication"]["users_dir"]
+    
+    assert os.path.isabs(auth_path), "passkeys_db_path should be absolute"
+    assert os.path.isabs(users_dir), "users_dir should be absolute"
+    
+    # Check that paths contain backend/data
+    assert "backend" in auth_path, f"auth path should contain 'backend': {auth_path}"
+    assert "data" in auth_path, f"auth path should contain 'data': {auth_path}"
+    assert "backend" in users_dir, f"users_dir should contain 'backend': {users_dir}"
+    assert "data" in users_dir, f"users_dir should contain 'data': {users_dir}"
+
+
+if __name__ == "__main__":
+    test_deep_merge()
+    print("✓ deep_merge test passed")
+    
+    test_dot_config_yaml_override()
+    print("✓ .config.yaml override test passed")
+    
+    test_env_override()
+    print("✓ env override test passed")
+    
+    test_singleton_pattern()
+    print("✓ singleton pattern test passed")
+    
+    test_resolve_path()
+    print("✓ resolve_path test passed")
+    
+    test_config_paths_consistency()
+    print("✓ config paths consistency test passed")
+    
+    print("\n✓ All config tests passed!")

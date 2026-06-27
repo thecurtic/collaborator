@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import sqlite3
 
 from pydantic import BaseModel
 from typing import List, Optional
@@ -105,7 +106,7 @@ async def send_message(
                 db_path = db_path_config
         
         # Import db with correct path
-        import sqlite3  # Already imported at module level
+
         conn = sqlite3.connect(db_path)
         
         # Get context from recent committed turns (filtered by passkey if enabled)
@@ -180,7 +181,7 @@ async def get_messages(
                 db_path = db_path_config
         
         # Import db with correct path
-        import sqlite3  # Already imported at module level
+
         conn = sqlite3.connect(db_path)
         
         turns = get_recent_turns(conn, limit=limit, offset=offset)
@@ -221,7 +222,7 @@ async def discard_turn(
                 db_path = db_path_config
         
         # Import db with correct path
-        import sqlite3  # Already imported at module level
+
         conn = sqlite3.connect(db_path)
         
         # Verify turn belongs to user (owner check would be needed in real app)

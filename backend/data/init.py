@@ -3,38 +3,38 @@
 import os
 import sqlite3
 
+try:
+    from ..config import resolve_path, get_config
+except ImportError:
+    import sys
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+    from config import resolve_path, get_config
 
-def _get_project_root() -> str:
-    """Get the project root directory (one level up from backend)."""
-    # Backend is at /project/backend, so go up one level
-    return os.path.dirname(os.getcwd())
 
-
-def _resolve_path(path: str) -> str:
-    """Resolve a relative path - if it starts with backend/, it's already relative to project root.
-    Otherwise, add 'backend/' prefix."""
-    if os.path.isabs(path):
-        return path
-    
-    # If path already starts with backend/, it's correct
-    if path.startswith("backend/"):
-        return os.path.join(_get_project_root(), path)
-    
-    # Otherwise, it's relative to project root but doesn't have backend/ prefix
-    return os.path.join(_get_project_root(), "backend", path)
+def _resolve_auth_path(path: str) -> str:
+    """Resolve a path using the shared resolve_path helper."""
+    if not path:
+        # Default relative paths
+        return resolve_path("backend/data/authentication/passkeys.db")
+    return resolve_path(path)
 
 
 def init_authentication_db():
     """Initialize passkeys database with schema."""
-    config = __import__('config', fromlist=['get_config']).get_config()
-    passkey_db_path = config.get("authentication", {}).get("passkeys_db_path")
+    try:
+        config = get_config()
+        passkey_db_path = config.get("authentication", {}).get("passkeys_db_path")
+    except Exception:
+        passkey_db_path = None
     
     if not passkey_db_path:
         # Default relative path
-        db_path = os.path.join(_get_project_root(), "backend", "data", "authentication", "passkeys.db")
+        db_path = resolve_path("backend/data/authentication/passkeys.db")
     else:
         # Resolve the path
-        db_path = _resolve_path(passkey_db_path)
+        db_path = resolve_path(passkey_db_path)
     
     # Ensure directory exists
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -65,15 +65,18 @@ def init_authentication_db():
 
 def init_user_data():
     """Ensure user data directory structure exists."""
-    config = __import__('config', fromlist=['get_config']).get_config()
-    users_dir = config.get("authentication", {}).get("users_dir")
+    try:
+        config = get_config()
+        users_dir = config.get("authentication", {}).get("users_dir")
+    except Exception:
+        users_dir = None
     
     if not users_dir:
         # Default relative path
-        users_dir = os.path.join(_get_project_root(), "backend", "data", "users")
+        users_dir = resolve_path("backend/data/users")
     else:
         # Resolve the path
-        users_dir = _resolve_path(users_dir)
+        users_dir = resolve_path(users_dir)
     
     # Create users directory
     os.makedirs(users_dir, exist_ok=True)

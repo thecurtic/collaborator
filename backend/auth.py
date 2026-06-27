@@ -4,27 +4,7 @@ import os
 import hashlib
 import sqlite3
 
-from config import get_config
-
-
-def _get_project_root() -> str:
-    """Get the project root directory (two dirs up from auth.py)."""
-    # auth.py is at /project/backend/auth.py, so go up one level
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-def _resolve_path(path: str) -> str:
-    """Resolve a relative path - if it starts with backend/, it's already relative to project root.
-    Otherwise, add 'backend/' prefix."""
-    if os.path.isabs(path):
-        return path
-    
-    # If path already starts with backend/, it's correct
-    if path.startswith("backend/"):
-        return os.path.join(_get_project_root(), path)
-    
-    # Otherwise, it's relative to project root but doesn't have backend/ prefix
-    return os.path.join(_get_project_root(), "backend", path)
+from config import get_config, resolve_path
 
 
 def _get_passkeys_db_path() -> str:
@@ -34,9 +14,9 @@ def _get_passkeys_db_path() -> str:
     
     if not passkey_db_path:
         # Default relative path
-        return os.path.join(_get_project_root(), "data", "authentication", "passkeys.db")
+        return resolve_path("backend/data/authentication/passkeys.db")
     
-    return _resolve_path(passkey_db_path)
+    return resolve_path(passkey_db_path)
 
 
 def get_auth_db():
@@ -104,9 +84,9 @@ def _get_user_db_path(passkey: str) -> str:
     
     if not users_dir:
         # Default relative path
-        return os.path.join(_get_project_root(), "data", "users")
+        return resolve_path("backend/data/users")
     
-    return _resolve_path(users_dir)
+    return resolve_path(users_dir)
 
 
 def create_user_db(passkey: str) -> str:
@@ -118,10 +98,10 @@ def create_user_db(passkey: str) -> str:
     
     if not users_dir:
         # Default relative path
-        users_dir = os.path.join(_get_project_root(), "data", "users")
+        users_dir = resolve_path("backend/data/users")
     else:
         # Resolve the path
-        users_dir = _resolve_path(users_dir)
+        users_dir = resolve_path(users_dir)
     
     # Get or create user hash
     conn = get_auth_db()

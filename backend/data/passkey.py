@@ -7,41 +7,35 @@ import sqlite3
 import secrets
 from datetime import datetime, timedelta
 
-
-def _get_project_root() -> str:
-    """Get the project root directory (one level up from backend)."""
-    return os.path.dirname(os.getcwd())
-
-
-def _resolve_path(path: str) -> str:
-    """Resolve a relative path - if it starts with backend/, it's already relative to project root.
-    Otherwise, add 'backend/' prefix."""
-    if os.path.isabs(path):
-        return path
-    
-    # If path already starts with backend/, it's correct
-    if path.startswith("backend/"):
-        return os.path.join(_get_project_root(), path)
-    
-    # Otherwise, it's relative to project root but doesn't have backend/ prefix
-    return os.path.join(_get_project_root(), "backend", path)
+# Import from parent package directory (backend/)
+try:
+    # Try relative import first
+    from ..config import get_config, resolve_path
+except ImportError:
+    # Fall back to absolute import with sys.path manipulation
+    import sys
+    import os
+    # Add backend directory to path
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+    from config import get_config, resolve_path
 
 
 def _get_passkeys_db_path() -> str:
     """Get authentication database path from config or default."""
     try:
-        from config import get_config
         passkey_db_path = get_config().get("authentication", {}).get("passkeys_db_path")
         
         if not passkey_db_path:
             # Default relative path
-            return os.path.join(_get_project_root(), "backend", "data", "authentication", "passkeys.db")
+            return resolve_path("backend/data/authentication/passkeys.db")
         
-        # Resolve the path
-        return _resolve_path(passkey_db_path)
+        return resolve_path(passkey_db_path)
     except ImportError:
-        # Fallback - but this won't work if run from wrong directory
-        return os.path.join(_get_project_root(), "backend", "data", "authentication", "passkeys.db")
+        # Fallback
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return resolve_path("backend/data/authentication/passkeys.db")
 
 
 PASSKEYS_DB_PATH = _get_passkeys_db_path()

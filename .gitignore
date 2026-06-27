@@ -13,8 +13,9 @@ yarn-error.log*
 .env
 .env.local
 .env.*.local
-.config.yaml  # Local overrides (ignored, gitignored)
-# Note: config.yaml is now tracked in version control
+.config.yaml
+# Local overrides (ignored)
+# config.yaml is now tracked in version control
 
 # OS files
 .DS_Store
