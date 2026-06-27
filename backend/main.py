@@ -50,7 +50,7 @@ app = FastAPI(title="Collaborator Backend", version="0.1.0")
 
 # Configure CORS
 cors_origins = config.get("server", {}).get("cors_origins", ["http://localhost:3000"])
-app.add.middleware(
+app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_credentials=True,
