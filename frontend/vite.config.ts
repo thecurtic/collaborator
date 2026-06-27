@@ -42,9 +42,17 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         // Don't let the SW intercept API calls — always go to the network.
         navigateFallbackDenylist: [/^\/api/],
+        // Take control immediately and drop stale precache on each new version
+        // so an updated build never serves the old app shell.
+        clientsClaim: true,
+        skipWaiting: true,
+        cleanupOutdatedCaches: true,
       },
-      // Lets you exercise the SW/manifest in `npm run dev` on localhost.
-      devOptions: { enabled: true, type: 'module' },
+      // SW is intentionally OFF in dev: an active dev service worker caches the
+      // app shell and serves stale code across reloads (it's why the passkey
+      // screen didn't appear). Test PWA install against a production build
+      // (`npm run build && npm run preview`) instead.
+      devOptions: { enabled: false },
     }),
   ],
   resolve: {
