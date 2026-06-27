@@ -100,7 +100,7 @@ Both the backend and Pi read from this config. The model can be swapped without 
 
 When making backend changes, follow this housekeeping checklist to keep frontend developers informed:
 
-### For Backend Developers (PREREQUISITE: Always notify frontend engineer before pushing)
+### For Backend Developers (CODE PUSHER)
 
 1. **Update INTENTS.md** - Update `Last Updated:` date and add any new philosophical or architectural notes
 2. **Create frontend-updates one-pager** - For commits affecting frontend:
@@ -109,12 +109,21 @@ When making backend changes, follow this housekeeping checklist to keep frontend
 3. **Update API-SPEC.md** - Document any endpoint or schema changes
 4. **Update config.yaml.example** - Add new configuration options with comments
 5. **Run `npm run build && npm start` locally** - Verify no breaking changes
-6. **Push and deploy** - Only after frontend engineer has been notified
+6. **Push** - Frontend developers will read the one-pagers in `frontend-updates/` to understand what changed
+7. **Deploy** - After pull on production
 
-### For Frontend Developers (DURING PULL)
+### For Frontend Developers (PULLER)
 
-1. **Read frontend-updates/** - Check for new one-pagers since last sync
+1. **Read frontend-updates/** - Check for new one-pagers since last sync (they'll be committed after backend pushes)
 2. **Review INTENTS.md** - Check `Last Updated:` for new changes
 3. **Check API-SPEC.md** - Look for endpoint or schema changes
-4. **Test locally** - Verify frontend works with backend changes
-5. **Report issues** - Flag any broken functionality before production deployment
+4. **Test locally** - Verify frontend works with backend changes before deployment
+5. **Report issues** - Flag any broken functionality to backend developer
+
+### How Communication Works
+
+Frontend developers are informed via CODE, not direct notification:
+- Backend pushes → `frontend-updates/` directory populated with one-pagers
+- Frontend pulls → reads one-pagers to understand what changed
+- Frontend commits → responds with frontend-specific fixes if needed
+- This creates an auditable trail of all changes and their impact
