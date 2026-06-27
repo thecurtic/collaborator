@@ -14,8 +14,8 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      // Inject the SW registration automatically (no manual import needed).
-      injectRegister: 'auto',
+      // We register manually in src/pwa.ts to add periodic update checks.
+      injectRegister: null,
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'Collaborator',

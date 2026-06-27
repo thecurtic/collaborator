@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { setupPWA } from './pwa';
 import './index.css';
 
 const rootEl = document.getElementById('root');
@@ -11,3 +12,6 @@ createRoot(rootEl).render(
     <App />
   </StrictMode>,
 );
+
+// Register the service worker (no-op in dev — devOptions is disabled).
+setupPWA();
