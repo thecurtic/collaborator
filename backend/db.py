@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from typing import Optional, List
+from typing import Optional, List, Dict
 from contextlib import contextmanager
 
 
@@ -38,6 +38,30 @@ def get_db_cursor():
 def init_db():
     """Initialize the database with required tables."""
     with get_db_cursor() as cursor:
+        # Create passkeys table (for auth)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS passkeys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hash TEXT UNIQUE NOT NULL,
+                salt TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                disabled BOOLEAN NOT NULL DEFAULT 0,
+                expires_at TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_passkeys_hash ON passkeys(hash)")
+        
+        # Create users table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                passkey_hash TEXT UNIQUE NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (passkey_hash) REFERENCES passkeys(hash)
+            )
+        """)
+        
+        # Create turns table (per-user)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS turns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -74,5 +74,12 @@ MANIFEST
 *.sqlite
 *.sqlite3
 
+# User databases (per-machine)
+backend/data/users/*/conversations.db
+!backend/data/users/.gitkeep
+
+# Authentication database (per-machine)
+backend/data/authentication/passkeys.db
+
 # Worktrees (keep hidden)
 .worktrees/

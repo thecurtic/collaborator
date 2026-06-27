@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 import os
 
@@ -6,15 +6,18 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from config import get_config
-from db import get_db, create_turn, get_recent_turns, update_turn_committed
+from db import init_db, create_turn, get_recent_turns, update_turn_committed, get_turn_by_id
 from inference import call_llm
+from auth import validate_passkey, create_user_db
 
 
 # Initialize config
 config = get_config()
 
+# Check if authentication is enabled
+auth_enabled = config.get("authentication", {}).get("enabled", False)
+
 # Initialize database on startup
-from db import init_db
 init_db()
 
 # Pydantic models for API requests/responses
@@ -47,13 +50,18 @@ app = FastAPI(title="Collaborator Backend", version="0.1.0")
 
 # Configure CORS
 cors_origins = config.get("server", {}).get("cors_origins", ["http://localhost:3000"])
-app.add_middleware(
+app.add.middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def get_passkey_from_header(passkey: Optional[str] = Header(None, alias="X-Passkey")) -> str:
+    """Extract passkey from header or query param."""
+    return passkey
 
 
 @app.get("/api/health")
@@ -63,19 +71,35 @@ async def health_check():
 
 
 @app.post("/api/messages")
-async def send_message(request: UserMessage):
+async def send_message(
+    request: UserMessage,
+    passkey: Optional[str] = Header(None, alias="X-Passkey")
+):
     """
     Send a user message and get the model response.
     
     - **message**: The user's input
     - **context_turns**: Number of prior committed turns to include in context (default: 5)
     - **commit**: Whether to commit this turn to memory (default: true)
+    - **X-Passkey**: User's passkey for authentication
     """
+    # Validate passkey if auth is enabled
+    if auth_enabled:
+        if not passkey:
+            raise HTTPException(status_code=403, detail="Passkey required")
+        if not validate_passkey(passkey):
+            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+    
     try:
-        db = get_db()
+        # Create/get user database
+        db_path = create_user_db(passkey) if auth_enabled else config.get("memory", {}).get("db_path")
         
-        # Get context from recent committed turns
-        recent_turns = get_recent_turns(db, limit=request.context_turns)
+        # Import db with correct path
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        
+        # Get context from recent committed turns (filtered by passkey if enabled)
+        recent_turns = get_recent_turns(conn, limit=request.context_turns)
         
         # Call the LLM with context
         response = call_llm(request.message, recent_turns)
@@ -84,7 +108,7 @@ async def send_message(request: UserMessage):
         user_id = request.user_id or os.environ.get("USER_ID")
         
         turn = create_turn(
-            db,
+            conn,
             user_id=user_id,
             role="user",
             content=request.message,
@@ -93,13 +117,15 @@ async def send_message(request: UserMessage):
         )
         
         response_turn = create_turn(
-            db,
+            conn,
             user_id=user_id,
             role="assistant",
             content=response,
             context_turns=request.context_turns,
             committed=request.commit
         )
+        
+        conn.close()
         
         return MessageResponse(
             id=response_turn["id"],
@@ -116,11 +142,30 @@ async def send_message(request: UserMessage):
 
 
 @app.get("/api/messages")
-async def get_messages(limit: int = 10, offset: int = 0):
+async def get_messages(
+    limit: int = 10,
+    offset: int = 0,
+    passkey: Optional[str] = Header(None, alias="X-Passkey")
+):
     """Retrieve conversation history."""
+    # Validate passkey if auth is enabled
+    if auth_enabled:
+        if not passkey:
+            raise HTTPException(status_code=403, detail="Passkey required")
+        if not validate_passkey(passkey):
+            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+    
     try:
-        db = get_db()
-        turns = get_recent_turns(db, limit=limit, offset=offset)
+        # Create/get user database
+        db_path = create_user_db(passkey) if auth_enabled else config.get("memory", {}).get("db_path")
+        
+        # Import db with correct path
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        
+        turns = get_recent_turns(conn, limit=limit, offset=offset)
+        conn.close()
+        
         return MessagesListResponse(turns=turns, count=len(turns))
     except HTTPException:
         raise
@@ -129,13 +174,38 @@ async def get_messages(limit: int = 10, offset: int = 0):
 
 
 @app.delete("/api/messages/{turn_id}")
-async def discard_turn(turn_id: int):
+async def discard_turn(
+    turn_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey")
+):
     """Discard a specific turn (remove from context)."""
+    # Validate passkey if auth is enabled
+    if auth_enabled:
+        if not passkey:
+            raise HTTPException(status_code=403, detail="Passkey required")
+        if not validate_passkey(passkey):
+            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+    
     try:
-        db = get_db()
-        result = update_turn_committed(db, turn_id, committed=False)
+        # Create/get user database
+        db_path = create_user_db(passkey) if auth_enabled else config.get("memory", {}).get("db_path")
+        
+        # Import db with correct path
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        
+        # Verify turn belongs to user (owner check would be needed in real app)
+        turn = get_turn_by_id(conn, turn_id)
+        if not turn:
+            conn.close()
+            raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
+        
+        result = update_turn_committed(conn, turn_id, committed=False)
+        conn.close()
+        
         if not result:
             raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
+        
         return DiscardTurnResponse(id=turn_id, committed=False)
     except HTTPException:
         raise
@@ -150,4 +220,5 @@ if __name__ == "__main__":
     port = server_config.get("backend_port", 8000)
     
     print(f"Starting Collaborator Backend on {host}:{port}")
+    print(f"Authentication: {'enabled' if auth_enabled else 'disabled'}")
     uvicorn.run(app, host=host, port=port)

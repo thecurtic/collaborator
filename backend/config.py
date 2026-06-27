@@ -30,8 +30,13 @@ def load_config() -> dict:
         },
         "server": {
             "backend_host": "0.0.0.0",
-            "backend_port": 8000,
+            "backend_port": 8001,
             "cors_origins": ["http://localhost:3000"]
+        },
+        "authentication": {
+            "enabled": False,
+            "passkeys_db_path": "/home/chat/collaborator/backend/data/authentication/passkeys.db",
+            "users_dir": "/home/chat/collaborator/backend/data/users"
         },
         "system_prompt": {
             "text": "You are Collaborator, a helpful assistant.",
@@ -148,6 +153,10 @@ def _apply_env_overrides(config: dict) -> None:
         # Comma-separated list
         origins = [o.strip() for o in os.environ["CORS_ORIGINS"].split(",")]
         config["server"]["cors_origins"] = origins
+    
+    # Authentication
+    if os.environ.get("AUTH_ENABLED"):
+        config["authentication"]["enabled"] = os.environ["AUTH_ENABLED"].lower() == "true"
 
 
 def get_config() -> dict:
