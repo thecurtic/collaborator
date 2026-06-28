@@ -1,8 +1,11 @@
-import { Loader2 } from 'lucide-react';
+import { Loader2, Settings as SettingsIcon } from 'lucide-react';
+import { useState } from 'react';
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
 import { PasskeyScreen } from '@/auth/PasskeyScreen';
+import { Button } from '@/components/ui/button';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
+import { SettingsSheet } from '@/features/settings/SettingsSheet';
 
 export default function App() {
   return (
@@ -14,6 +17,7 @@ export default function App() {
 
 function AppShell() {
   const { gate } = useAuth();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <div className="flex h-full flex-col">
@@ -28,9 +32,22 @@ function AppShell() {
               visible · editable memory
             </span>
           </div>
-          <HealthIndicator />
+          <div className="flex items-center gap-1">
+            <HealthIndicator />
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Settings"
+              onClick={() => setSettingsOpen(true)}
+              className="h-8 w-8"
+            >
+              <SettingsIcon className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </header>
+
+      <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
       <main className="min-h-0 flex-1">
         {gate === 'checking' ? (
