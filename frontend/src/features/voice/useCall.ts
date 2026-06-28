@@ -204,7 +204,7 @@ export function useCall(open: boolean, onClose: () => void) {
         if (active) listen();
       });
       try {
-        await api.sendMessageStream({ message: text, commit: true }, (c) => {
+        await api.sendMessageStream({ message: text, commit: true, mode: 'voice' }, (c) => {
           setResponse((prev) => prev + c);
           queue?.push(c);
         });

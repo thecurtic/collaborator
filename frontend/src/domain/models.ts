@@ -59,6 +59,8 @@ export interface SendMessageInput {
   contextTurns?: number;
   commit?: boolean;
   userId?: string;
+  /** "voice" for call mode so the backend can adjust the system prompt. */
+  mode?: 'voice' | 'text';
 }
 
 export interface SendMessageResult {

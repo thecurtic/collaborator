@@ -127,6 +127,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
         context_turns: input.contextTurns,
         commit: input.commit,
         user_id: input.userId,
+        mode: input.mode,
       }),
     });
     return toSendResult(res);
@@ -144,6 +145,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
         context_turns: input.contextTurns,
         commit: input.commit,
         user_id: input.userId,
+        mode: input.mode,
       }),
       signal,
     });

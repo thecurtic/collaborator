@@ -15,10 +15,8 @@ export function MessageBubble({ turn, onDiscard }: MessageBubbleProps) {
 
   const speech = useSpeech();
   const isActive = speech.activeId === turn.id;
-  const ttsLoading =
-    isActive &&
-    (speech.status === 'preparing' || speech.status === 'synthesizing');
-  const ttsPlaying = isActive && speech.status === 'playing';
+  const ttsLoading = isActive && speech.status === 'preparing';
+  const ttsPlaying = isActive && speech.status === 'speaking';
   const canSpeak = !isUser && !!text && turn.id > 0 && speech.supported;
 
   return (

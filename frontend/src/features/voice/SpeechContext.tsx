@@ -6,15 +6,10 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import {
-  downloadVoice,
-  isVoiceStored,
-  playBlob,
-  stopPlayback,
-  synthesize,
-} from './piperTts';
+import { downloadVoice, isVoiceStored } from './piperTts';
+import { SpeechQueue } from './speechQueue';
 
-export type SpeechStatus = 'idle' | 'preparing' | 'synthesizing' | 'playing';
+export type SpeechStatus = 'idle' | 'preparing' | 'speaking';
 
 interface SpeechValue {
   /** Id of the turn currently being spoken/loaded, or null. */
@@ -36,6 +31,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [status, setStatus] = useState<SpeechStatus>('idle');
   const [progress, setProgress] = useState(0);
+  const queueRef = useRef<SpeechQueue | null>(null);
   // Monotonic token so a newer request invalidates any in-flight older one.
   const reqRef = useRef(0);
 
@@ -47,7 +43,8 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
 
   const stop = useCallback(() => {
     reqRef.current++;
-    stopPlayback();
+    queueRef.current?.stop();
+    queueRef.current = null;
     reset();
   }, [reset]);
 
@@ -58,7 +55,8 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
         return;
       }
       const req = ++reqRef.current;
-      stopPlayback();
+      queueRef.current?.stop();
+      queueRef.current = null;
       setActiveId(id);
       setProgress(0);
 
@@ -72,13 +70,15 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
             });
           }
           if (reqRef.current !== req) return;
-          setStatus('synthesizing');
-          const blob = await synthesize(text);
-          if (reqRef.current !== req) return;
-          setStatus('playing');
-          playBlob(blob, () => {
+          setStatus('speaking');
+          // Chunked + pipelined playback: starts speaking after the first
+          // sentence is synthesized instead of waiting for the whole message.
+          const queue = new SpeechQueue(() => {
             if (reqRef.current === req) reset();
           });
+          queueRef.current = queue;
+          queue.push(text);
+          queue.finish();
         } catch {
           if (reqRef.current === req) reset();
         }
