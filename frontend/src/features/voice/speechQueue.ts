@@ -1,44 +1,17 @@
 import { synthesize } from './piperTts';
-
-// Slightly faster than 1.0 — Piper medium voices read a touch slowly.
-const SPEECH_RATE = 1.12;
-
-/**
- * Strip Markdown/markup before TTS so Piper doesn't read symbols aloud (Piper
- * has no SSML/emphasis, so emphasis markers are simply removed). Only affects
- * spoken audio — the on-screen text keeps its formatting.
- */
-export function sanitizeForSpeech(text: string): string {
-  return (
-    text
-      // fenced code blocks → drop entirely
-      .replace(/```[\s\S]*?```/g, ' ')
-      // inline code → keep the contents
-      .replace(/`([^`]+)`/g, '$1')
-      // images ![alt](url) → alt; links [text](url) → text
-      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-      // line-level markers (do before stripping * so bullets are caught)
-      .replace(/^\s{0,3}#{1,6}\s+/gm, '') // headers
-      .replace(/^\s*>\s?/gm, '') // blockquotes
-      .replace(/^\s*[-*+]\s+/gm, '') // list bullets
-      // emphasis markers anywhere
-      .replace(/\*\*|\*|__|_|~~/g, '')
-      // table pipes
-      .replace(/\|/g, ' ')
-      // collapse whitespace
-      .replace(/\s{2,}/g, ' ')
-      .trim()
-  );
-}
+import {
+  SPEECH_RATE,
+  sanitizeForSpeech,
+  extractSentences,
+  type SpeechSession,
+} from './speechUtils';
 
 /**
- * Speaks streamed text sentence-by-sentence. Synthesis is pipelined: the next
- * sentence is synthesized while the current one plays, so there are no audible
- * gaps between sentences. Feed tokens with push(); call finish() when the stream
- * ends; `onIdle` fires once everything has been spoken.
+ * Piper speech session. Speaks streamed text sentence-by-sentence with pipelined
+ * synthesis (the next sentence is synthesized while the current one plays) so
+ * there are no gaps. Markdown is stripped before synthesis.
  */
-export class SpeechQueue {
+export class SpeechQueue implements SpeechSession {
   private buffer = '';
   private queue: string[] = [];
   private synthAhead: Promise<Blob | null> | null = null;
@@ -53,7 +26,9 @@ export class SpeechQueue {
   push(chunk: string): void {
     if (this.stopped) return;
     this.buffer += chunk;
-    this.drainSentences();
+    const { sentences, rest } = extractSentences(this.buffer);
+    this.queue.push(...sentences);
+    this.buffer = rest;
     void this.pump();
   }
 
@@ -75,21 +50,9 @@ export class SpeechQueue {
     this.cleanup();
   }
 
-  private drainSentences(): void {
-    const re = /[^.!?]*[.!?]+["')\]]*\s/g;
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(this.buffer)) !== null) {
-      const sentence = match[0].trim();
-      if (sentence) this.queue.push(sentence);
-      lastIndex = re.lastIndex;
-    }
-    if (lastIndex > 0) this.buffer = this.buffer.slice(lastIndex);
-  }
-
   private synth(text: string): Promise<Blob | null> {
     const clean = sanitizeForSpeech(text);
-    if (!clean) return Promise.resolve(null); // nothing speakable (e.g. only markup)
+    if (!clean) return Promise.resolve(null);
     return synthesize(clean).catch(() => null);
   }
 
@@ -104,7 +67,6 @@ export class SpeechQueue {
   private async pump(): Promise<void> {
     if (this.playing || this.stopped) return;
 
-    // Next blob: either one we pre-synthesized, or synthesize on demand.
     let blobPromise = this.synthAhead;
     this.synthAhead = null;
     if (!blobPromise) {
@@ -123,7 +85,7 @@ export class SpeechQueue {
       return;
     }
 
-    // Start synthesizing the following sentence while this one plays.
+    // Pre-synthesize the following sentence while this one plays.
     const following = this.queue.shift();
     if (following !== undefined) this.synthAhead = this.synth(following);
 

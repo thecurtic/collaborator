@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
-import { SpeechQueue } from './speechQueue';
+import { createSpeechSession, type SpeechSession } from './speech';
 
 export type CallPhase = 'connecting' | 'listening' | 'responding' | 'error';
 
@@ -70,7 +70,7 @@ export function useCall(open: boolean, onClose: () => void) {
     let mime = '';
     let baseType = 'audio/webm';
     let endPhrase = DEFAULT_END_PHRASE;
-    let queue: SpeechQueue | null = null;
+    let queue: SpeechSession | null = null;
     let pollTimer: number | undefined;
     let maxTimer: number | undefined;
     let transcribing = false;
@@ -200,7 +200,7 @@ export function useCall(open: boolean, onClose: () => void) {
       setPhase('responding');
       setPartial(text);
       setResponse('');
-      queue = new SpeechQueue(() => {
+      queue = createSpeechSession(() => {
         if (active) listen();
       });
       try {

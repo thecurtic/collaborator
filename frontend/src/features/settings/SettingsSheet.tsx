@@ -1,8 +1,17 @@
 import { Loader2, X } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { PIPER_VOICES } from '@/features/voice/piperVoices';
+import { webSpeechSupported } from '@/features/voice/speech';
 import { cn } from '@/lib/utils';
-import { setDebugEnabled, useDebugEnabled } from './uiPrefs';
+import {
+  setDebugEnabled,
+  setPiperVoice,
+  setTtsEngine,
+  useDebugEnabled,
+  usePiperVoice,
+  useTtsEngine,
+} from './uiPrefs';
 import { useSettings } from './useSettings';
 
 interface SettingsSheetProps {
@@ -13,6 +22,8 @@ interface SettingsSheetProps {
 export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
   const { settings, status, error, saving, save } = useSettings(open);
   const debug = useDebugEnabled();
+  const ttsEngine = useTtsEngine();
+  const piperVoice = usePiperVoice();
   const [endPhrase, setEndPhrase] = useState('');
   const [savedNote, setSavedNote] = useState(false);
 
@@ -106,6 +117,54 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
             </div>
           </form>
         )}
+
+        {/* Voice (text-to-speech) — client-side preferences. */}
+        <div className="mt-5 space-y-3 border-t border-border pt-4">
+          <p className="text-sm font-medium">Voice (text-to-speech)</p>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant={ttsEngine === 'piper' ? 'default' : 'outline'}
+              size="sm"
+              className="flex-1"
+              onClick={() => setTtsEngine('piper')}
+            >
+              Piper (neural)
+            </Button>
+            <Button
+              type="button"
+              variant={ttsEngine === 'browser' ? 'default' : 'outline'}
+              size="sm"
+              className="flex-1"
+              onClick={() => setTtsEngine('browser')}
+              disabled={!webSpeechSupported()}
+            >
+              Browser
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {ttsEngine === 'piper'
+              ? 'Consistent neural voice, runs on-device (downloads the voice once; slower on phones).'
+              : 'Instant on-device system voice; quality varies by device.'}
+          </p>
+
+          {ttsEngine === 'piper' && (
+            <label className="block">
+              <span className="text-xs text-muted-foreground">Piper voice</span>
+              <select
+                value={piperVoice}
+                onChange={(e) => setPiperVoice(e.target.value)}
+                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {PIPER_VOICES.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
 
         {/* Client-side preference — independent of backend settings. */}
         <div className="mt-5 flex items-center justify-between border-t border-border pt-4">

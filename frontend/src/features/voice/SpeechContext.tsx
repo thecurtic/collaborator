@@ -6,8 +6,10 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { getTtsEngine } from '@/features/settings/uiPrefs';
 import { downloadVoice, isVoiceStored } from './piperTts';
-import { SpeechQueue } from './speechQueue';
+import { createSpeechSession, webSpeechSupported } from './speech';
+import type { SpeechSession } from './speechUtils';
 
 export type SpeechStatus = 'idle' | 'preparing' | 'speaking';
 
@@ -15,7 +17,7 @@ interface SpeechValue {
   /** Id of the turn currently being spoken/loaded, or null. */
   activeId: number | null;
   status: SpeechStatus;
-  /** Voice-model download progress (0..1) while `status === 'preparing'`. */
+  /** Piper voice-model download progress (0..1) while `status === 'preparing'`. */
   progress: number;
   supported: boolean;
   /** Speak the text for a turn id; clicking the active one stops it. */
@@ -25,14 +27,13 @@ interface SpeechValue {
 
 const SpeechContext = createContext<SpeechValue | null>(null);
 
-const supported = typeof Worker !== 'undefined';
+const supported = typeof Worker !== 'undefined' || webSpeechSupported();
 
 export function SpeechProvider({ children }: { children: ReactNode }) {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [status, setStatus] = useState<SpeechStatus>('idle');
   const [progress, setProgress] = useState(0);
-  const queueRef = useRef<SpeechQueue | null>(null);
-  // Monotonic token so a newer request invalidates any in-flight older one.
+  const sessionRef = useRef<SpeechSession | null>(null);
   const reqRef = useRef(0);
 
   const reset = useCallback(() => {
@@ -43,8 +44,8 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
 
   const stop = useCallback(() => {
     reqRef.current++;
-    queueRef.current?.stop();
-    queueRef.current = null;
+    sessionRef.current?.stop();
+    sessionRef.current = null;
     reset();
   }, [reset]);
 
@@ -55,14 +56,15 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
         return;
       }
       const req = ++reqRef.current;
-      queueRef.current?.stop();
-      queueRef.current = null;
+      sessionRef.current?.stop();
+      sessionRef.current = null;
       setActiveId(id);
       setProgress(0);
 
       void (async () => {
         try {
-          if (!(await isVoiceStored())) {
+          // Only Piper needs a model download; Web Speech is instant.
+          if (getTtsEngine() === 'piper' && !(await isVoiceStored())) {
             if (reqRef.current !== req) return;
             setStatus('preparing');
             await downloadVoice((f) => {
@@ -71,14 +73,12 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
           }
           if (reqRef.current !== req) return;
           setStatus('speaking');
-          // Chunked + pipelined playback: starts speaking after the first
-          // sentence is synthesized instead of waiting for the whole message.
-          const queue = new SpeechQueue(() => {
+          const session = createSpeechSession(() => {
             if (reqRef.current === req) reset();
           });
-          queueRef.current = queue;
-          queue.push(text);
-          queue.finish();
+          sessionRef.current = session;
+          session.push(text);
+          session.finish();
         } catch {
           if (reqRef.current === req) reset();
         }
