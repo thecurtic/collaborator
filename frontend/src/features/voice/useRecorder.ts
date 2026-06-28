@@ -71,11 +71,25 @@ export function useRecorder() {
       return true;
     } catch (err) {
       releaseStream();
-      setError(
-        err instanceof DOMException && err.name === 'NotAllowedError'
-          ? 'Microphone permission denied.'
-          : 'Could not start recording.',
-      );
+      const name = err instanceof DOMException ? err.name : '';
+      let msg: string;
+      switch (name) {
+        case 'NotAllowedError':
+        case 'SecurityError':
+          msg = 'Microphone blocked. Allow mic access for this site (and note it needs HTTPS or localhost).';
+          break;
+        case 'NotFoundError':
+        case 'DevicesNotFoundError':
+          msg = 'No microphone found on this device.';
+          break;
+        case 'NotReadableError':
+        case 'TrackStartError':
+          msg = 'Microphone is in use by another app.';
+          break;
+        default:
+          msg = `Could not start recording${name ? ` (${name})` : ''}.`;
+      }
+      setError(msg);
       return false;
     }
   }, [supported, releaseStream]);
