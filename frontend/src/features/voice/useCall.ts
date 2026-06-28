@@ -4,11 +4,11 @@ import { SpeechQueue } from './speechQueue';
 
 export type CallPhase = 'connecting' | 'listening' | 'responding' | 'error';
 
-// Turn ends after this much silence once the user has started speaking.
-const SILENCE_MS = 1500;
-// RMS energy (0..1) above this counts as speech. Tunable.
-const VOICE_THRESHOLD = 0.025;
-const MAX_UTTERANCE_MS = 30000; // safety cap on a single turn
+// How often we transcribe the audio-so-far to look for the end phrase.
+const POLL_MS = 2500;
+// Safety cap so a turn can't run forever if the phrase is never recognized.
+const MAX_UTTERANCE_MS = 60000;
+const FINAL_CHUNK_WAIT = 200;
 const DEFAULT_END_PHRASE = 'go ahead';
 
 function pickMimeType(): string {
@@ -28,19 +28,17 @@ function extFor(mime: string): string {
   return 'webm';
 }
 
-/** Remove a trailing end-phrase (e.g. "…what's the weather go ahead"). */
+function containsPhrase(text: string, phrase: string): boolean {
+  return !!phrase && text.toLowerCase().includes(phrase.toLowerCase());
+}
+
 function stripPhrase(text: string, phrase: string): string {
-  const t = text.trim();
-  if (!phrase) return t;
-  const lower = t.toLowerCase();
+  if (!phrase) return text.trim();
+  const lower = text.toLowerCase();
   const p = phrase.toLowerCase();
-  if (lower.endsWith(p)) return t.slice(0, t.length - p.length).trim();
-  // also handle trailing punctuation after the phrase
   const idx = lower.lastIndexOf(p);
-  if (idx !== -1 && lower.slice(idx + p.length).replace(/[\s.!?,]/g, '') === '') {
-    return t.slice(0, idx).trim();
-  }
-  return t;
+  if (idx === -1) return text.trim();
+  return (text.slice(0, idx) + text.slice(idx + p.length)).trim();
 }
 
 interface Controls {
@@ -49,14 +47,15 @@ interface Controls {
 }
 
 /**
- * Call loop: record a full utterance, ended by silence detection (VAD), the
- * "Done" button, or a max duration → transcribe once → stream the reply (live
- * tokens) and speak it via Piper sentence by sentence → listen again.
+ * Call loop: record continuously while polling transcription for the configurable
+ * end phrase (e.g. "go ahead"). End the turn on the phrase, the "Done" button, or
+ * a max-duration safety — then stream the reply (live tokens) and speak it via
+ * Piper sentence by sentence, then listen again. (No silence detection.)
  */
 export function useCall(open: boolean, onClose: () => void) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
-  const [partial, setPartial] = useState(''); // last transcript sent
-  const [response, setResponse] = useState(''); // assistant streaming text
+  const [partial, setPartial] = useState('');
+  const [response, setResponse] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const controlsRef = useRef<Controls | null>(null);
@@ -72,28 +71,36 @@ export function useCall(open: boolean, onClose: () => void) {
     let baseType = 'audio/webm';
     let endPhrase = DEFAULT_END_PHRASE;
     let queue: SpeechQueue | null = null;
-    let audioCtx: AudioContext | null = null;
-    let analyser: AnalyserNode | null = null;
-    let vadTimer: number | undefined;
+    let pollTimer: number | undefined;
     let maxTimer: number | undefined;
-    let finishing = false;
-    let hasSpoken = false;
-    let lastVoice = 0;
+    let transcribing = false;
+    let finalizing = false;
+    let latest = '';
 
     const log = (m: string) => {
       const t = new Date().toLocaleTimeString([], { hour12: false });
       setLogs((prev) => [...prev.slice(-13), `${t} ${m}`]);
     };
 
-    const clearTurnTimers = () => {
-      if (vadTimer) window.clearInterval(vadTimer);
+    const clearTimers = () => {
+      if (pollTimer) window.clearInterval(pollTimer);
       if (maxTimer) window.clearTimeout(maxTimer);
-      vadTimer = maxTimer = undefined;
+      pollTimer = maxTimer = undefined;
+    };
+
+    const stopRecorder = () => {
+      if (recorder && recorder.state !== 'inactive') {
+        try {
+          recorder.stop();
+        } catch {
+          /* ignore */
+        }
+      }
     };
 
     const cleanup = () => {
       active = false;
-      clearTurnTimers();
+      clearTimers();
       if (recorder && recorder.state !== 'inactive') {
         recorder.onstop = null;
         try {
@@ -105,44 +112,20 @@ export function useCall(open: boolean, onClose: () => void) {
       recorder = null;
       queue?.stop();
       queue = null;
-      void audioCtx?.close().catch(() => {});
-      audioCtx = null;
-      analyser = null;
       stream?.getTracks().forEach((t) => t.stop());
       stream = null;
     };
 
-    const startVad = () => {
-      if (!analyser) return;
-      const data = new Uint8Array(analyser.fftSize);
-      hasSpoken = false;
-      lastVoice = Date.now();
-      vadTimer = window.setInterval(() => {
-        if (!analyser) return;
-        analyser.getByteTimeDomainData(data);
-        let sum = 0;
-        for (const v of data) {
-          const d = (v - 128) / 128;
-          sum += d * d;
-        }
-        const rms = Math.sqrt(sum / data.length);
-        const now = Date.now();
-        if (rms > VOICE_THRESHOLD) {
-          if (!hasSpoken) log('speech detected');
-          hasSpoken = true;
-          lastVoice = now;
-        } else if (hasSpoken && now - lastVoice > SILENCE_MS) {
-          log('silence → finish');
-          finishTurn();
-        }
-      }, 100);
-    };
+    const cumulativeBlob = () =>
+      new Blob(chunks, { type: (mime || 'audio/webm').split(';')[0] });
 
     const listen = () => {
       if (!active || !stream) return;
-      finishing = false;
+      finalizing = false;
       chunks = [];
+      latest = '';
       setPhase('listening');
+      setPartial('');
       setResponse('');
       try {
         recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
@@ -154,48 +137,56 @@ export function useCall(open: boolean, onClose: () => void) {
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
       };
-      recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: baseType });
-        void handleUtterance(blob);
-      };
-      recorder.start();
-      startVad();
+      recorder.start(1000); // timeslice so chunks accumulate into a valid blob
+      pollTimer = window.setInterval(() => void poll(), POLL_MS);
       maxTimer = window.setTimeout(() => {
         log('max duration → finish');
-        finishTurn();
+        void finalize(true);
       }, MAX_UTTERANCE_MS);
     };
 
-    // Stop the recorder; its onstop builds the blob and calls handleUtterance.
-    const finishTurn = () => {
-      if (finishing) return;
-      finishing = true;
-      clearTurnTimers();
-      if (recorder && recorder.state === 'recording') {
-        try {
-          recorder.stop();
-        } catch {
-          void handleUtterance(null);
+    const poll = async () => {
+      if (!active || transcribing || finalizing || chunks.length === 0) return;
+      transcribing = true;
+      try {
+        const text = await api.transcribe(cumulativeBlob(), {
+          filename: `turn.${extFor(baseType)}`,
+        });
+        if (!active || finalizing) return;
+        latest = text;
+        log(`heard(${text.trim().length}): "${text.trim().slice(0, 40)}"`);
+        if (text.trim()) setPartial(stripPhrase(text, endPhrase));
+        if (containsPhrase(text, endPhrase)) {
+          log('phrase matched → finish');
+          await finalize(false);
         }
-      } else {
-        void handleUtterance(null);
+      } catch (e) {
+        log(`transcribe FAIL: ${e instanceof Error ? e.message : e}`);
+      } finally {
+        transcribing = false;
       }
     };
 
-    const handleUtterance = async (blob: Blob | null) => {
-      if (!active) return;
-      log(`utterance ${blob ? `${Math.round(blob.size / 1024)}KB` : 'EMPTY'}`);
-      let text = '';
-      if (blob && blob.size > 0) {
+    const finalize = async (forceTranscribe: boolean) => {
+      if (!active || finalizing) return;
+      finalizing = true;
+      clearTimers();
+      stopRecorder();
+      await new Promise((r) => setTimeout(r, FINAL_CHUNK_WAIT));
+
+      let text = latest;
+      if (forceTranscribe || !text.trim()) {
         try {
-          text = await api.transcribe(blob, { filename: `turn.${extFor(baseType)}` });
+          text = await api.transcribe(cumulativeBlob(), {
+            filename: `turn.${extFor(baseType)}`,
+          });
         } catch (e) {
-          log(`transcribe FAIL: ${e instanceof Error ? e.message : e}`);
+          log(`final transcribe FAIL: ${e instanceof Error ? e.message : e}`);
         }
       }
       if (!active) return;
       const clean = stripPhrase(text, endPhrase);
-      log(`heard(${text.trim().length}) → "${clean.slice(0, 40)}"`);
+      log(`finalize → "${clean.slice(0, 40)}"`);
       if (clean) {
         await respond(clean);
       } else {
@@ -229,7 +220,7 @@ export function useCall(open: boolean, onClose: () => void) {
     controlsRef.current = {
       endTurn: () => {
         log('Done tapped');
-        finishTurn();
+        void finalize(true);
       },
       end: () => {
         cleanup();
@@ -257,22 +248,7 @@ export function useCall(open: boolean, onClose: () => void) {
         }
         mime = pickMimeType();
         baseType = (mime || 'audio/webm').split(';')[0];
-        // Audio analysis for silence detection.
-        try {
-          const Ctx =
-            window.AudioContext ??
-            (window as unknown as { webkitAudioContext: typeof AudioContext })
-              .webkitAudioContext;
-          audioCtx = new Ctx();
-          void audioCtx.resume();
-          const src = audioCtx.createMediaStreamSource(stream);
-          analyser = audioCtx.createAnalyser();
-          analyser.fftSize = 512;
-          src.connect(analyser);
-        } catch {
-          analyser = null; // VAD unavailable; Done button still works
-        }
-        log(`mic ok, mime=${baseType}, vad=${analyser ? 'on' : 'off'}`);
+        log(`mic ok, mime=${baseType}`);
         listen();
       } catch (err) {
         if (!active) return;

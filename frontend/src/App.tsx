@@ -23,7 +23,13 @@ function AppShell() {
   const { gate } = useAuth();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [callOpen, setCallOpen] = useState(false);
-  const closeCall = useCallback(() => setCallOpen(false), []);
+  const [chatReload, setChatReload] = useState(0);
+  // Closing a call refreshes the chat so the spoken exchange (persisted with
+  // commit:true) shows up in the text history.
+  const closeCall = useCallback(() => {
+    setCallOpen(false);
+    setChatReload((n) => n + 1);
+  }, []);
 
   return (
     <div className="flex h-full flex-col">
@@ -75,7 +81,7 @@ function AppShell() {
         ) : gate === 'locked' ? (
           <PasskeyScreen />
         ) : (
-          <ChatView />
+          <ChatView reloadSignal={chatReload} />
         )}
       </main>
     </div>

@@ -50,12 +50,15 @@ export function playBlob(blob: Blob, onEnded?: () => void): void {
   stopPlayback();
   currentUrl = URL.createObjectURL(blob);
   const audio = new Audio(currentUrl);
+  audio.playbackRate = 1.12;
   currentAudio = audio;
-  audio.addEventListener('ended', () => {
+  const finish = () => {
     cleanupAudio();
     onEnded?.();
-  });
-  void audio.play();
+  };
+  audio.addEventListener('ended', finish);
+  audio.addEventListener('error', finish);
+  void audio.play().catch(finish);
 }
 
 export function stopPlayback(): void {

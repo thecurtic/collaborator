@@ -9,8 +9,13 @@ import { useChat } from './useChat';
 // used as a fallback when the API doesn't report the window size.
 const DEFAULT_CONTEXT_WINDOW = 5;
 
-export function ChatView() {
-  const { turns, loading, sending, error, contextWindow, sendMessage, discardTurn } =
+interface ChatViewProps {
+  /** Bumped to force a history reload (e.g. after returning from call mode). */
+  reloadSignal?: number;
+}
+
+export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
+  const { turns, loading, sending, error, contextWindow, sendMessage, discardTurn, reload } =
     useChat();
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -18,6 +23,11 @@ export function ChatView() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [turns.length, sending]);
+
+  // Reload history when asked (call mode persisted turns while we were away).
+  useEffect(() => {
+    if (reloadSignal > 0) void reload();
+  }, [reloadSignal, reload]);
 
   // The backend feeds the model the most recent N committed turns; GET only
   // returns committed turns, so the next message's context is simply the last N
