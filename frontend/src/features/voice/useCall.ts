@@ -4,10 +4,11 @@ import { SpeechQueue } from './speechQueue';
 
 export type CallPhase = 'connecting' | 'listening' | 'responding' | 'error';
 
-// How often we transcribe the audio-so-far to look for the end phrase.
-const DETECT_INTERVAL_MS = 2200;
-// Safety: auto-finish a turn that runs too long (in case the phrase is missed).
-const MAX_UTTERANCE_MS = 30000;
+// Each listening "segment" is recorded to completion, then transcribed — partial
+// (still-recording) WebM blobs don't decode reliably, so we never transcribe one.
+const SEGMENT_MS = 3500;
+const MAX_UTTERANCE_MS = 30000; // safety: force-finish a very long turn
+const MAX_TRANSCRIBE_FAILS = 3; // surface an error instead of looping silently
 const DEFAULT_END_PHRASE = 'go ahead';
 
 function pickMimeType(): string {
@@ -46,13 +47,15 @@ interface Controls {
 }
 
 /**
- * Drives the call loop: listen → (chunked transcription detects the end phrase,
- * or a manual "done" / max-duration) → stream the reply (live tokens) → speak it
- * via Piper sentence-by-sentence → back to listening.
+ * Drives the call loop:
+ *   listen (record fixed segments → transcribe each → accumulate) until the
+ *   configurable end phrase appears, the user taps "Done", or a max duration —
+ *   then stream the reply (live tokens) and speak it via Piper sentence by
+ *   sentence, then listen again.
  */
 export function useCall(open: boolean, onClose: () => void) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
-  const [partial, setPartial] = useState(''); // user's in-progress transcript
+  const [partial, setPartial] = useState(''); // user's accumulated transcript
   const [response, setResponse] = useState(''); // assistant streaming text
   const [error, setError] = useState<string | null>(null);
   const controlsRef = useRef<Controls | null>(null);
@@ -62,124 +65,151 @@ export function useCall(open: boolean, onClose: () => void) {
 
     let active = true;
     let stream: MediaStream | null = null;
-    let recorder: MediaRecorder | null = null;
-    let chunks: Blob[] = [];
+    let segRecorder: MediaRecorder | null = null;
+    let segChunks: Blob[] = [];
+    let segTimer: number | undefined;
+    let stopRequested = false;
     let mime = '';
-    let detectTimer: number | undefined;
-    let maxTimer: number | undefined;
-    let transcribing = false;
-    let finalizing = false;
+    let baseType = 'audio/webm';
     let endPhrase = DEFAULT_END_PHRASE;
     let queue: SpeechQueue | null = null;
-    let latest = '';
+    let fails = 0;
 
-    const clearTimers = () => {
-      if (detectTimer) window.clearInterval(detectTimer);
-      if (maxTimer) window.clearTimeout(maxTimer);
-      detectTimer = maxTimer = undefined;
-    };
-
-    const stopRecorder = () => {
-      if (recorder && recorder.state !== 'inactive') {
-        recorder.onstop = null;
+    const stopSeg = () => {
+      if (segTimer) {
+        window.clearTimeout(segTimer);
+        segTimer = undefined;
+      }
+      if (segRecorder && segRecorder.state === 'recording') {
         try {
-          recorder.stop();
+          segRecorder.stop();
         } catch {
           /* ignore */
         }
       }
-      recorder = null;
     };
 
     const cleanup = () => {
       active = false;
-      clearTimers();
-      stopRecorder();
+      if (segTimer) window.clearTimeout(segTimer);
+      segTimer = undefined;
+      if (segRecorder && segRecorder.state !== 'inactive') {
+        segRecorder.onstop = null;
+        try {
+          segRecorder.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      segRecorder = null;
       queue?.stop();
       queue = null;
       stream?.getTracks().forEach((t) => t.stop());
       stream = null;
     };
 
-    const cumulativeBlob = () =>
-      // Strip the ";codecs=…" parameter — the backend validates Content-Type
-      // against an exact-match allowlist that only has the base types.
-      new Blob(chunks, { type: (mime || 'audio/webm').split(';')[0] });
+    // Record one segment; resolves with a complete blob when it stops (either the
+    // segment timer fires or the user taps "Done", which calls stopSeg()).
+    const recordSegment = (): Promise<Blob | null> =>
+      new Promise((resolve) => {
+        if (!active || !stream) {
+          resolve(null);
+          return;
+        }
+        segChunks = [];
+        let rec: MediaRecorder;
+        try {
+          rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+        } catch {
+          resolve(null);
+          return;
+        }
+        segRecorder = rec;
+        rec.ondataavailable = (e) => {
+          if (e.data.size > 0) segChunks.push(e.data);
+        };
+        rec.onstop = () => {
+          if (segTimer) {
+            window.clearTimeout(segTimer);
+            segTimer = undefined;
+          }
+          const blob = new Blob(segChunks, { type: baseType });
+          resolve(blob.size > 0 ? blob : null);
+        };
+        try {
+          rec.start();
+        } catch {
+          resolve(null);
+          return;
+        }
+        segTimer = window.setTimeout(() => {
+          if (rec.state === 'recording') {
+            try {
+              rec.stop();
+            } catch {
+              /* ignore */
+            }
+          }
+        }, SEGMENT_MS);
+      });
 
-    const startListening = () => {
-      if (!active || !stream) return;
-      chunks = [];
-      latest = '';
-      finalizing = false;
+    const listen = async () => {
+      if (!active) return;
+      setPhase('listening');
       setPartial('');
       setResponse('');
-      try {
-        recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-        recorder.ondataavailable = (e) => {
-          if (e.data.size > 0) chunks.push(e.data);
-        };
-        recorder.start(1000); // timeslice so chunks accumulate into a valid blob
-      } catch {
-        setPhase('error');
-        setError('Could not start recording.');
-        return;
-      }
-      setPhase('listening');
-      detectTimer = window.setInterval(() => void detect(), DETECT_INTERVAL_MS);
-      maxTimer = window.setTimeout(() => void finalize(true), MAX_UTTERANCE_MS);
-    };
+      let accumulated = '';
+      stopRequested = false;
+      const turnStart = Date.now();
 
-    const detect = async () => {
-      if (!active || transcribing || finalizing || chunks.length === 0) return;
-      transcribing = true;
-      try {
-        const text = await api.transcribe(cumulativeBlob(), {
-          filename: `call.${extFor(mime)}`,
-        });
-        if (!active || finalizing) return;
-        latest = text;
-        setPartial(text);
-        if (containsPhrase(text, endPhrase)) await finalize(false);
-      } catch {
-        /* ignore a failed poll; we'll try again next tick */
-      } finally {
-        transcribing = false;
-      }
-    };
+      while (active) {
+        const blob = await recordSegment();
+        if (!active) return;
 
-    const finalize = async (forceTranscribe: boolean) => {
-      if (!active || finalizing) return;
-      finalizing = true;
-      clearTimers();
-      stopRecorder();
-      // Let the final ondataavailable land before reading the blob.
-      await new Promise((r) => setTimeout(r, 150));
+        if (blob) {
+          try {
+            const segText = await api.transcribe(blob, {
+              filename: `seg.${extFor(baseType)}`,
+            });
+            fails = 0;
+            if (!active) return;
+            if (segText.trim()) {
+              accumulated = `${accumulated} ${segText.trim()}`.trim();
+              setPartial(accumulated);
+            }
+          } catch {
+            fails += 1;
+            if (fails >= MAX_TRANSCRIBE_FAILS) {
+              setError(
+                'Transcription keeps failing — check the backend, then end and retry the call.',
+              );
+              setPhase('error');
+              return;
+            }
+          }
+        }
 
-      let text = latest;
-      if (forceTranscribe || !text) {
-        try {
-          text = await api.transcribe(cumulativeBlob(), {
-            filename: `call.${extFor(mime)}`,
-          });
-        } catch {
-          /* keep whatever we had */
+        const timedOut = Date.now() - turnStart > MAX_UTTERANCE_MS;
+        const phraseHit = containsPhrase(accumulated, endPhrase);
+        if (stopRequested || phraseHit || timedOut) {
+          const finalText = stripPhrase(accumulated, endPhrase);
+          if (finalText) {
+            await respond(finalText);
+            return;
+          }
+          // Nothing intelligible yet — keep listening.
+          stopRequested = false;
         }
       }
-      if (!active) return;
-      const clean = stripPhrase(text, endPhrase);
-      if (!clean) {
-        startListening(); // nothing intelligible; keep listening
-        return;
-      }
-      await respond(clean);
     };
 
     const respond = async (text: string) => {
+      if (!active) return;
       setPhase('responding');
       setPartial(text);
       setResponse('');
       queue = new SpeechQueue(() => {
-        if (active) startListening();
+        if (active) void listen();
       });
       try {
         await api.sendMessageStream({ message: text, commit: true }, (c) => {
@@ -196,7 +226,10 @@ export function useCall(open: boolean, onClose: () => void) {
     };
 
     controlsRef.current = {
-      endTurn: () => void finalize(true),
+      endTurn: () => {
+        stopRequested = true;
+        stopSeg(); // end the current segment now so we respond promptly
+      },
       end: () => {
         cleanup();
         onClose();
@@ -221,7 +254,8 @@ export function useCall(open: boolean, onClose: () => void) {
           return;
         }
         mime = pickMimeType();
-        startListening();
+        baseType = (mime || 'audio/webm').split(';')[0];
+        void listen();
       } catch (err) {
         if (!active) return;
         setPhase('error');
