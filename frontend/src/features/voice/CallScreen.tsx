@@ -1,5 +1,6 @@
 import { Check, Loader2, Mic, PhoneOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import { cn } from '@/lib/utils';
 import { useCall, type CallPhase } from './useCall';
 
@@ -20,6 +21,7 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
     open,
     onClose,
   );
+  const showDebug = useDebugEnabled();
 
   if (!open) return null;
 
@@ -72,8 +74,8 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
         {error && <p className="max-w-md text-sm text-destructive">{error}</p>}
       </div>
 
-      {/* Temporary diagnostics — remove once call mode is confirmed working. */}
-      {logs.length > 0 && (
+      {/* Diagnostics — toggled via Settings → Developer diagnostics. */}
+      {showDebug && logs.length > 0 && (
         <div className="mx-auto max-h-40 w-full max-w-md overflow-y-auto rounded-md border border-border bg-card p-2 font-mono text-[10px] leading-snug text-muted-foreground">
           {logs.map((line, i) => (
             <div key={i}>{line}</div>

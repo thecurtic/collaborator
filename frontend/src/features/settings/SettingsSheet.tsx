@@ -1,6 +1,8 @@
 import { Loader2, X } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+import { setDebugEnabled, useDebugEnabled } from './uiPrefs';
 import { useSettings } from './useSettings';
 
 interface SettingsSheetProps {
@@ -10,6 +12,7 @@ interface SettingsSheetProps {
 
 export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
   const { settings, status, error, saving, save } = useSettings(open);
+  const debug = useDebugEnabled();
   const [endPhrase, setEndPhrase] = useState('');
   const [savedNote, setSavedNote] = useState(false);
 
@@ -103,6 +106,34 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
             </div>
           </form>
         )}
+
+        {/* Client-side preference — independent of backend settings. */}
+        <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
+          <div>
+            <p className="text-sm font-medium">Developer diagnostics</p>
+            <p className="text-xs text-muted-foreground">
+              Show the live debug log in call mode.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={debug}
+            aria-label="Developer diagnostics"
+            onClick={() => setDebugEnabled(!debug)}
+            className={cn(
+              'relative h-6 w-11 shrink-0 rounded-full transition-colors',
+              debug ? 'bg-primary' : 'bg-muted',
+            )}
+          >
+            <span
+              className={cn(
+                'block h-5 w-5 rounded-full bg-white transition-transform',
+                debug ? 'translate-x-5' : 'translate-x-0.5',
+              )}
+            />
+          </button>
+        </div>
       </div>
     </div>
   );
