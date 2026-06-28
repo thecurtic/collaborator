@@ -4,6 +4,35 @@ import { synthesize } from './piperTts';
 const SPEECH_RATE = 1.12;
 
 /**
+ * Strip Markdown/markup before TTS so Piper doesn't read symbols aloud (Piper
+ * has no SSML/emphasis, so emphasis markers are simply removed). Only affects
+ * spoken audio — the on-screen text keeps its formatting.
+ */
+export function sanitizeForSpeech(text: string): string {
+  return (
+    text
+      // fenced code blocks → drop entirely
+      .replace(/```[\s\S]*?```/g, ' ')
+      // inline code → keep the contents
+      .replace(/`([^`]+)`/g, '$1')
+      // images ![alt](url) → alt; links [text](url) → text
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      // line-level markers (do before stripping * so bullets are caught)
+      .replace(/^\s{0,3}#{1,6}\s+/gm, '') // headers
+      .replace(/^\s*>\s?/gm, '') // blockquotes
+      .replace(/^\s*[-*+]\s+/gm, '') // list bullets
+      // emphasis markers anywhere
+      .replace(/\*\*|\*|__|_|~~/g, '')
+      // table pipes
+      .replace(/\|/g, ' ')
+      // collapse whitespace
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+  );
+}
+
+/**
  * Speaks streamed text sentence-by-sentence. Synthesis is pipelined: the next
  * sentence is synthesized while the current one plays, so there are no audible
  * gaps between sentences. Feed tokens with push(); call finish() when the stream
@@ -59,7 +88,9 @@ export class SpeechQueue {
   }
 
   private synth(text: string): Promise<Blob | null> {
-    return synthesize(text).catch(() => null);
+    const clean = sanitizeForSpeech(text);
+    if (!clean) return Promise.resolve(null); // nothing speakable (e.g. only markup)
+    return synthesize(clean).catch(() => null);
   }
 
   private cleanup(): void {
