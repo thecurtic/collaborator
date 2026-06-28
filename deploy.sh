@@ -28,9 +28,15 @@ fi
 VENV_PYTHON=".venv/bin/python3"
 VENV_PIP=".venv/bin/pip"
 
-# Install Python dependencies
+# Install Python dependencies from requirements.txt (single source of truth)
 echo "Installing Python dependencies..."
-$VENV_PIP install --quiet fastapi uvicorn pydantic requests pyyaml
+$VENV_PIP install --quiet -r backend/requirements.txt
+
+# Warn if ffmpeg is missing (required by /api/transcribe; not a pip package)
+if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "WARNING: ffmpeg not found on PATH. Audio transcription will fail."
+    echo "         Install it with: sudo apt install -y ffmpeg"
+fi
 
 # Check Node.js dependencies
 echo "Checking Node.js dependencies..."
