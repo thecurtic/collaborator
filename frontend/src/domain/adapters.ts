@@ -1,12 +1,10 @@
 import type {
   ApiHealth,
   ApiSendMessageResponse,
-  ApiSettings,
   ApiTurn,
   ApiTurnsResponse,
 } from '@/api/types';
 import type {
-  AppSettings,
   HealthStatus,
   SendMessageResult,
   Turn,
@@ -57,10 +55,6 @@ export function toTurnsPage(api: ApiTurnsResponse): TurnsPage {
 
 export function toHealth(api: ApiHealth): HealthStatus {
   return { status: api.status, version: api.version };
-}
-
-export function toSettings(api: ApiSettings): AppSettings {
-  return { voiceEndPhrase: api.voice_end_phrase };
 }
 
 export function toSendResult(api: ApiSendMessageResponse): SendMessageResult {

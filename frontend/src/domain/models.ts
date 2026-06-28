@@ -38,11 +38,6 @@ export interface HealthStatus {
   version: string;
 }
 
-export interface AppSettings {
-  /** Phrase that ends a turn in voice call mode (configurable, synced to YAML). */
-  voiceEndPhrase: string;
-}
-
 export interface TurnsPage {
   turns: Turn[];
   count: number;

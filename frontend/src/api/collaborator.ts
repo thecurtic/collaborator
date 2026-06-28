@@ -1,21 +1,14 @@
 import type {
-  AppSettings,
   HealthStatus,
   SendMessageInput,
   SendMessageResult,
   TurnsPage,
 } from '@/domain/models';
-import {
-  toHealth,
-  toSendResult,
-  toSettings,
-  toTurnsPage,
-} from '@/domain/adapters';
+import { toHealth, toSendResult, toTurnsPage } from '@/domain/adapters';
 import { ApiRequestError, request, requestStream } from './http';
 import type {
   ApiHealth,
   ApiSendMessageResponse,
-  ApiSettings,
   ApiTranscription,
   ApiTurnsResponse,
 } from './types';
@@ -86,10 +79,6 @@ export interface CollaboratorApi {
 
   /** Transcribe recorded audio to text (Whisper, backend). */
   transcribe(audio: Blob, opts?: TranscribeOptions): Promise<string>;
-  /** Read user-facing settings (e.g. the voice end phrase). */
-  getSettings(): Promise<AppSettings>;
-  /** Update user-facing settings; returns the persisted result. */
-  updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
 
   // --- Roadmap (INTENTS.md "API Extensions Needed", not yet served) ---
   // synthesizeRecall(input): Promise<RecallSynthesis>;
@@ -218,23 +207,6 @@ class HttpCollaboratorApi implements CollaboratorApi {
       body: form,
     });
     return res.text;
-  }
-
-  async getSettings(): Promise<AppSettings> {
-    return toSettings(await request<ApiSettings>('/api/settings'));
-  }
-
-  async updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
-    const body: Partial<ApiSettings> = {};
-    if (patch.voiceEndPhrase !== undefined) {
-      body.voice_end_phrase = patch.voiceEndPhrase;
-    }
-    return toSettings(
-      await request<ApiSettings>('/api/settings', {
-        method: 'PATCH',
-        body: JSON.stringify(body),
-      }),
-    );
   }
 }
 

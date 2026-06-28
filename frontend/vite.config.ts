@@ -40,9 +40,14 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        // Don't precache the heavy ML chunks (TF.js / ONNX / speech-commands /
-        // Piper) — they're lazy-loaded only when voice is used.
-        maximumFileSizeToCacheInBytes: 500 * 1024,
+        // Exclude the heavy ML chunks (TF.js / ONNX / speech-commands / Piper)
+        // from the precache — they're lazy-loaded only when voice is used.
+        globIgnores: [
+          '**/tf-*.js',
+          '**/ort*.js',
+          '**/speech-commands*.js',
+          '**/piper-*.js',
+        ],
         // Don't let the SW intercept API calls — always go to the network.
         navigateFallbackDenylist: [/^\/api/],
         // Take control immediately and drop stale precache on each new version
@@ -67,6 +72,17 @@ export default defineConfig({
         replacement: path.resolve(__dirname, './src/shims/node-util.ts'),
       },
     ],
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        // Give TF.js (incl. speech-commands) a stable chunk name so the SW can
+        // exclude it from precache; otherwise it lands in a generic index chunk.
+        manualChunks(id) {
+          if (id.includes('@tensorflow')) return 'tf';
+        },
+      },
+    },
   },
   server: {
     port: 3000,
