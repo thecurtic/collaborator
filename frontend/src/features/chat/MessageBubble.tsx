@@ -1,5 +1,6 @@
-import { Trash2 } from 'lucide-react';
+import { Loader2, Square, Trash2, Volume2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useSpeech } from '@/features/voice/SpeechContext';
 import { cn, parseApiDate } from '@/lib/utils';
 import type { Turn } from '@/domain/models';
 
@@ -11,6 +12,14 @@ interface MessageBubbleProps {
 export function MessageBubble({ turn, onDiscard }: MessageBubbleProps) {
   const isUser = turn.role === 'user';
   const text = isUser ? turn.message : turn.response;
+
+  const speech = useSpeech();
+  const isActive = speech.activeId === turn.id;
+  const ttsLoading =
+    isActive &&
+    (speech.status === 'preparing' || speech.status === 'synthesizing');
+  const ttsPlaying = isActive && speech.status === 'playing';
+  const canSpeak = !isUser && !!text && turn.id > 0 && speech.supported;
 
   return (
     <div className={cn('flex w-full', isUser ? 'justify-end' : 'justify-start')}>
@@ -52,19 +61,41 @@ export function MessageBubble({ turn, onDiscard }: MessageBubbleProps) {
               {tag}
             </span>
           ))}
-          {turn.committed && turn.id > 0 && (
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Discard from context"
-              title="Discard from context"
-              onClick={() => onDiscard(turn.id)}
-              // Always visible (works on touch); sits inline in the meta row.
-              className="-my-1 ml-auto h-7 w-7 opacity-70 hover:opacity-100"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
+          <span className="ml-auto flex items-center gap-1">
+            {canSpeak && (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={ttsPlaying ? 'Stop reading' : 'Read aloud'}
+                title="Read aloud"
+                onClick={() => speech.toggle(turn.id, text)}
+                className="-my-1 h-7 w-7 opacity-70 hover:opacity-100"
+              >
+                {ttsLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : ttsPlaying ? (
+                  <Square className="h-3.5 w-3.5" />
+                ) : (
+                  <Volume2 className="h-3.5 w-3.5" />
+                )}
+              </Button>
             )}
+            {ttsLoading && speech.status === 'preparing' && (
+              <span>{Math.round(speech.progress * 100)}%</span>
+            )}
+            {turn.committed && turn.id > 0 && (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Discard from context"
+                title="Discard from context"
+                onClick={() => onDiscard(turn.id)}
+                className="-my-1 h-7 w-7 opacity-70 hover:opacity-100"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </span>
           </div>
         )}
       </div>

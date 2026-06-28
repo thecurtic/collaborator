@@ -6,11 +6,14 @@ import { Button } from '@/components/ui/button';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
 import { SettingsSheet } from '@/features/settings/SettingsSheet';
+import { SpeechProvider } from '@/features/voice/SpeechContext';
 
 export default function App() {
   return (
     <AuthProvider>
-      <AppShell />
+      <SpeechProvider>
+        <AppShell />
+      </SpeechProvider>
     </AuthProvider>
   );
 }
