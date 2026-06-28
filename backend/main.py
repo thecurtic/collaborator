@@ -165,7 +165,7 @@ async def send_message(
             event_generator(),
             media_type="text/event-stream",
             headers={
-                "Cache-Control": "no-cache",
+                "Cache-Control": "no-cache, no-transform",
                 "X-Accel-Buffering": "no"
             }
         )
@@ -181,7 +181,7 @@ async def send_message(
             error_generator(),
             media_type="text/event-stream",
             headers={
-                "Cache-Control": "no-cache",
+                "Cache-Control": "no-cache, no-transform",
                 "X-Accel-Buffering": "no"
             }
         )
@@ -281,6 +281,46 @@ async def discard_turn(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def get_voice_end_phrase_from_config() -> str:
+    """Get voice end phrase from config or default."""
+    try:
+        cfg = get_config()
+        return cfg.get("voice_end_phrase", "go ahead")
+    except:
+        return "go ahead"
+
+
+def save_voice_end_phrase(phrase: str) -> None:
+    """Save voice end phrase to .config.yaml and reload."""
+    import os
+    import yaml
+    
+    project_root = resolve_path(".")
+    config_path = os.path.join(project_root, ".config.yaml")
+    
+    # Load existing .config.yaml or create empty
+    existing = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                existing = yaml.safe_load(f) or {}
+        except:
+            existing = {}
+    
+    # Update voice_end_phrase
+    if "voice" not in existing:
+        existing["voice"] = {}
+    existing["voice"]["voice_end_phrase"] = phrase
+    
+    # Write back
+    with open(config_path, 'w') as f:
+        yaml.dump(existing, f)
+    
+    # Reload config
+    if hasattr(get_config, "_config"):
+        delattr(get_config, "_config")
+
+
 @app.get("/api/settings")
 async def get_settings(
     passkey: Optional[str] = Header(None, alias="X-Passkey")
@@ -292,7 +332,7 @@ async def get_settings(
         if not validate_passkey(passkey):
             raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
     
-    return SettingsResponse(voice_end_phrase="go ahead")
+    return SettingsResponse(voice_end_phrase=get_voice_end_phrase_from_config())
 
 
 @app.patch("/api/settings")
@@ -306,6 +346,9 @@ async def patch_settings(
             raise HTTPException(status_code=403, detail="Passkey required")
         if not validate_passkey(passkey):
             raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+    
+    # Save to config
+    save_voice_end_phrase(settings.voice_end_phrase)
     
     return settings
 
