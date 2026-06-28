@@ -29,3 +29,6 @@ server:
 system_prompt:
   text: "You are Collaborator, a helpful assistant."
   file_path: null  # Alternative to text - path to prompt template file
+  # Appended to the system prompt on voice (call-mode) turns. If unset, a sensible
+  # spoken-style default is used (plain prose, no markdown/symbols, short sentences).
+  # voice_text: "Speak in plain conversational prose with no markdown or symbols."

@@ -43,6 +43,9 @@ class UserMessage(BaseModel):
     context_turns: Optional[int] = 5
     commit: Optional[bool] = True
     user_id: Optional[str] = None
+    # "voice" = turn came from call mode (spoken); absent/"text" = normal chat.
+    # On voice turns the system prompt is augmented for spoken-style output.
+    mode: Optional[str] = None
 
 
 class MessageResponse(BaseModel):
@@ -125,7 +128,7 @@ async def send_message(
             full_response = ""
             try:
                 # True token-by-token streaming from the LLM.
-                for content in stream_llm_tokens(request.message, recent_turns):
+                for content in stream_llm_tokens(request.message, recent_turns, mode=request.mode):
                     full_response += content
                     yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
             except Exception as e:
@@ -222,7 +225,7 @@ async def get_messages(
         file_path = config.get("system_prompt", {}).get("file_path")
         if file_path:
             try:
-                with open(resolve_path(file_path), 'r') as f:
+                with open(resolve_path(file_path), 'r', encoding='utf-8') as f:
                     system_prompt_text = f.read().strip()
             except IOError:
                 pass

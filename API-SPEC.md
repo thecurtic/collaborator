@@ -72,7 +72,8 @@ X-Passkey: <your-passkey>
   "message": "string",
   "context_turns": 5,
   "commit": true,
-  "user_id": "optional-string"
+  "user_id": "optional-string",
+  "mode": "voice"
 }
 ```
 
@@ -81,6 +82,10 @@ X-Passkey: <your-passkey>
 - `context_turns` (optional, default: 5): Number of prior committed turns to include
 - `commit` (optional, default: true): Whether to commit this turn to database
 - `user_id` (optional): User identifier
+- `mode` (optional): Turn source. `"voice"` = came from call mode (spoken); absent or
+  `"text"` = normal chat. On `"voice"` turns the backend augments the system prompt
+  with a spoken-style instruction (no markdown/symbols, short sentences) so the reply
+  reads well via TTS. Configurable via `system_prompt.voice_text`.
 
 **Response (201 Created) - Server-Sent Events**
 ```

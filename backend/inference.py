@@ -47,19 +47,39 @@ class StreamingResponse:
         self.metadata = metadata or {}
 
 
+# Appended to the system prompt for call-mode (spoken) turns. The reply is read
+# aloud by TTS, so markdown/symbols read badly and should be avoided.
+DEFAULT_VOICE_STYLE = (
+    "You are in voice mode: the user is speaking to you and your reply will be "
+    "read aloud by text-to-speech. Respond in plain, natural spoken prose. Do not "
+    "use markdown, headings, bullet points, numbered lists, tables, code blocks, "
+    "emoji, or symbols such as *, #, _, >, or |. Keep sentences short and easy to "
+    "follow when heard. Spell out anything that would be ambiguous aloud."
+)
+
+
 def _build_messages(
     message: str,
-    context_turns: Optional[List[Dict]] = None
+    context_turns: Optional[List[Dict]] = None,
+    mode: Optional[str] = None,
 ) -> List[Dict]:
-    """Build the OpenAI-style messages array from system prompt, context, and input."""
+    """Build the OpenAI-style messages array from system prompt, context, and input.
+
+    When mode == "voice", the system prompt is augmented with a spoken-style
+    instruction (configurable via system_prompt.voice_text, else a sensible default).
+    """
     config = _get_config()
+    system_prompt = config.get("system_prompt", {})
+    system_content = system_prompt.get("text", "You are Collaborator, a helpful assistant.")
+
+    if mode == "voice":
+        voice_style = system_prompt.get("voice_text") or DEFAULT_VOICE_STYLE
+        system_content = f"{system_content}\n\n{voice_style}"
 
     messages = [
         {
             "role": "system",
-            "content": config.get("system_prompt", {}).get(
-                "text", "You are Collaborator, a helpful assistant."
-            )
+            "content": system_content,
         }
     ]
 
@@ -93,13 +113,15 @@ def _build_payload(messages: List[Dict], stream: bool) -> Dict:
 
 def stream_llm_tokens(
     message: str,
-    context_turns: Optional[List[Dict]] = None
+    context_turns: Optional[List[Dict]] = None,
+    mode: Optional[str] = None,
 ):
     """Yield tokens from the local LLM endpoint as they arrive (true streaming).
 
     Args:
         message: The user's input message
         context_turns: List of previous turns to include in context
+        mode: Turn mode ("voice" augments the system prompt for spoken style)
 
     Yields:
         Content fragments (tokens) as they are produced by the model.
@@ -110,7 +132,7 @@ def stream_llm_tokens(
     """
     import json
 
-    messages = _build_messages(message, context_turns)
+    messages = _build_messages(message, context_turns, mode=mode)
     payload = _build_payload(messages, stream=True)
 
     try:
@@ -121,6 +143,10 @@ def stream_llm_tokens(
             stream=True,
         )
         response.raise_for_status()
+        # LM Studio sends "text/event-stream" with no charset, so requests would
+        # decode the body as ISO-8859-1 and mangle UTF-8 (e.g. "—" -> "â€”").
+        # Force UTF-8 so decode_unicode produces correct characters.
+        response.encoding = "utf-8"
 
         for line in response.iter_lines(decode_unicode=True):
             if not line:
@@ -151,7 +177,8 @@ def stream_llm_tokens(
 def call_llm_streaming(
     message: str,
     context_turns: Optional[List[Dict]] = None,
-    on_token: Optional[callable] = None
+    on_token: Optional[callable] = None,
+    mode: Optional[str] = None,
 ) -> StreamingResponse:
     """
     Call the local LLM endpoint with streaming and optional token callback.
@@ -160,13 +187,14 @@ def call_llm_streaming(
         message: The user's input message
         context_turns: List of previous turns to include in context
         on_token: Optional callback called with each token as it arrives
+        mode: Turn mode ("voice" augments the system prompt for spoken style)
 
     Returns:
         StreamingResponse containing text and optional metadata
     """
     try:
         full_response = ""
-        for content in stream_llm_tokens(message, context_turns):
+        for content in stream_llm_tokens(message, context_turns, mode=mode):
             full_response += content
             if on_token:
                 on_token(content)
