@@ -296,7 +296,141 @@ async def discard_turn(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+from pydantic import BaseModel, Field
+import tempfile
+import subprocess
+
+
+# Settings models
+class VoiceSettings(BaseModel):
+    voice_end_phrase: str = Field(default="go ahead")
+    # Add other settings fields here
+
+
+class SettingsResponse(BaseModel):
+    voice_end_phrase: str
+    # Add other settings fields here
+
+
+@app.get("/api/settings")
+async def get_settings(
+    passkey: Optional[str] = Header(None, alias="X-Passkey")
+):
+    """Get current voice settings."""
+    if auth_enabled:
+        if not passkey:
+            raise HTTPException(status_code=403, detail="Passkey required")
+        if not validate_passkey(passkey):
+            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+    
+    config = get_config()
+    
+    # Default settings
+    settings = {
+        "voice_end_phrase": "go ahead"
+    }
+    
+    return SettingsResponse(**settings)
+
+
+@app.patch("/api/settings")
+async def patch_settings(
+    settings: VoiceSettings,
+    passkey: Optional[str] = Header(None, alias="X-Passkey")
+):
+    """Update voice settings."""
+    if auth_enabled:
+        if not passkey:
+            raise HTTPException(status_code=403, detail="Passkey required")
+        if not validate_passkey(passkey):
+            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+    
+    config = get_config()
+    
+    # For now, return the updated settings
+    # In production, this would update config.yaml and reload
+    
+    return SettingsResponse(
+        voice_end_phrase=settings.voice_end_phrase
+    )
+
+
+@app.post("/api/transcribe")
+async def transcribe_audio(
+    audio: UploadFile,
+    language: Optional[str] = Form(None),
+    passkey: Optional[str] = Header(None, alias="X-Passkey")
+):
+    """Transcribe audio to text using Whisper.
+    
+    Accepts: webm/opus, mp4/aac, ogg/opus, wav
+    Returns: { "text": "<transcript>" }
+    """
+    if auth_enabled:
+        if not passkey:
+            raise HTTPException(status_code=403, detail="Passkey required")
+        if not validate_passkey(passkey):
+            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+    
+    # Check file size (25MB limit)
+    content_length = int(request.headers.get("content-length", 0))
+    if content_length > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 25MB)")
+    
+    # Validate content type
+    content_type = audio.content_type
+    valid_types = ["audio/webm", "video/webm", "audio/ogg", "video/ogg",
+                   "audio/mp4", "video/mp4", "audio/wav", "audio/x-wav"]
+    
+    if content_type and content_type not in valid_types:
+        raise HTTPException(status_code=422, detail=f"Invalid content type: {content_type}. Accepts: webm/opus, mp4/aac, ogg/opus, wav")
+    
+    try:
+        # Read audio data
+        audio_data = await audio.read()
+        
+        # Create temp file for processing
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            # Use ffmpeg to normalize audio
+            process = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav",
+                tmp.name,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate(input=audio_data)
+            
+            if process.returncode != 0:
+                raise HTTPException(status_code=500, detail=f"FFmpeg error: {stderr.decode()}")
+            
+            # Call Whisper
+            whisper_command = ["whisper", tmp.name, "--model", "base", "--language", language or ""]
+            result = subprocess.run(whisper_command, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                raise HTTPException(status_code=500, detail=f"Whisper error: {result.stderr}")
+            
+            # Extract text from Whisper output
+            import re
+            match = re.search(r'"text": "([^"]+)"', result.stdout)
+            if match:
+                text = match.group(1).replace('\"', '"')
+            else:
+                # Try alternative parsing
+                text = result.stdout.strip()
+            
+            return {"text": text}
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
+
     import uvicorn
     server_config = config.get("server", {})
     host = server_config.get("backend_host", "0.0.0.0")

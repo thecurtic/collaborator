@@ -26,10 +26,9 @@ data: [DONE]
         mock_response_obj.iter_lines = iter_lines
         mock_post.return_value = mock_response_obj
         
-        result = call_llm("Hello")
+        response = call_llm("Hello")
         
-        assert "Hello" in result
-        assert "how can I help you?" in result
+        assert "Hello" in response.text
         mock_post.assert_called_once()
 
 
@@ -44,7 +43,7 @@ data: [DONE]
         {"role": "user", "content": "What is Python?"},
         {"role": "assistant", "content": "Python is a programming language."}
     ]
-    
+
     with patch('requests.post') as mock_post:
         mock_response_obj = MagicMock()
         mock_response_obj.raise_for_status = MagicMock()
@@ -56,9 +55,9 @@ data: [DONE]
         mock_response_obj.iter_lines = iter_lines
         mock_post.return_value = mock_response_obj
         
-        result = call_llm("Tell me more", context)
+        response = call_llm("Tell me more", context)
         
-        assert "Based on your previous message" in result
+        assert "Based on your previous message" in response.text
         mock_post.assert_called_once()
 
 

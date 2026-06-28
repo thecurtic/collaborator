@@ -1,263 +1,229 @@
-# Frontend Update: Streaming Response Support
+# Frontend Update: Streaming Response + Settings/Transcribe
 
 **Commit:** `73282db`  
 **Date:** June 27, 2026
 
 ## Summary
 
-Backend now supports Server-Sent Events (SSE) streaming for real-time LLM responses. Streaming is enabled by default.
+Streaming format standardized, plus new endpoints for settings (`GET/PATCH /api/settings`) and transcription (`POST /api/transcribe`). TTS is handled by Piper WASM on frontend.
 
-## Impact on Frontend
+## API Changes
 
-### API Changes
+### Streaming Response Format (POST /api/messages)
 
-**POST /api/messages - Response Format**
+Standardized SSE format:
 
-Before (single response):
-```json
-{
-  "id": 42,
-  "response": "Full response text here...",
-  ...
-}
 ```
-
-After (streaming with SSE):
-```http
-HTTP/1.1 201 Created
-Content-Type: text/event-stream
-
 data: {"type":"token","content":"Hi"}
 data: {"type":"token","content":" there"}
-data: {"type":"token","content":"!"}
-data: {"type":"done"}
-
+data: {"type":"done","id":42,"context_turns_used":5}
 ```
 
-### Frontend Implementation
+**Event Types:**
 
-**Simple Streaming Example (EventSource):**
+| Type | Description |
+|------|-------------|
+| `token` | Partial response chunk (includes `content`) |
+| `done` | Stream complete (includes `id`, `context_turns_used`) |
+
+**Error Event:**
+```
+data: {"type":"error","detail":"Error message"}
+```
+
+**Response Headers (to prevent buffering):**
+- `Cache-Control: no-cache`
+- `X-Accel-Buffering: no`
+
+**Frontend Parsing Example:**
 ```typescript
-async function sendMessageStreaming(message: string) {
+interface SSEEvent {
+  type: 'token' | 'done' | 'error';
+  content?: string;
+  id?: number;
+  context_turns_used?: number;
+  detail?: string;
+}
+
+async function* streamMessages(message: string) {
   const response = await fetch('/api/messages', {
     method: 'POST',
-    headers: {
+    headers: { 
       'Content-Type': 'application/json',
       'X-Passkey': localStorage.getItem('collaborator_passkey')
     },
-    body: JSON.stringify({ message, commit: true })
-  });
-
-  // Parse SSE stream
-  const reader = response.body?.getReader();
-  const decoder = new TextDecoder();
-  let fullResponse = '';
-  
-  if (reader) {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
-      
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const dataStr = line.slice(6).trim();
-          
-          if (dataStr === '[DONE]') {
-            // Stream complete
-            break;
-          }
-          
-          try {
-            const data = JSON.parse(dataStr);
-            
-            if (data.type === 'token') {
-              // Update UI with incremental token
-              fullResponse += data.content;
-              updateMessageDisplay(fullResponse);
-            } else if (data.type === 'done') {
-              // Stream complete - final data may include context
-            }
-          } catch (e) {
-            console.warn('Failed to parse SSE data:', e);
-          }
-        }
-      }
-    }
-  }
-
-  return fullResponse;
-}
-```
-
-**Using ReadableStream (Modern Browsers):**
-```typescript
-async function* streamTokens(response: Response) {
-  const reader = response.body?.getReader();
-  const decoder = new TextDecoder();
-
-  if (!reader || !response.body) return;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const dataStr = line.slice(6).trim();
-          
-          if (dataStr === '[DONE]') {
-            return;
-          }
-
-          try {
-            const data = JSON.parse(dataStr);
-            if (data.type === 'token') {
-              yield data.content;
-            }
-          } catch (e) {
-            // Ignore malformed SSE lines
-          }
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-async function sendMessageWithStream(message: string) {
-  const response = await fetch('/api/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message })
   });
 
-  // Collect all tokens
-  const tokens = [];
-  for await (const token of streamTokens(response)) {
-    tokens.push(token);
-    updateDisplay(tokens.join(''));
-  }
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
 
-  return tokens.join('');
-}
-```
+  while (true) {
+    const { done, value } = await reader?.read();
+    if (done) break;
 
-**React Integration:**
-```typescript
-function ChatComponent() {
-  const [messages, setMessages] = useState<{role: string, content: string}[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-
-  async function handleSend(message: string) {
-    const newMessage = { role: 'user', content: message };
-    setMessages(prev => [...prev, newMessage]);
+    const chunk = decoder.decode(value, { stream: true });
     
-    setIsStreaming(true);
-    let fullResponse = '';
-    
-    const response = await fetch('/api/messages', {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'X-Passkey': localStorage.getItem('collaborator_passkey')
-      },
-      body: JSON.stringify({ message })
-    });
-
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
-
-    while (true) {
-      const { done, value } = await reader?.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
+    for (const line of chunk.split('\n')) {
+      if (!line.startsWith('data: ')) continue;
       
-      for (const line of chunk.split('\n')) {
-        if (line.startsWith('data: ')) {
-          const dataStr = line.slice(6).trim();
-          
-          if (dataStr === '[DONE]') break;
-          
-          try {
-            const data = JSON.parse(dataStr);
-            
-            if (data.type === 'token') {
-              fullResponse += data.content;
-              
-              // Update UI with streaming response
-              setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg?.role === 'assistant') {
-                  return [
-                    ...prev.slice(0, -1),
-                    { role: 'assistant', content: fullResponse }
-                  ];
-                }
-                return [...prev, { role: 'assistant', content: fullResponse }];
-              });
-            }
-          } catch (e) {
-            console.warn('Parse error:', e);
-          }
+      const dataStr = line.slice(6).trim();
+      
+      if (dataStr === '[DONE]') break;
+      
+      try {
+        const event: SSEEvent = JSON.parse(dataStr);
+        
+        if (event.type === 'token' && event.content) {
+          yield event.content;
+        } else if (event.type === 'done') {
+          console.log('Final metadata:', event);
+        } else if (event.type === 'error') {
+          throw new Error(event.detail || 'Streaming error');
         }
+      } catch (e) {
+        console.warn('Parse error:', e);
       }
     }
-
-    setIsStreaming(false);
   }
-
-  return (
-    <div className="chat-container">
-      {messages.map((msg, i) => (
-        <div key={i} className={`message ${msg.role}`}>
-          {msg.content}
-        </div>
-      ))}
-      <button disabled={isStreaming} onClick={() => handleSend(input)}>
-        {isStreaming ? '...' : 'Send'}
-      </button>
-    </div>
-  );
 }
 ```
 
-### Server-Sent Event Format
+### Settings Endpoint
 
-Each line follows SSE format:
+**GET /api/settings**
+```json
+{
+  "voice_end_phrase": "go ahead"
+}
 ```
-data: {"type":"token","content":"text"}
+
+**PATCH /api/settings**
+```json
+// Request
+{
+  "voice_end_phrase": "go ahead"
+}
+
+// Response (same structure)
+{
+  "voice_end_phrase": "go ahead"
+}
 ```
 
-Where:
-- `type`: Either `"token"` (partial response) or `"done"` (stream complete)
-- `content`: The actual text fragment for this token
+### Transcribe Endpoint
 
-### Breaking Changes
+**POST /api/transcribe**
+- Upload audio (webm/opus, mp4/aac, ogg/opus, wav)
+- FFmpeg normalizes → Whisper STT
+- Max 25MB file size
+- 403/413/422/500 error codes
 
-**None** - Non-streaming mode still available via `call_llm_non_streaming()` if needed.
+```json
+// Request (multipart/form-data)
+{
+  audio: <binary>,
+  language?: "en"
+}
 
-### Testing Checklist
+// Response
+{
+  "text": "Transcribed text goes here"
+}
+```
 
-- [ ] POST `/api/messages` returns streaming response
-- [ ] Token events are received incrementally
-- [ ] `type: "done"` signal indicates completion
-- [ ] UI updates with each token (not waiting for full response)
-- [ ] Cancel/stop button works during streaming
-- [ ] Error handling during stream interruption
+## Frontend Implementation
 
-### Related Files
+### Streaming + TTS Integration
+```typescript
+async function handleSend(message: string) {
+  const userMsgId = Date.now();
+  
+  // Add user message
+  setMessages(prev => [...prev, { 
+    id: userMsgId, 
+    role: 'user', 
+    content: message 
+  }]);
+
+  // Start streaming
+  const tokens = [];
+  for await (const token of streamMessages(message)) {
+    tokens.push(token);
+    
+    // Feed to Piper for TTS
+    const textChunk = tokens.join('');
+    await piper.speak(textChunk);
+    
+    // Update UI
+    updateMessageDisplay(tokens.join(''));
+  }
+
+  // Stream complete - final metadata available
+}
+```
+
+### Settings Modal
+```typescript
+async function updateSettings(key: string, value: any) {
+  const response = await fetch('/api/settings', {
+    method: 'PATCH',
+    headers: { 
+      'Content-Type': 'application/json',
+      'X-Passkey': localStorage.getItem('collaborator_passkey')
+    },
+    body: JSON.stringify({ [key]: value })
+  });
+  
+  const settings = await response.json();
+  setVoiceEndPhrase(settings.voice_end_phrase);
+}
+```
+
+### Transcription
+```typescript
+async function transcribeAudio(file: File) {
+  const formData = new FormData();
+  formData.append('audio', file);
+  
+  if (selectedLanguage) {
+    formData.append('language', selectedLanguage);
+  }
+
+  const response = await fetch('/api/transcribe', {
+    method: 'POST',
+    headers: { 
+      'X-Passkey': localStorage.getItem('collaborator_passkey')
+    },
+    body: formData
+  });
+  
+  const result = await response.json();
+  return result.text;
+}
+```
+
+## Testing Checklist
+
+- [ ] Streaming tokens arrive incrementally
+- [ ] `done` event contains `id` and `context_turns_used`
+- [ ] Error events format: `{type:"error",detail:"..."}`
+- [ ] Settings GET/PATCH round-trips correctly
+- [ ] Transcribe accepts webm/mp4/ogg/wav
+- [ ] FFmpeg normalization works
+- [ ] Whisper transcription accurate
+
+## Related Files
 
 | File | Change |
 |------|--------|
-| `backend/inference.py` | Added `call_llm_streaming()` with SSE support |
-| `backend/main.py` | Updated to use streaming endpoint |
-| `API-SPEC.md` | Documented SSE response format |
+| `backend/inference.py` | StreamingResponse class, consistent SSE format |
+| `backend/main.py` | Added `/api/settings`, `/api/transcribe` endpoints |
+| `API-SPEC.md` | Updated with streaming format, settings, transcribe |
+
+## Notes
+
+- TTS (Piper WASM) runs entirely on frontend
+- Streaming enables real-time text + audio sync
+- Settings persist to config.yaml (backend reloads)
+- Transcribe is stateless, fast (~2s interval calls)

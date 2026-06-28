@@ -6,7 +6,7 @@ and context-aware messaging. Supports both streaming and non-streaming modes.
 
 import os
 import requests
-from typing import List, Dict, Optional, AsyncGenerator
+from typing import List, Dict, Optional, AsyncGenerator, Tuple
 from functools import lru_cache
 
 from config import get_config
@@ -40,11 +40,18 @@ def _get_max_tokens() -> int:
     return _get_config()["inference"]["max_tokens"]
 
 
+class StreamingResponse:
+    """Container for streaming response data."""
+    def __init__(self, text: str = "", metadata: Dict = None):
+        self.text = text
+        self.metadata = metadata or {}
+
+
 def call_llm_streaming(
     message: str,
     context_turns: Optional[List[Dict]] = None,
     on_token: Optional[callable] = None
-) -> str:
+) -> StreamingResponse:
     """
     Call the local LLM endpoint with streaming and optional token callback.
     
@@ -54,7 +61,7 @@ def call_llm_streaming(
         on_token: Optional callback called with each token as it arrives
     
     Returns:
-        The complete model response as a string
+        StreamingResponse containing text and optional metadata
     """
     config = _get_config()
     inference_config = config["inference"]
@@ -103,23 +110,23 @@ def call_llm_streaming(
         )
         response.raise_for_status()
         
-        # Parse SSE stream and collect tokens
+        # Parse LM Studio's SSE stream and collect tokens
         full_response = ""
         for line in response.iter_lines(decode_unicode=True):
             if not line:
                 continue
             
-            # SSE format: "data: {...}"
+            # LM Studio SSE format: "data: {...}"
             if line.startswith("data:"):
                 data_str = line[5:].strip()
                 
-                # Check for stream end signal
+                # Check for stream end
                 if data_str == "[DONE]":
                     break
                 
                 try:
                     import json
-                    data = json.loads(data_str)  # Parse JSON SSE format
+                    data = json.loads(data_str)
                     if "choices" in data and len(data["choices"]) > 0:
                         delta = data["choices"][0].get("delta", {})
                         content = delta.get("content", "")
@@ -132,7 +139,7 @@ def call_llm_streaming(
                     # Skip malformed SSE lines
                     continue
         
-        return full_response
+        return StreamingResponse(text=full_response)
         
     except requests.exceptions.Timeout:
         raise ConnectionError(f"LLM endpoint timeout after 60 seconds")
@@ -224,7 +231,7 @@ def call_llm_non_streaming(
 def call_llm(
     message: str,
     context_turns: Optional[List[Dict]] = None
-) -> str:
+) -> StreamingResponse:
     """
     Call the local LLM endpoint (default: streaming enabled).
     
@@ -233,7 +240,7 @@ def call_llm(
         context_turns: List of previous turns to include in context
     
     Returns:
-        The complete model response as a string
+        StreamingResponse containing text
     """
     return call_llm_streaming(message, context_turns)
 
@@ -285,7 +292,8 @@ def chat_with_retry(
     
     for attempt in range(max_retries + 1):
         try:
-            return call_llm(message, context_turns)
+            response = call_llm_streaming(message, context_turns)
+            return response.text
         except ConnectionError as e:
             last_error = e
             if attempt < max_retries:
@@ -293,6 +301,6 @@ def chat_with_retry(
                 continue
             raise ConnectionError(f"Failed after {max_retries + 1} attempts: {last_error}")
         except RuntimeError as e:
-            # Don't retry on runtime errors (likely not connection issues)
+            # Don't retry on runtime errors
             raise
 
