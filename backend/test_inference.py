@@ -19,9 +19,10 @@ data: [DONE]
         mock_response_obj = MagicMock()
         mock_response_obj.raise_for_status = MagicMock()
         
-        def iter_lines(decode_unicode=True):
+        def iter_lines(decode_unicode=False):
+            # Real requests.iter_lines() yields bytes; the parser decodes UTF-8.
             for line in mock_response_text.strip().split('\n'):
-                yield line
+                yield line.encode('utf-8')
         
         mock_response_obj.iter_lines = iter_lines
         mock_post.return_value = mock_response_obj
@@ -48,9 +49,10 @@ data: [DONE]
         mock_response_obj = MagicMock()
         mock_response_obj.raise_for_status = MagicMock()
         
-        def iter_lines(decode_unicode=True):
+        def iter_lines(decode_unicode=False):
+            # Real requests.iter_lines() yields bytes; the parser decodes UTF-8.
             for line in mock_response_text.strip().split('\n'):
-                yield line
+                yield line.encode('utf-8')
         
         mock_response_obj.iter_lines = iter_lines
         mock_post.return_value = mock_response_obj
@@ -59,6 +61,38 @@ data: [DONE]
         
         assert "Based on your previous message" in response.text
         mock_post.assert_called_once()
+
+
+def test_call_llm_utf8_streaming():
+    """UTF-8 content (incl. a multi-byte char split across chunks) stays intact."""
+    text = "I don’t have bugs — 3 × 4"  # don't  em-dash  times
+    sse = ('data: ' + json.dumps({"choices": [{"delta": {"content": text}}]},
+                                  ensure_ascii=False) + '\ndata: [DONE]\n')
+    raw = sse.encode('utf-8')
+    # Split the byte stream mid-character to mimic a network chunk boundary.
+    cut = raw.index('’'.encode('utf-8')) + 1
+    chunks = [raw[:cut], raw[cut:]]
+
+    def iter_lines(decode_unicode=False):
+        # Reassemble lines from byte chunks the way requests does.
+        buf = b''
+        for ch in chunks:
+            buf += ch
+            while b'\n' in buf:
+                line, buf = buf.split(b'\n', 1)
+                yield line
+        if buf:
+            yield buf
+
+    with patch('requests.post') as mock_post:
+        mock_response_obj = MagicMock()
+        mock_response_obj.raise_for_status = MagicMock()
+        mock_response_obj.iter_lines = iter_lines
+        mock_post.return_value = mock_response_obj
+
+        response = call_llm("hi")
+        assert response.text == text, f"mojibake: {response.text!r}"
+        assert "â" not in response.text  # no latin-1 'â' leakage
 
 
 def test_available_models():
@@ -92,9 +126,10 @@ data: [DONE]
         mock_response_obj = MagicMock()
         mock_response_obj.raise_for_status = MagicMock()
         
-        def iter_lines(decode_unicode=True):
+        def iter_lines(decode_unicode=False):
+            # Real requests.iter_lines() yields bytes; the parser decodes UTF-8.
             for line in mock_response_text.strip().split('\n'):
-                yield line
+                yield line.encode('utf-8')
         
         mock_response_obj.iter_lines = iter_lines
         mock_post.return_value = mock_response_obj
@@ -110,7 +145,10 @@ if __name__ == "__main__":
     
     test_call_llm_with_context()
     print("✓ context test passed")
-    
+
+    test_call_llm_utf8_streaming()
+    print("✓ utf-8 streaming test passed")
+
     test_available_models()
     print("✓ available models test passed")
     

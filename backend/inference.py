@@ -143,20 +143,22 @@ def stream_llm_tokens(
             stream=True,
         )
         response.raise_for_status()
-        # LM Studio sends "text/event-stream" with no charset, so requests would
-        # decode the body as ISO-8859-1 and mangle UTF-8 (e.g. "—" -> "â€”").
-        # Force UTF-8 so decode_unicode produces correct characters.
-        response.encoding = "utf-8"
-
-        for line in response.iter_lines(decode_unicode=True):
-            if not line:
+        # Parse the SSE stream at the BYTE level. LM Studio sends
+        # "text/event-stream" with no charset, and relying on requests'
+        # decode_unicode both (a) defaults to ISO-8859-1 and (b) can mangle a
+        # multi-byte UTF-8 char that straddles a network chunk boundary -> mojibake
+        # (e.g. an intermittent "'" -> "â"). A newline (0x0A) never appears inside
+        # a UTF-8 multi-byte sequence, so splitting on bytes is always safe, and
+        # json.loads decodes the complete line's bytes as UTF-8 correctly.
+        for raw_line in response.iter_lines():  # bytes, split on newlines
+            if not raw_line:
                 continue
-            if line.startswith("data:"):
-                data_str = line[5:].strip()
-                if data_str == "[DONE]":
+            if raw_line.startswith(b"data:"):
+                data_bytes = raw_line[5:].strip()
+                if data_bytes == b"[DONE]":
                     break
                 try:
-                    data = json.loads(data_str)
+                    data = json.loads(data_bytes)  # decodes UTF-8 bytes
                 except Exception:
                     # Skip malformed SSE lines
                     continue
