@@ -74,6 +74,16 @@ export interface ApiDiscardResponse {
   committed: boolean;
 }
 
+/** POST /api/transcribe response. */
+export interface ApiTranscription {
+  text: string;
+}
+
+/** GET/PATCH /api/settings. */
+export interface ApiSettings {
+  voice_end_phrase: string;
+}
+
 /** Standard error envelope ({ "error": "..." }). */
 export interface ApiError {
   error: string;
