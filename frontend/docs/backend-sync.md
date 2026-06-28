@@ -12,3 +12,4 @@ Workflow: pull backend → read new one-pagers in `frontend-updates/` → implem
 | Backend commit | Date applied | Frontend action | FE commit |
 |----------------|--------------|-----------------|-----------|
 | `3bfc183` system-prompt-added | 2026-06-27 | No change needed — backend-only config (system prompt moved to `system-prompt.md`); no API/data-model/UI impact. | — |
+| `b81f527` expose-context-system-prompt-agents-md | 2026-06-27 | Added `context_turns_used` (GET window size + POST Turn[]), `system_prompt`, `agents_md_content` to types/adapters (optional, tolerant). Used the window size to render a translucent yellow box around the turns that will be injected into the next message's context. | this commit |

@@ -41,6 +41,12 @@ export interface HealthStatus {
 export interface TurnsPage {
   turns: Turn[];
   count: number;
+  /**
+   * Context window size: how many recent committed turns the backend feeds the
+   * model. The next message's context = the most recent `contextWindow` turns.
+   * Null when the backend doesn't report it.
+   */
+  contextWindow: number | null;
 }
 
 export interface SendMessageInput {
@@ -56,4 +62,10 @@ export interface SendMessageResult {
   message: string;
   response: string;
   committed: boolean;
+  /** Turns the backend actually used as context for this response, if reported. */
+  contextTurnsUsed?: Turn[];
+  /** System prompt used for this response, if reported. */
+  systemPrompt?: string;
+  /** AGENTS.md content, if exposed by the backend. */
+  agentsMd?: string;
 }

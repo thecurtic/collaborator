@@ -1,11 +1,16 @@
 import { Loader2 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import type { Turn } from '@/domain/models';
 import { Composer } from './Composer';
 import { MessageBubble } from './MessageBubble';
 import { useChat } from './useChat';
 
+// Backend default context window (backend/config.yaml: default_context_window)
+// used as a fallback when the API doesn't report the window size.
+const DEFAULT_CONTEXT_WINDOW = 5;
+
 export function ChatView() {
-  const { turns, loading, sending, error, sendMessage, discardTurn } =
+  const { turns, loading, sending, error, contextWindow, sendMessage, discardTurn } =
     useChat();
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -13,6 +18,18 @@ export function ChatView() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [turns.length, sending]);
+
+  // The backend feeds the model the most recent N committed turns; GET only
+  // returns committed turns, so the next message's context is simply the last N
+  // of what's shown. Highlight that group.
+  const windowSize = contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  const contextStart = Math.max(0, turns.length - windowSize);
+  const olderTurns = turns.slice(0, contextStart);
+  const contextTurns = turns.slice(contextStart);
+
+  const renderBubble = (turn: Turn) => (
+    <MessageBubble key={turn.id} turn={turn} onDiscard={discardTurn} />
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -33,13 +50,18 @@ export function ChatView() {
               </p>
             </div>
           ) : (
-            turns.map((turn) => (
-              <MessageBubble
-                key={turn.id}
-                turn={turn}
-                onDiscard={discardTurn}
-              />
-            ))
+            <>
+              {olderTurns.map(renderBubble)}
+
+              {contextTurns.length > 0 && (
+                <div className="flex flex-col gap-3 rounded-2xl border border-yellow-400/30 bg-yellow-300/10 p-3 sm:gap-4">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-yellow-600/90 dark:text-yellow-400/80">
+                    Included in your next message’s context
+                  </p>
+                  {contextTurns.map(renderBubble)}
+                </div>
+              )}
+            </>
           )}
 
           {sending && (

@@ -41,6 +41,8 @@ export interface ApiTurn {
 export interface ApiTurnsResponse {
   turns: ApiTurn[];
   count: number;
+  /** Context window size (number of recent committed turns fed to the model). */
+  context_turns_used?: number;
 }
 
 /** POST /api/messages request body. */
@@ -58,6 +60,12 @@ export interface ApiSendMessageResponse {
   message: string;
   response: string;
   committed: boolean;
+  /** The actual turn objects used as context for this response. */
+  context_turns_used?: ApiTurn[];
+  /** Full system prompt text used for this response. */
+  system_prompt?: string;
+  /** AGENTS.md content, if the backend exposes it (may be absent/empty). */
+  agents_md_content?: string;
 }
 
 /** DELETE /api/messages/{turn_id} 200 response. */

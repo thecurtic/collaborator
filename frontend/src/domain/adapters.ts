@@ -46,6 +46,10 @@ export function toTurnsPage(api: ApiTurnsResponse): TurnsPage {
   return {
     turns: api.turns.map(toTurn),
     count: api.count,
+    contextWindow:
+      typeof api.context_turns_used === 'number'
+        ? api.context_turns_used
+        : null,
   };
 }
 
@@ -60,5 +64,8 @@ export function toSendResult(api: ApiSendMessageResponse): SendMessageResult {
     message: api.message,
     response: api.response,
     committed: api.committed,
+    contextTurnsUsed: api.context_turns_used?.map(toTurn),
+    systemPrompt: api.system_prompt,
+    agentsMd: api.agents_md_content,
   };
 }

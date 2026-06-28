@@ -9,6 +9,7 @@ interface ChatState {
   loading: boolean; // initial history load
   sending: boolean; // a message is in flight
   error: string | null;
+  contextWindow: number | null; // size of the context window the backend reports
 }
 
 function errMessage(err: unknown): string {
@@ -21,6 +22,7 @@ export function useChat() {
     loading: true,
     sending: false,
     error: null,
+    contextWindow: null,
   });
 
   const loadHistory = useCallback(async () => {
@@ -28,7 +30,12 @@ export function useChat() {
     try {
       const page = await api.listTurns({ limit: PAGE_LIMIT, offset: 0 });
       const turns = [...page.turns].sort((a, b) => a.id - b.id);
-      setState((s) => ({ ...s, turns, loading: false }));
+      setState((s) => ({
+        ...s,
+        turns,
+        loading: false,
+        contextWindow: page.contextWindow,
+      }));
     } catch (err) {
       setState((s) => ({ ...s, loading: false, error: errMessage(err) }));
     }
@@ -51,7 +58,12 @@ export function useChat() {
         // discard) and any server-side normalization.
         const page = await api.listTurns({ limit: PAGE_LIMIT, offset: 0 });
         const turns = [...page.turns].sort((a, b) => a.id - b.id);
-        setState((s) => ({ ...s, turns, sending: false }));
+        setState((s) => ({
+          ...s,
+          turns,
+          sending: false,
+          contextWindow: page.contextWindow,
+        }));
       } catch (err) {
         setState((s) => ({ ...s, sending: false, error: errMessage(err) }));
       }
