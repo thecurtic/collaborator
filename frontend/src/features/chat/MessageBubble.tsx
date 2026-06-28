@@ -25,10 +25,24 @@ export function MessageBubble({ turn, onDiscard }: MessageBubbleProps) {
           !turn.committed && 'opacity-40 line-through decoration-1',
         )}
       >
-        <p className="whitespace-pre-wrap break-words">{text}</p>
+        {text ? (
+          <p className="whitespace-pre-wrap break-words">{text}</p>
+        ) : (
+          // Empty assistant bubble = waiting for the first streamed token.
+          <span
+            className="flex gap-1 py-1"
+            role="status"
+            aria-label="Assistant is responding"
+          >
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.3s]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.15s]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50" />
+          </span>
+        )}
 
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] opacity-60">
-          <span>{parseApiDate(turn.createdAt).toLocaleTimeString()}</span>
+        {text && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] opacity-60">
+            <span>{parseApiDate(turn.createdAt).toLocaleTimeString()}</span>
           {turn.tokenCount != null && <span>· {turn.tokenCount} tok</span>}
           {turn.tags.map((tag) => (
             <span
@@ -38,7 +52,7 @@ export function MessageBubble({ turn, onDiscard }: MessageBubbleProps) {
               {tag}
             </span>
           ))}
-          {turn.committed && (
+          {turn.committed && turn.id > 0 && (
             <Button
               variant="ghost"
               size="icon"
@@ -50,8 +64,9 @@ export function MessageBubble({ turn, onDiscard }: MessageBubbleProps) {
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

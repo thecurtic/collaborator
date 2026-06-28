@@ -59,7 +59,7 @@ GET /api/health
 
 ---
 
-### 2. Send Message
+### 2. Send Message (Streaming)
 ```
 POST /api/messages
 Content-Type: application/json
@@ -79,17 +79,42 @@ X-Passkey: <your-passkey>
 **Fields:**
 - `message` (required): User's input text
 - `context_turns` (optional, default: 5): Number of prior committed turns to include
-- `commit` (optional, default: true): Whether to persist this turn to database
+- `commit` (optional, default: true): Whether to commit this turn to database
 - `user_id` (optional): User identifier
 
-**Response (201 Created)**
+**Response (201 Created) - Server-Sent Events**
+```
+data: {"type":"token","content":"Hi"}
+data: {"type":"token","content":" there"}
+data: {"type":"done"}
+
+```
+
+**Response Fields (final completion)**
 ```json
 {
   "id": 42,
   "user_id": null,
   "message": "Hello",
   "response": "Hi there! How can I help?",
-  "committed": true
+  "committed": true,
+  "context_turns_used": [
+    {
+      "id": 1,
+      "role": "user",
+      "content": "Hello",
+      "committed": true
+    },
+    {
+      "id": 2,
+      "role": "assistant",
+      "content": "Hi there!",
+      "committed": true
+    }
+  ],
+  "system_prompt": "# Collaborator System Prompt
+...",
+  "agents_md_content": "...AGENTS.md content..."
 }
 ```
 

@@ -9,7 +9,7 @@ import {
   toSendResult,
   toTurnsPage,
 } from '@/domain/adapters';
-import { request } from './http';
+import { ApiRequestError, request, requestStream } from './http';
 import type {
   ApiHealth,
   ApiSendMessageResponse,
@@ -19,6 +19,29 @@ import type {
 export interface ListTurnsParams {
   limit?: number;
   offset?: number;
+}
+
+/** Final result of a streamed send, after the `done` event. */
+export interface SendStreamResult {
+  /** Assistant turn id, if the backend reports it on the done event. */
+  id: number | null;
+  /** Context window size, if reported on the done event. */
+  contextWindow: number | null;
+  /** The full assembled response text. */
+  text: string;
+}
+
+/** Parse one SSE line ("data: {...}") into its JSON payload, or null. */
+function parseSseData(line: string): Record<string, unknown> | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('data:')) return null;
+  const dataStr = trimmed.slice(5).trim();
+  if (!dataStr || dataStr === '[DONE]') return null;
+  try {
+    return JSON.parse(dataStr) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -39,6 +62,16 @@ export interface CollaboratorApi {
   verifyAuth(): Promise<void>;
   listTurns(params?: ListTurnsParams): Promise<TurnsPage>;
   sendMessage(input: SendMessageInput): Promise<SendMessageResult>;
+  /**
+   * Send a message and stream the assistant response (SSE). `onToken` fires for
+   * each incremental chunk; the promise resolves with final metadata once the
+   * `done` event arrives. Pass a signal to cancel mid-stream.
+   */
+  sendMessageStream(
+    input: SendMessageInput,
+    onToken: (chunk: string) => void,
+    signal?: AbortSignal,
+  ): Promise<SendStreamResult>;
   discardTurn(turnId: number): Promise<void>;
 
   // --- Roadmap (INTENTS.md "API Extensions Needed", not yet served) ---
@@ -80,6 +113,64 @@ class HttpCollaboratorApi implements CollaboratorApi {
       }),
     });
     return toSendResult(res);
+  }
+
+  async sendMessageStream(
+    input: SendMessageInput,
+    onToken: (chunk: string) => void,
+    signal?: AbortSignal,
+  ): Promise<SendStreamResult> {
+    const res = await requestStream('/api/messages', {
+      method: 'POST',
+      body: JSON.stringify({
+        message: input.message,
+        context_turns: input.contextTurns,
+        commit: input.commit,
+        user_id: input.userId,
+      }),
+      signal,
+    });
+    if (!res.body) throw new ApiRequestError('No response stream', 0);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let text = '';
+    let id: number | null = null;
+    let contextWindow: number | null = null;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // SSE events are newline-delimited; keep the trailing partial line.
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          const evt = parseSseData(line);
+          if (!evt) continue;
+          if (evt.type === 'token' && typeof evt.content === 'string') {
+            text += evt.content;
+            onToken(evt.content);
+          } else if (evt.type === 'done') {
+            if (typeof evt.id === 'number') id = evt.id;
+            if (typeof evt.context_turns_used === 'number') {
+              contextWindow = evt.context_turns_used;
+            }
+          } else if (evt.type === 'error') {
+            throw new ApiRequestError(
+              typeof evt.detail === 'string' ? evt.detail : 'Stream error',
+              500,
+            );
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    return { id, contextWindow, text };
   }
 
   async discardTurn(turnId: number): Promise<void> {

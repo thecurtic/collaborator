@@ -44,21 +44,26 @@ async function parseError(res: Response): Promise<string> {
   return res.statusText || `Request failed with status ${res.status}`;
 }
 
-export async function request<T>(
-  path: string,
-  init?: RequestInit,
-): Promise<T> {
-  // Build headers explicitly so we always attach JSON + the passkey, and so a
-  // caller's headers merge instead of clobbering ours.
+async function send(path: string, init?: RequestInit): Promise<Response> {
+  // Build headers explicitly so we attach the passkey and a sensible
+  // Content-Type, while letting a caller's headers merge instead of clobbering.
   const headers = new Headers(init?.headers);
-  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  // Don't force application/json for FormData — the browser must set the
+  // multipart boundary itself.
+  const isFormData =
+    typeof FormData !== 'undefined' && init?.body instanceof FormData;
+  if (!isFormData && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
   const passkey = getPasskey();
   if (passkey) headers.set('X-Passkey', passkey);
 
   let res: Response;
   try {
     res = await fetch(`${BASE_URL}${path}`, { ...init, headers });
-  } catch {
+  } catch (err) {
+    // AbortError surfaces as-is so callers can distinguish a user cancel.
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
     throw new ApiRequestError('Network error — is the backend running?', 0);
   }
 
@@ -69,6 +74,20 @@ export async function request<T>(
     throw new ApiRequestError(message, res.status);
   }
 
+  return res;
+}
+
+/** Make a request and parse a JSON response. */
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await send(path, init);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** Make a request and return the raw streaming Response (e.g. an SSE body). */
+export async function requestStream(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  return send(path, init);
 }

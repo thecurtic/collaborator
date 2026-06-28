@@ -50,12 +50,53 @@ export function useChat() {
       const trimmed = message.trim();
       if (!trimmed) return;
 
-      setState((s) => ({ ...s, sending: true, error: null }));
+      // Optimistic turns (temp negative ids) so the user's message and the
+      // streaming reply appear instantly; reconciled with the server on done.
+      const userTempId = -Date.now();
+      const asstTempId = userTempId - 1;
+      const now = new Date().toISOString();
+      const tempTurn = (
+        id: number,
+        role: 'user' | 'assistant',
+        msg: string,
+        resp: string,
+      ): Turn => ({
+        id,
+        userId: null,
+        role,
+        message: msg,
+        response: resp,
+        committed: true,
+        contextTurns: 0,
+        createdAt: now,
+        modelName: null,
+        tokenCount: null,
+        tags: [],
+      });
+
+      setState((s) => ({
+        ...s,
+        sending: true,
+        error: null,
+        turns: [
+          ...s.turns,
+          tempTurn(userTempId, 'user', trimmed, ''),
+          tempTurn(asstTempId, 'assistant', '', ''),
+        ],
+      }));
+
       try {
-        await api.sendMessage({ message: trimmed, contextTurns });
-        // Re-fetch canonical state: POST returns a single combined object, so
-        // reloading is the reliable way to get real per-turn ids (needed for
-        // discard) and any server-side normalization.
+        // Stream tokens into the optimistic assistant turn as they arrive.
+        await api.sendMessageStream({ message: trimmed, contextTurns }, (chunk) => {
+          setState((s) => ({
+            ...s,
+            turns: s.turns.map((t) =>
+              t.id === asstTempId ? { ...t, response: t.response + chunk } : t,
+            ),
+          }));
+        });
+        // Reconcile with canonical server state: real per-turn ids (needed for
+        // discard) and the reported context window.
         const page = await api.listTurns({ limit: PAGE_LIMIT, offset: 0 });
         const turns = [...page.turns].sort((a, b) => a.id - b.id);
         setState((s) => ({
@@ -65,7 +106,15 @@ export function useChat() {
           contextWindow: page.contextWindow,
         }));
       } catch (err) {
-        setState((s) => ({ ...s, sending: false, error: errMessage(err) }));
+        // Drop the optimistic turns on failure.
+        setState((s) => ({
+          ...s,
+          sending: false,
+          error: errMessage(err),
+          turns: s.turns.filter(
+            (t) => t.id !== userTempId && t.id !== asstTempId,
+          ),
+        }));
       }
     },
     [],
