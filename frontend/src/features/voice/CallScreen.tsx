@@ -16,7 +16,10 @@ const LABELS: Record<CallPhase, string> = {
 };
 
 export function CallScreen({ open, onClose }: CallScreenProps) {
-  const { phase, partial, response, error, endTurn, end } = useCall(open, onClose);
+  const { phase, partial, response, error, logs, endTurn, end } = useCall(
+    open,
+    onClose,
+  );
 
   if (!open) return null;
 
@@ -68,6 +71,15 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
 
         {error && <p className="max-w-md text-sm text-destructive">{error}</p>}
       </div>
+
+      {/* Temporary diagnostics — remove once call mode is confirmed working. */}
+      {logs.length > 0 && (
+        <div className="mx-auto max-h-40 w-full max-w-md overflow-y-auto rounded-md border border-border bg-card p-2 font-mono text-[10px] leading-snug text-muted-foreground">
+          {logs.map((line, i) => (
+            <div key={i}>{line}</div>
+          ))}
+        </div>
+      )}
 
       <div className="flex items-center justify-center gap-6 p-6">
         {phase === 'listening' && (

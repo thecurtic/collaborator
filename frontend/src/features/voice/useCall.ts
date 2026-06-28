@@ -58,6 +58,7 @@ export function useCall(open: boolean, onClose: () => void) {
   const [partial, setPartial] = useState(''); // user's accumulated transcript
   const [response, setResponse] = useState(''); // assistant streaming text
   const [error, setError] = useState<string | null>(null);
+  const [logs, setLogs] = useState<string[]>([]); // on-screen diagnostics
   const controlsRef = useRef<Controls | null>(null);
 
   useEffect(() => {
@@ -74,6 +75,11 @@ export function useCall(open: boolean, onClose: () => void) {
     let endPhrase = DEFAULT_END_PHRASE;
     let queue: SpeechQueue | null = null;
     let fails = 0;
+
+    const log = (m: string) => {
+      const t = new Date().toLocaleTimeString([], { hour12: false });
+      setLogs((prev) => [...prev.slice(-13), `${t} ${m}`]);
+    };
 
     const stopSeg = () => {
       if (segTimer) {
@@ -165,6 +171,7 @@ export function useCall(open: boolean, onClose: () => void) {
       while (active) {
         const blob = await recordSegment();
         if (!active) return;
+        log(`seg ${blob ? `${Math.round(blob.size / 1024)}KB` : 'EMPTY'}`);
 
         if (blob) {
           try {
@@ -173,12 +180,14 @@ export function useCall(open: boolean, onClose: () => void) {
             });
             fails = 0;
             if (!active) return;
+            log(`heard(${segText.length}): "${segText.trim().slice(0, 40)}"`);
             if (segText.trim()) {
               accumulated = `${accumulated} ${segText.trim()}`.trim();
               setPartial(accumulated);
             }
-          } catch {
+          } catch (e) {
             fails += 1;
+            log(`transcribe FAIL #${fails}: ${e instanceof Error ? e.message : e}`);
             if (fails >= MAX_TRANSCRIBE_FAILS) {
               setError(
                 'Transcription keeps failing — check the backend, then end and retry the call.',
@@ -193,6 +202,9 @@ export function useCall(open: boolean, onClose: () => void) {
         const phraseHit = containsPhrase(accumulated, endPhrase);
         if (stopRequested || phraseHit || timedOut) {
           const finalText = stripPhrase(accumulated, endPhrase);
+          log(
+            `end? stop=${stopRequested} phrase=${phraseHit} max=${timedOut} -> "${finalText.slice(0, 30)}"`,
+          );
           if (finalText) {
             await respond(finalText);
             return;
@@ -205,6 +217,7 @@ export function useCall(open: boolean, onClose: () => void) {
 
     const respond = async (text: string) => {
       if (!active) return;
+      log(`responding to: "${text.slice(0, 40)}"`);
       setPhase('responding');
       setPartial(text);
       setResponse('');
@@ -227,6 +240,7 @@ export function useCall(open: boolean, onClose: () => void) {
 
     controlsRef.current = {
       endTurn: () => {
+        log('Done tapped');
         stopRequested = true;
         stopSeg(); // end the current segment now so we respond promptly
       },
@@ -244,6 +258,7 @@ export function useCall(open: boolean, onClose: () => void) {
         } catch {
           /* fall back to default phrase */
         }
+        log(`phrase="${endPhrase}"`);
         if (!active) return;
         if (!navigator.mediaDevices?.getUserMedia) {
           throw new Error('Microphone not supported in this browser.');
@@ -255,6 +270,7 @@ export function useCall(open: boolean, onClose: () => void) {
         }
         mime = pickMimeType();
         baseType = (mime || 'audio/webm').split(';')[0];
+        log(`mic ok, mime=${baseType}`);
         void listen();
       } catch (err) {
         if (!active) return;
@@ -275,5 +291,5 @@ export function useCall(open: boolean, onClose: () => void) {
   const endTurn = useCallback(() => controlsRef.current?.endTurn(), []);
   const end = useCallback(() => controlsRef.current?.end(), []);
 
-  return { phase, partial, response, error, endTurn, end };
+  return { phase, partial, response, error, logs, endTurn, end };
 }
