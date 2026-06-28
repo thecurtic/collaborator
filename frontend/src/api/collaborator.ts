@@ -130,6 +130,19 @@ class HttpCollaboratorApi implements CollaboratorApi {
       }),
       signal,
     });
+
+    // Drift tolerance: the backend's streaming one-pager describes SSE, but the
+    // as-built endpoint currently returns a single JSON object. If it isn't an
+    // event-stream, surface the full response at once. This upgrades to true
+    // live tokens automatically once the backend emits text/event-stream.
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!contentType.includes('text/event-stream')) {
+      const data = (await res.json()) as ApiSendMessageResponse;
+      const full = data.response ?? '';
+      if (full) onToken(full);
+      return { id: data.id ?? null, contextWindow: null, text: full };
+    }
+
     if (!res.body) throw new ApiRequestError('No response stream', 0);
 
     const reader = res.body.getReader();
