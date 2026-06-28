@@ -38,12 +38,12 @@ When making changes to Collaborator, follow this workflow:
 
 ### Architecture
 
-This is a monorepo with two runtime contexts:
+This is a deployment host for two separate repositories:
 
-- **backend/** — runs on this VM. Manages SQLite conversation persistence (with tree-structured branching), context assembly, and proxies inference to the local LLM endpoint. Exposes a simple HTTP API.
-- **frontend/** — served from a separate machine on the tailnet. Web UI (PWA) for sending messages, viewing responses, editing or discarding turns before they commit to memory. Supports conversation branching with a vertical tree visualization optimized for mobile devices.
+- **backend/** — runs on this VM. Manages SQLite conversation persistence (with tree-structured branching), context assembly, and proxies inference to the local LLM endpoint. Exposes a simple HTTP API. (Repository: `collaborator-backend`)
+- **frontend/** — served from a separate machine on the tailnet. Web UI (PWA) for sending messages, viewing responses, editing or discarding turns before they commit to memory. Supports conversation branching with a vertical tree visualization optimized for mobile devices. (Repository: `collaborator-frontend`)
 
-They are loosely coupled. The frontend talks to the backend over HTTP. Either side can be swapped without breaking the other.
+They are loosely coupled via HTTP API. Either component can be developed and deployed independently.
 
 ## Inference
 
