@@ -373,13 +373,22 @@ def transcribe_audio(
     if content_length > 25 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 25MB)")
     
-    # Validate content type
+    # Validate content type (strip codec parameters like audio/webm;codecs=opus)
     content_type = audio.content_type
+    if content_type:
+        # Split on semicolon to remove codec parameters
+        base_content_type = content_type.split(';')[0].strip().lower()
+    else:
+        base_content_type = None
+    
     valid_types = ["audio/webm", "video/webm", "audio/ogg", "video/ogg",
                    "audio/mp4", "video/mp4", "audio/wav", "audio/x-wav"]
     
-    if content_type and content_type not in valid_types:
-        raise HTTPException(status_code=422, detail=f"Invalid content type: {content_type}. Accepts: webm/opus, mp4/aac, ogg/opus, wav")
+    if content_type and base_content_type not in valid_types:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid content type: {content_type}. Accepts audio/webm, video/webm, audio/ogg, video/ogg, audio/mp4, video/mp4, audio/wav, or audio/x-wav"
+        )
     
     try:
         # Read audio data
