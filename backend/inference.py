@@ -47,26 +47,13 @@ class StreamingResponse:
         self.metadata = metadata or {}
 
 
-def call_llm_streaming(
+def _build_messages(
     message: str,
-    context_turns: Optional[List[Dict]] = None,
-    on_token: Optional[callable] = None
-) -> StreamingResponse:
-    """
-    Call the local LLM endpoint with streaming and optional token callback.
-    
-    Args:
-        message: The user's input message
-        context_turns: List of previous turns to include in context
-        on_token: Optional callback called with each token as it arrives
-    
-    Returns:
-        StreamingResponse containing text and optional metadata
-    """
+    context_turns: Optional[List[Dict]] = None
+) -> List[Dict]:
+    """Build the OpenAI-style messages array from system prompt, context, and input."""
     config = _get_config()
-    inference_config = config["inference"]
-    
-    # Build the prompt with context
+
     messages = [
         {
             "role": "system",
@@ -75,7 +62,7 @@ def call_llm_streaming(
             )
         }
     ]
-    
+
     # Add context from previous turns
     if context_turns and len(context_turns) > 0:
         for turn in context_turns:
@@ -83,70 +70,109 @@ def call_llm_streaming(
                 messages.append({"role": "user", "content": turn["content"]})
             elif turn.get("role") == "assistant":
                 messages.append({"role": "assistant", "content": turn["content"]})
-    
+
     # Add current user message
     messages.append({"role": "user", "content": message})
-    
-    # Build the request payload with streaming enabled
+    return messages
+
+
+def _build_payload(messages: List[Dict], stream: bool) -> Dict:
+    """Build the chat/completions request payload from config."""
+    inference_config = _get_config()["inference"]
     payload = {
         "model": inference_config["model_id"],
         "messages": messages,
         "temperature": inference_config.get("temperature", 0.7),
         "max_tokens": inference_config.get("max_tokens", 2048),
-        "stream": True  # Enable streaming
+        "stream": stream,
     }
-    
-    # Add thinking mode if enabled
     if inference_config.get("thinking_mode", False):
         payload["reasoning"] = True
-    
+    return payload
+
+
+def stream_llm_tokens(
+    message: str,
+    context_turns: Optional[List[Dict]] = None
+):
+    """Yield tokens from the local LLM endpoint as they arrive (true streaming).
+
+    Args:
+        message: The user's input message
+        context_turns: List of previous turns to include in context
+
+    Yields:
+        Content fragments (tokens) as they are produced by the model.
+
+    Raises:
+        ConnectionError / RuntimeError on transport or unexpected errors. These
+        may surface before the first token or partway through iteration.
+    """
+    import json
+
+    messages = _build_messages(message, context_turns)
+    payload = _build_payload(messages, stream=True)
+
     try:
-        # Call the LLM endpoint with streaming
         response = requests.post(
             f"{_get_endpoint_url()}/chat/completions",
             json=payload,
             timeout=60,
-            stream=True  # Enable streaming at HTTP level
+            stream=True,
         )
         response.raise_for_status()
-        
-        # Parse LM Studio's SSE stream and collect tokens
-        full_response = ""
+
         for line in response.iter_lines(decode_unicode=True):
             if not line:
                 continue
-            
-            # LM Studio SSE format: "data: {...}"
             if line.startswith("data:"):
                 data_str = line[5:].strip()
-                
-                # Check for stream end
                 if data_str == "[DONE]":
                     break
-                
                 try:
-                    import json
                     data = json.loads(data_str)
-                    if "choices" in data and len(data["choices"]) > 0:
-                        delta = data["choices"][0].get("delta", {})
-                        content = delta.get("content", "")
-                        
-                        if content:
-                            full_response += content
-                            if on_token:
-                                on_token(content)
-                except Exception as e:
+                except Exception:
                     # Skip malformed SSE lines
                     continue
-        
-        return StreamingResponse(text=full_response)
-        
+                if "choices" in data and len(data["choices"]) > 0:
+                    delta = data["choices"][0].get("delta", {})
+                    content = delta.get("content", "")
+                    if content:
+                        yield content
+
     except requests.exceptions.Timeout:
-        raise ConnectionError(f"LLM endpoint timeout after 60 seconds")
+        raise ConnectionError("LLM endpoint timeout after 60 seconds")
     except requests.exceptions.ConnectionError as e:
         raise ConnectionError(f"Failed to connect to LLM endpoint at {_get_endpoint_url()}: {e}")
     except requests.exceptions.RequestException as e:
         raise ConnectionError(f"Request to LLM endpoint failed: {e}")
+
+
+def call_llm_streaming(
+    message: str,
+    context_turns: Optional[List[Dict]] = None,
+    on_token: Optional[callable] = None
+) -> StreamingResponse:
+    """
+    Call the local LLM endpoint with streaming and optional token callback.
+
+    Args:
+        message: The user's input message
+        context_turns: List of previous turns to include in context
+        on_token: Optional callback called with each token as it arrives
+
+    Returns:
+        StreamingResponse containing text and optional metadata
+    """
+    try:
+        full_response = ""
+        for content in stream_llm_tokens(message, context_turns):
+            full_response += content
+            if on_token:
+                on_token(content)
+        return StreamingResponse(text=full_response)
+    except ConnectionError:
+        raise
     except Exception as e:
         raise RuntimeError(f"Error calling LLM: {e}")
 

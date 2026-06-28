@@ -6,3 +6,4 @@ python-dotenv==1.0.1
 pyyaml==6.0.2
 requests==2.32.3
 python-multipart==0.0.9
+openai-whisper==20240930  # speech-to-text for /api/transcribe (also requires the ffmpeg system package)

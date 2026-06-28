@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from config import get_config, resolve_path
 from data.agents_md import load_agents_md
 from db import init_db, create_turn, get_recent_turns, update_turn_committed, get_turn_by_id
-from inference import call_llm_streaming, call_llm_non_streaming
+from inference import call_llm_streaming, call_llm_non_streaming, stream_llm_tokens
 from auth import validate_passkey, create_user_db
 
 app = FastAPI()
@@ -21,6 +21,18 @@ config = get_config()
 
 # Check if authentication is enabled
 auth_enabled = config.get("authentication", {}).get("enabled", False)
+
+# Enable CORS so the frontend (served from a different origin/host on the tailnet)
+# can read API responses. Without this, browsers block the response even though
+# the request reaches the backend.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.get("server", {}).get("cors_origins", ["http://localhost:3000"]),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
 
 # Initialize database on startup
 init_db()
@@ -99,68 +111,58 @@ async def send_message(
             else:
                 db_path = db_path_config
         
+        # Fetch context with a short-lived connection on this (request) thread.
+        # The streaming generator below runs on a separate worker thread, so it
+        # must NOT reuse this connection — SQLite forbids cross-thread use.
         conn = sqlite3.connect(db_path)
-        
-        recent_turns = get_recent_turns(conn, limit=request.context_turns)
-        
-        # Load system prompt
-        system_prompt_text = config.get("system_prompt", {}).get("text", "")
-        file_path = config.get("system_prompt", {}).get("file_path")
-        if file_path:
-            try:
-                with open(resolve_path(file_path), 'r') as f:
-                    system_prompt_text = f.read().strip()
-            except IOError:
-                pass
-        
-        # Build context turns for response
-        context_data = []
-        if recent_turns:
-            for turn in recent_turns:
-                context_data.append({
-                    "id": turn["id"],
-                    "role": turn["role"],
-                    "content": turn["content"],
-                    "committed": turn.get("committed", True),
-                    "created_at": turn["created_at"],
-                    "model_name": turn.get("model_name"),
-                    "token_count": turn.get("token_count")
-                })
-        
+        try:
+            recent_turns = get_recent_turns(conn, limit=request.context_turns)
+        finally:
+            conn.close()
+
         # Streaming response generator
         def event_generator():
-            result = call_llm_streaming(request.message, recent_turns)
-            
-            # Emit tokens
-            for char in result.text:
-                yield f"data: {json.dumps({'type': 'token', 'content': char})}\n\n"
-            
-            # Persist the turn (for both user and assistant)
-            user_id = request.user_id or os.environ.get("USER_ID")
-            
-            turn = create_turn(
-                conn,
-                user_id=user_id,
-                role="user",
-                content=request.message,
-                context_turns=request.context_turns,
-                committed=request.commit
-            )
-            
-            assistant_turn = create_turn(
-                conn,
-                user_id=user_id,
-                role="assistant",
-                content=result.text,
-                context_turns=request.context_turns,
-                committed=request.commit
-            )
-            
-            conn.close()
-            
+            full_response = ""
+            try:
+                # True token-by-token streaming from the LLM.
+                for content in stream_llm_tokens(request.message, recent_turns):
+                    full_response += content
+                    yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+                return
+
+            # Persist both turns. Open a fresh connection on THIS thread so the
+            # write does not cross threads.
+            try:
+                user_id = request.user_id or os.environ.get("USER_ID")
+                gen_conn = sqlite3.connect(db_path)
+                try:
+                    create_turn(
+                        gen_conn,
+                        user_id=user_id,
+                        role="user",
+                        content=request.message,
+                        context_turns=request.context_turns,
+                        committed=request.commit,
+                    )
+                    assistant_turn = create_turn(
+                        gen_conn,
+                        user_id=user_id,
+                        role="assistant",
+                        content=full_response,
+                        context_turns=request.context_turns,
+                        committed=request.commit,
+                    )
+                finally:
+                    gen_conn.close()
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+                return
+
             # Final done event with metadata
             yield f"data: {json.dumps({'type': 'done', 'id': assistant_turn['id'], 'context_turns_used': request.context_turns})}\n\n"
-        
+
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream",
@@ -390,79 +392,92 @@ def transcribe_audio(
             detail=f"Invalid content type: {content_type}. Accepts audio/webm, video/webm, audio/ogg, video/ogg, audio/mp4, video/mp4, audio/wav, or audio/x-wav"
         )
     
+    import os as _os
+    import re
+    import tempfile
+    import subprocess
+
+    tmp_path = None
     try:
         # Read audio data
         audio_data = audio.file.read()
-        
-        # Create temp file for processing
-        import tempfile
+
+        # Create temp file for the normalized audio (cleaned up in finally)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            # Use ffmpeg to normalize audio
-            import subprocess
-            # Use subprocess.Popen (synchronous since function is not async)
-            import subprocess
+            tmp_path = tmp.name
+
+        # Use ffmpeg to normalize audio to 16kHz mono WAV
+        try:
             process = subprocess.Popen(
-                ["ffmpeg", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav", tmp.name],
+                ["ffmpeg", "-y", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav", tmp_path],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
-            
-            stdout, stderr = process.communicate(input=audio_data)
-            
-            if process.returncode != 0:
-                raise HTTPException(status_code=500, detail=f"FFmpeg error: {stderr.decode()}")
-            
-            # Call Whisper (python module)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=500,
+                detail="ffmpeg not found on server. Install ffmpeg to enable transcription."
+            )
+
+        stdout, stderr = process.communicate(input=audio_data)
+
+        if process.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"FFmpeg error: {stderr.decode(errors='replace')}")
+
+        # Transcribe: prefer the whisper python module, fall back to the CLI.
+        text = None
+
+        try:
             import whisper
-            
+            model = whisper.load_model("base")
+            result_obj = model.transcribe(tmp_path, language=language or "en")
+            text = result_obj["text"]
+        except HTTPException:
+            raise
+        except Exception:
+            # Python module unavailable/failed — fall back to the whisper CLI.
             try:
-                model = whisper.load_model("base")
-                result_obj = model.transcribe(tmp.name, language=language or "en")
-                text = result_obj["text"]
-            except Exception as e:
-                # Fallback to whisper CLI if python module fails
-                whisper_command = ["whisper", tmp.name, "--model", "base", "--language", language or ""]
-                result = subprocess.run(whisper_command, capture_output=True, text=True)
-                
-                if result.returncode != 0:
-                    raise Exception(f"Whisper error: {result.stderr}")
-                
-                # Try to extract text from various output formats
-                import re
-                
-                # Try JSON format first
-                match = re.search(r'"text": "([^"]+)"', result.stdout)
-                if match:
-                    text = match.group(1).replace('\"', '"')
-                else:
-                    # Try to find text after "Transcribed" or similar
-                    for line in result.stdout.split('\n'):
-                        if 'Transcribed' not in line and len(line.strip()) > 0:
-                            text = line.strip()
-                            break
-                    else:
-                        raise Exception("Could not extract transcription")
-            else:
-                text = result_obj["text"]
-            
+                result = subprocess.run(
+                    ["whisper", tmp_path, "--model", "base", "--language", language or "en",
+                     "--output_format", "txt"],
+                    capture_output=True, text=True
+                )
+            except FileNotFoundError:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Whisper is not installed on the server (neither the python "
+                           "module nor the CLI). Install 'openai-whisper' to enable transcription."
+                )
+
             if result.returncode != 0:
                 raise HTTPException(status_code=500, detail=f"Whisper error: {result.stderr}")
-            
-            # Extract text from Whisper output
-            import re
-            match = re.search(r'"text": "([^"]+)"', result.stdout)
+
+            # Extract text from CLI output (JSON-ish, then first non-empty line).
+            match = re.search(r'"text":\s*"([^"]+)"', result.stdout)
             if match:
                 text = match.group(1).replace('\\"', '"')
             else:
-                text = result.stdout.strip()
-            
-            return {"text": text}
-            
+                for line in result.stdout.split('\n'):
+                    if line.strip():
+                        text = line.strip()
+                        break
+
+        if text is None:
+            raise HTTPException(status_code=500, detail="Could not extract transcription")
+
+        return {"text": text.strip()}
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if tmp_path:
+            try:
+                _os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
