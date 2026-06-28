@@ -1,5 +1,5 @@
 import { Loader2 } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { Turn } from '@/domain/models';
 import { Composer } from './Composer';
 import { MessageBubble } from './MessageBubble';
@@ -19,10 +19,23 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
     useChat();
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Keep the latest message in view as the conversation grows.
+  const scrollToBottom = (behavior: ScrollBehavior) =>
+    bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
+
+  // Always open at the newest message: jump instantly (no top→bottom animation)
+  // on first load, on reload, and when returning to chat from a call.
+  useLayoutEffect(() => {
+    if (!loading) scrollToBottom('auto');
+  }, [loading, reloadSignal]);
+
+  // During an active session, smoothly follow new and streaming content.
+  const lastTurn = turns[turns.length - 1];
+  const tailLength = lastTurn
+    ? lastTurn.message.length + lastTurn.response.length
+    : 0;
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [turns.length, sending]);
+    if (!loading) scrollToBottom('smooth');
+  }, [turns.length, tailLength, sending, loading]);
 
   // Reload history when asked (call mode persisted turns while we were away).
   useEffect(() => {
