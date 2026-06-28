@@ -40,6 +40,9 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // Don't precache the heavy ML chunks (TF.js / ONNX / speech-commands /
+        // Piper) — they're lazy-loaded only when voice is used.
+        maximumFileSizeToCacheInBytes: 500 * 1024,
         // Don't let the SW intercept API calls — always go to the network.
         navigateFallbackDenylist: [/^\/api/],
         // Take control immediately and drop stale precache on each new version
@@ -56,9 +59,14 @@ export default defineConfig({
     }),
   ],
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
+    alias: [
+      { find: '@', replacement: path.resolve(__dirname, './src') },
+      // speech-commands imports Node's util.promisify — shim it for the browser.
+      {
+        find: /^util$/,
+        replacement: path.resolve(__dirname, './src/shims/node-util.ts'),
+      },
+    ],
   },
   server: {
     port: 3000,

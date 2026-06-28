@@ -6,7 +6,8 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { getTtsEngine } from '@/features/settings/uiPrefs';
+import { getStopWord, getTtsEngine } from '@/features/settings/uiPrefs';
+import { listenForWords } from './keywordSpotter';
 import { downloadVoice, isVoiceStored } from './piperTts';
 import { createSpeechSession, webSpeechSupported } from './speech';
 import type { SpeechSession } from './speechUtils';
@@ -34,9 +35,13 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SpeechStatus>('idle');
   const [progress, setProgress] = useState(0);
   const sessionRef = useRef<SpeechSession | null>(null);
+  const kwsStopRef = useRef<(() => void) | null>(null);
   const reqRef = useRef(0);
 
   const reset = useCallback(() => {
+    // Stop the stop-word listener (mic on only while speaking).
+    kwsStopRef.current?.();
+    kwsStopRef.current = null;
     setActiveId(null);
     setStatus('idle');
     setProgress(0);
@@ -79,6 +84,19 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
           sessionRef.current = session;
           session.push(text);
           session.finish();
+
+          // Barge-in: listen for the stop word while speaking, then mic off.
+          void listenForWords([getStopWord()], () => {
+            if (reqRef.current === req) stop();
+          })
+            .then((s) => {
+              if (reqRef.current !== req) {
+                s();
+                return;
+              }
+              kwsStopRef.current = s;
+            })
+            .catch(() => {});
         } catch {
           if (reqRef.current === req) reset();
         }

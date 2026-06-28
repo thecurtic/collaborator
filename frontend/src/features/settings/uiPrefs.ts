@@ -11,6 +11,11 @@ import {
 const DEBUG_KEY = 'collaborator_debug';
 const ENGINE_KEY = 'collaborator_tts_engine';
 const VOICE_KEY = 'collaborator_piper_voice';
+const END_WORD_KEY = 'collaborator_end_word';
+const STOP_WORD_KEY = 'collaborator_stop_word';
+
+export const DEFAULT_END_WORD = 'go';
+export const DEFAULT_STOP_WORD = 'stop';
 
 export type TtsEngine = 'piper' | 'browser';
 
@@ -73,4 +78,25 @@ export function setPiperVoice(value: string): void {
 }
 export function usePiperVoice(): string {
   return useSyncExternalStore(subscribe, getPiperVoice, () => DEFAULT_PIPER_VOICE);
+}
+
+// --- Voice command words (on-device keyword spotting, fixed vocabulary) ---
+export function getEndWord(): string {
+  return read(END_WORD_KEY) || DEFAULT_END_WORD;
+}
+export function setEndWord(value: string): void {
+  write(END_WORD_KEY, value);
+}
+export function useEndWord(): string {
+  return useSyncExternalStore(subscribe, getEndWord, () => DEFAULT_END_WORD);
+}
+
+export function getStopWord(): string {
+  return read(STOP_WORD_KEY) || DEFAULT_STOP_WORD;
+}
+export function setStopWord(value: string): void {
+  write(STOP_WORD_KEY, value);
+}
+export function useStopWord(): string {
+  return useSyncExternalStore(subscribe, getStopWord, () => DEFAULT_STOP_WORD);
 }

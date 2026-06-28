@@ -1,15 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
+import { getEndWord, getStopWord } from '@/features/settings/uiPrefs';
+import { listenForWords, warmUpKeywordSpotter } from './keywordSpotter';
 import { createSpeechSession, type SpeechSession } from './speech';
 
 export type CallPhase = 'connecting' | 'listening' | 'responding' | 'error';
 
-// How often we transcribe the audio-so-far to look for the end phrase.
-const POLL_MS = 2500;
-// Safety cap so a turn can't run forever if the phrase is never recognized.
-const MAX_UTTERANCE_MS = 60000;
-const FINAL_CHUNK_WAIT = 200;
-const DEFAULT_END_PHRASE = 'go ahead';
+const MAX_UTTERANCE_MS = 60000; // safety cap on a single turn
 
 function pickMimeType(): string {
   if (typeof MediaRecorder === 'undefined') return '';
@@ -28,17 +25,12 @@ function extFor(mime: string): string {
   return 'webm';
 }
 
-function containsPhrase(text: string, phrase: string): boolean {
-  return !!phrase && text.toLowerCase().includes(phrase.toLowerCase());
-}
-
-function stripPhrase(text: string, phrase: string): string {
-  if (!phrase) return text.trim();
-  const lower = text.toLowerCase();
-  const p = phrase.toLowerCase();
-  const idx = lower.lastIndexOf(p);
-  if (idx === -1) return text.trim();
-  return (text.slice(0, idx) + text.slice(idx + p.length)).trim();
+/** Strip a trailing command word (e.g. the spoken "go") from the transcript. */
+function stripTrailingWord(text: string, word: string): string {
+  const t = text.trim();
+  if (!word) return t;
+  const re = new RegExp(`[\\s,.!?]*\\b${word}\\b[\\s,.!?]*$`, 'i');
+  return t.replace(re, '').trim();
 }
 
 interface Controls {
@@ -47,10 +39,10 @@ interface Controls {
 }
 
 /**
- * Call loop: record continuously while polling transcription for the configurable
- * end phrase (e.g. "go ahead"). End the turn on the phrase, the "Done" button, or
- * a max-duration safety — then stream the reply (live tokens) and speak it via
- * Piper sentence by sentence, then listen again. (No silence detection.)
+ * Call loop with on-device keyword spotting (TF.js):
+ *   listen (record + spot the end word) → transcribe once (Whisper) → stream the
+ *   reply and speak it (while spotting the stop word for barge-in) → listen again.
+ * "Done" button and a max-duration are fallbacks for ending a turn.
  */
 export function useCall(open: boolean, onClose: () => void) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
@@ -69,38 +61,49 @@ export function useCall(open: boolean, onClose: () => void) {
     let chunks: Blob[] = [];
     let mime = '';
     let baseType = 'audio/webm';
-    let endPhrase = DEFAULT_END_PHRASE;
+    let endWord = getEndWord();
+    let stopWord = getStopWord();
     let queue: SpeechSession | null = null;
-    let pollTimer: number | undefined;
     let maxTimer: number | undefined;
-    let transcribing = false;
     let finalizing = false;
-    let latest = '';
+    let streamAbort: AbortController | null = null;
+
+    // Keyword listener management (one active at a time, token-guarded).
+    let kwsStop: (() => void) | null = null;
+    let kwsToken = 0;
+    const stopKws = () => {
+      kwsToken++;
+      kwsStop?.();
+      kwsStop = null;
+    };
+    const startKws = (words: string[], onMatch: (w: string) => void) => {
+      const token = ++kwsToken;
+      kwsStop?.();
+      kwsStop = null;
+      void listenForWords(words, (w) => {
+        if (active && kwsToken === token) onMatch(w);
+      })
+        .then((stop) => {
+          if (!active || kwsToken !== token) {
+            stop();
+            return;
+          }
+          kwsStop = stop;
+        })
+        .catch((e) => log(`kws error: ${e instanceof Error ? e.message : e}`));
+    };
 
     const log = (m: string) => {
       const t = new Date().toLocaleTimeString([], { hour12: false });
       setLogs((prev) => [...prev.slice(-13), `${t} ${m}`]);
     };
 
-    const clearTimers = () => {
-      if (pollTimer) window.clearInterval(pollTimer);
-      if (maxTimer) window.clearTimeout(maxTimer);
-      pollTimer = maxTimer = undefined;
-    };
-
-    const stopRecorder = () => {
-      if (recorder && recorder.state !== 'inactive') {
-        try {
-          recorder.stop();
-        } catch {
-          /* ignore */
-        }
-      }
-    };
-
     const cleanup = () => {
       active = false;
-      clearTimers();
+      if (maxTimer) window.clearTimeout(maxTimer);
+      maxTimer = undefined;
+      stopKws();
+      streamAbort?.abort();
       if (recorder && recorder.state !== 'inactive') {
         recorder.onstop = null;
         try {
@@ -116,14 +119,25 @@ export function useCall(open: boolean, onClose: () => void) {
       stream = null;
     };
 
-    const cumulativeBlob = () =>
-      new Blob(chunks, { type: (mime || 'audio/webm').split(';')[0] });
+    const stopAndGetBlob = (): Promise<Blob | null> =>
+      new Promise((resolve) => {
+        const rec = recorder;
+        if (!rec || rec.state === 'inactive') {
+          resolve(null);
+          return;
+        }
+        rec.onstop = () => resolve(new Blob(chunks, { type: baseType }));
+        try {
+          rec.stop();
+        } catch {
+          resolve(null);
+        }
+      });
 
     const listen = () => {
       if (!active || !stream) return;
       finalizing = false;
       chunks = [];
-      latest = '';
       setPhase('listening');
       setPartial('');
       setResponse('');
@@ -137,56 +151,36 @@ export function useCall(open: boolean, onClose: () => void) {
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
       };
-      recorder.start(1000); // timeslice so chunks accumulate into a valid blob
-      pollTimer = window.setInterval(() => void poll(), POLL_MS);
+      recorder.start();
       maxTimer = window.setTimeout(() => {
         log('max duration → finish');
-        void finalize(true);
+        void finalize();
       }, MAX_UTTERANCE_MS);
+      startKws([endWord], () => {
+        log(`end word "${endWord}" → finish`);
+        void finalize();
+      });
     };
 
-    const poll = async () => {
-      if (!active || transcribing || finalizing || chunks.length === 0) return;
-      transcribing = true;
-      try {
-        const text = await api.transcribe(cumulativeBlob(), {
-          filename: `turn.${extFor(baseType)}`,
-        });
-        if (!active || finalizing) return;
-        latest = text;
-        log(`heard(${text.trim().length}): "${text.trim().slice(0, 40)}"`);
-        if (text.trim()) setPartial(stripPhrase(text, endPhrase));
-        if (containsPhrase(text, endPhrase)) {
-          log('phrase matched → finish');
-          await finalize(false);
-        }
-      } catch (e) {
-        log(`transcribe FAIL: ${e instanceof Error ? e.message : e}`);
-      } finally {
-        transcribing = false;
-      }
-    };
-
-    const finalize = async (forceTranscribe: boolean) => {
+    const finalize = async () => {
       if (!active || finalizing) return;
       finalizing = true;
-      clearTimers();
-      stopRecorder();
-      await new Promise((r) => setTimeout(r, FINAL_CHUNK_WAIT));
-
-      let text = latest;
-      if (forceTranscribe || !text.trim()) {
+      if (maxTimer) window.clearTimeout(maxTimer);
+      maxTimer = undefined;
+      stopKws();
+      const blob = await stopAndGetBlob();
+      if (!active) return;
+      let text = '';
+      if (blob && blob.size > 0) {
         try {
-          text = await api.transcribe(cumulativeBlob(), {
-            filename: `turn.${extFor(baseType)}`,
-          });
+          text = await api.transcribe(blob, { filename: `turn.${extFor(baseType)}` });
         } catch (e) {
-          log(`final transcribe FAIL: ${e instanceof Error ? e.message : e}`);
+          log(`transcribe FAIL: ${e instanceof Error ? e.message : e}`);
         }
       }
       if (!active) return;
-      const clean = stripPhrase(text, endPhrase);
-      log(`finalize → "${clean.slice(0, 40)}"`);
+      const clean = stripTrailingWord(text, endWord);
+      log(`heard(${text.trim().length}) → "${clean.slice(0, 40)}"`);
       if (clean) {
         await respond(clean);
       } else {
@@ -201,26 +195,49 @@ export function useCall(open: boolean, onClose: () => void) {
       setPartial(text);
       setResponse('');
       queue = createSpeechSession(() => {
-        if (active) listen();
+        if (active) {
+          stopKws();
+          listen();
+        }
       });
+      // Barge-in: spot the stop word while the assistant is speaking.
+      startKws([stopWord], () => {
+        log(`stop word "${stopWord}" → interrupt`);
+        interrupt();
+      });
+      streamAbort = new AbortController();
       try {
-        await api.sendMessageStream({ message: text, commit: true, mode: 'voice' }, (c) => {
-          setResponse((prev) => prev + c);
-          queue?.push(c);
-        });
+        await api.sendMessageStream(
+          { message: text, commit: true, mode: 'voice' },
+          (c) => {
+            setResponse((prev) => prev + c);
+            queue?.push(c);
+          },
+          streamAbort.signal,
+        );
         queue?.finish();
       } catch (err) {
         if (!active) return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         queue?.stop();
+        stopKws();
         setError(err instanceof Error ? err.message : 'Something went wrong.');
         setPhase('error');
       }
     };
 
+    const interrupt = () => {
+      stopKws();
+      streamAbort?.abort();
+      queue?.stop();
+      queue = null;
+      if (active) listen();
+    };
+
     controlsRef.current = {
       endTurn: () => {
         log('Done tapped');
-        void finalize(true);
+        void finalize();
       },
       end: () => {
         cleanup();
@@ -230,25 +247,28 @@ export function useCall(open: boolean, onClose: () => void) {
 
     void (async () => {
       try {
-        try {
-          const s = await api.getSettings();
-          endPhrase = s.voiceEndPhrase || DEFAULT_END_PHRASE;
-        } catch {
-          /* keep default */
-        }
-        log(`phrase="${endPhrase}"`);
-        if (!active) return;
+        endWord = getEndWord();
+        stopWord = getStopWord();
+        log(`end="${endWord}" stop="${stopWord}"`);
         if (!navigator.mediaDevices?.getUserMedia) {
           throw new Error('Microphone not supported in this browser.');
         }
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true },
+        });
         if (!active) {
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
         mime = pickMimeType();
         baseType = (mime || 'audio/webm').split(';')[0];
-        log(`mic ok, mime=${baseType}`);
+        try {
+          await warmUpKeywordSpotter(); // preload model so detection is instant
+        } catch (e) {
+          log(`keyword model failed: ${e instanceof Error ? e.message : e}`);
+        }
+        if (!active) return;
+        log(`ready, mime=${baseType}`);
         listen();
       } catch (err) {
         if (!active) return;
