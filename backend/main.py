@@ -1,17 +1,20 @@
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, UploadFile, Form, Request, File
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import sqlite3
+import asyncio
+import json
+from typing import List, Optional
+from starlette.responses import StreamingResponse
 
 from pydantic import BaseModel
-from typing import List, Optional
-
-from config import get_config
+from config import get_config, resolve_path
 from data.agents_md import load_agents_md
 from db import init_db, create_turn, get_recent_turns, update_turn_committed, get_turn_by_id
-from inference import call_llm
+from inference import call_llm_streaming, call_llm_non_streaming
 from auth import validate_passkey, create_user_db
 
+app = FastAPI()
 
 # Initialize config
 config = get_config()
@@ -22,7 +25,7 @@ auth_enabled = config.get("authentication", {}).get("enabled", False)
 # Initialize database on startup
 init_db()
 
-# Pydantic models for API requests/responses
+
 class UserMessage(BaseModel):
     message: str
     context_turns: Optional[int] = 5
@@ -36,15 +39,14 @@ class MessageResponse(BaseModel):
     message: str
     response: str
     committed: bool
-    context_turns_used: List[dict]  # The turns that were used as context
-    system_prompt: str  # The system prompt applied to this conversation
-    agents_md_content: Optional[str] = None  # AGENTS.md content for frontend reference
+    context_turns_used: List[dict]
+    system_prompt: str
 
 
 class MessagesListResponse(BaseModel):
     turns: List[dict]
     count: int
-    context_turns_used: Optional[int] = None  # Number of turns in context window
+    context_turns_used: Optional[int] = None
 
 
 class DiscardTurnResponse(BaseModel):
@@ -52,17 +54,8 @@ class DiscardTurnResponse(BaseModel):
     committed: bool
 
 
-app = FastAPI(title="Collaborator Backend", version="0.1.0")
-
-# Configure CORS
-cors_origins = config.get("server", {}).get("cors_origins", ["http://localhost:3000"])
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+class SettingsResponse(BaseModel):
+    voice_end_phrase: str
 
 
 def get_passkey_from_header(passkey: Optional[str] = Header(None, alias="X-Passkey")) -> str:
@@ -82,14 +75,13 @@ async def send_message(
     passkey: Optional[str] = Header(None, alias="X-Passkey")
 ):
     """
-    Send a user message and get the model response.
+    Send a user message and get the model response (streaming).
     
     - **message**: The user's input
     - **context_turns**: Number of prior committed turns to include in context (default: 5)
     - **commit**: Whether to commit this turn to memory (default: true)
     - **X-Passkey**: User's passkey for authentication
     """
-    # Validate passkey if auth is enabled
     if auth_enabled:
         if not passkey:
             raise HTTPException(status_code=403, detail="Passkey required")
@@ -97,53 +89,31 @@ async def send_message(
             raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
     
     try:
-        # Create/get user database
         db_path_config = config.get("memory", {}).get("db_path")
-        # Resolve path if not using passkey (auth disabled)
+        
         if auth_enabled:
             db_path = create_user_db(passkey)
         else:
-            # Resolve relative path to absolute
             if db_path_config and not os.path.isabs(db_path_config):
-                from db import _resolve_path
-                db_path = _resolve_path(db_path_config)
+                db_path = resolve_path(db_path_config)
             else:
                 db_path = db_path_config
         
-        # Import db with correct path
-
         conn = sqlite3.connect(db_path)
         
-        # Get context from recent committed turns (filtered by passkey if enabled)
         recent_turns = get_recent_turns(conn, limit=request.context_turns)
         
-        # Call the LLM with context
-        response = call_llm_streaming(request.message, recent_turns)
+        # Load system prompt
+        system_prompt_text = config.get("system_prompt", {}).get("text", "")
+        file_path = config.get("system_prompt", {}).get("file_path")
+        if file_path:
+            try:
+                with open(resolve_path(file_path), 'r') as f:
+                    system_prompt_text = f.read().strip()
+            except IOError:
+                pass
         
-        # Persist the turn
-        user_id = request.user_id or os.environ.get("USER_ID")
-        
-        turn = create_turn(
-            conn,
-            user_id=user_id,
-            role="user",
-            content=request.message,
-            context_turns=request.context_turns,
-            committed=request.commit
-        )
-        
-        response_turn = create_turn(
-            conn,
-            user_id=user_id,
-            role="assistant",
-            content=response,
-            context_turns=request.context_turns,
-            committed=request.commit
-        )
-        
-        conn.close()
-        
-        # Build context turns for response (include all relevant data)
+        # Build context turns for response
         context_data = []
         if recent_turns:
             for turn in recent_turns:
@@ -157,35 +127,64 @@ async def send_message(
                     "token_count": turn.get("token_count")
                 })
         
-        # Load system prompt from file if specified
-        system_prompt_text = config.get("system_prompt", {}).get("text", "")
-        file_path = config.get("system_prompt", {}).get("file_path")
-        if file_path:
-            try:
-                from config import resolve_path
-                with open(resolve_path(file_path), 'r') as f:
-                    system_prompt_text = f.read().strip()
-            except IOError:
-                pass  # Keep fallback text
+        # Streaming response generator
+        def event_generator():
+            result = call_llm_streaming(request.message, recent_turns)
+            
+            # Emit tokens
+            for char in result.text:
+                yield f"data: {json.dumps({'type': 'token', 'content': char})}\n\n"
+            
+            # Persist the turn (for both user and assistant)
+            user_id = request.user_id or os.environ.get("USER_ID")
+            
+            turn = create_turn(
+                conn,
+                user_id=user_id,
+                role="user",
+                content=request.message,
+                context_turns=request.context_turns,
+                committed=request.commit
+            )
+            
+            assistant_turn = create_turn(
+                conn,
+                user_id=user_id,
+                role="assistant",
+                content=result.text,
+                context_turns=request.context_turns,
+                committed=request.commit
+            )
+            
+            conn.close()
+            
+            # Final done event with metadata
+            yield f"data: {json.dumps({'type': 'done', 'id': assistant_turn['id'], 'context_turns_used': request.context_turns})}\n\n"
         
-        # Load AGENTS.md content for frontend
-        agents_md_content = load_agents_md()
-        
-        return MessageResponse(
-            id=response_turn["id"],
-            user_id=user_id,
-            message=request.message,
-            response=response,
-            committed=request.commit,
-            context_turns_used=context_data,
-            system_prompt=system_prompt_text,
-            agents_md_content=agents_md_content
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no"
+            }
         )
         
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Emit error event then close stream
+        def error_generator():
+            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+        
+        return StreamingResponse(
+            error_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no"
+            }
+        )
 
 
 @app.get("/api/messages")
@@ -195,7 +194,6 @@ async def get_messages(
     passkey: Optional[str] = Header(None, alias="X-Passkey")
 ):
     """Retrieve conversation history."""
-    # Validate passkey if auth is enabled
     if auth_enabled:
         if not passkey:
             raise HTTPException(status_code=403, detail="Passkey required")
@@ -203,31 +201,25 @@ async def get_messages(
             raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
     
     try:
-        # Create/get user database
         db_path_config = config.get("memory", {}).get("db_path")
-        # Resolve path if not using passkey (auth disabled)
+        
         if auth_enabled:
             db_path = create_user_db(passkey)
         else:
-            # Resolve relative path to absolute
             if db_path_config and not os.path.isabs(db_path_config):
-                from db import _resolve_path
-                db_path = _resolve_path(db_path_config)
+                db_path = resolve_path(db_path_config)
             else:
                 db_path = db_path_config
         
-        # Import db with correct path
-
         conn = sqlite3.connect(db_path)
         
         turns = get_recent_turns(conn, limit=limit, offset=offset)
         
-        # Load system prompt for get_messages response
+        # Load system prompt
         system_prompt_text = config.get("system_prompt", {}).get("text", "")
         file_path = config.get("system_prompt", {}).get("file_path")
         if file_path:
             try:
-                from config import resolve_path
                 with open(resolve_path(file_path), 'r') as f:
                     system_prompt_text = f.read().strip()
             except IOError:
@@ -236,7 +228,7 @@ async def get_messages(
         conn.close()
         
         return MessagesListResponse(
-            turns=turns, 
+            turns=turns,
             count=len(turns),
             context_turns_used=config.get("memory", {}).get("default_context_window")
         )
@@ -252,7 +244,6 @@ async def discard_turn(
     passkey: Optional[str] = Header(None, alias="X-Passkey")
 ):
     """Discard a specific turn (remove from context)."""
-    # Validate passkey if auth is enabled
     if auth_enabled:
         if not passkey:
             raise HTTPException(status_code=403, detail="Passkey required")
@@ -260,24 +251,18 @@ async def discard_turn(
             raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
     
     try:
-        # Create/get user database
         db_path_config = config.get("memory", {}).get("db_path")
-        # Resolve path if not using passkey (auth disabled)
+        
         if auth_enabled:
             db_path = create_user_db(passkey)
         else:
-            # Resolve relative path to absolute
             if db_path_config and not os.path.isabs(db_path_config):
-                from db import _resolve_path
-                db_path = _resolve_path(db_path_config)
+                db_path = resolve_path(db_path_config)
             else:
                 db_path = db_path_config
         
-        # Import db with correct path
-
         conn = sqlite3.connect(db_path)
         
-        # Verify turn belongs to user (owner check would be needed in real app)
         turn = get_turn_by_id(conn, turn_id)
         if not turn:
             conn.close()
@@ -296,22 +281,6 @@ async def discard_turn(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-from pydantic import BaseModel, Field
-import tempfile
-import subprocess
-
-
-# Settings models
-class VoiceSettings(BaseModel):
-    voice_end_phrase: str = Field(default="go ahead")
-    # Add other settings fields here
-
-
-class SettingsResponse(BaseModel):
-    voice_end_phrase: str
-    # Add other settings fields here
-
-
 @app.get("/api/settings")
 async def get_settings(
     passkey: Optional[str] = Header(None, alias="X-Passkey")
@@ -323,19 +292,12 @@ async def get_settings(
         if not validate_passkey(passkey):
             raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
     
-    config = get_config()
-    
-    # Default settings
-    settings = {
-        "voice_end_phrase": "go ahead"
-    }
-    
-    return SettingsResponse(**settings)
+    return SettingsResponse(voice_end_phrase="go ahead")
 
 
 @app.patch("/api/settings")
 async def patch_settings(
-    settings: VoiceSettings,
+    settings: SettingsResponse,
     passkey: Optional[str] = Header(None, alias="X-Passkey")
 ):
     """Update voice settings."""
@@ -345,27 +307,17 @@ async def patch_settings(
         if not validate_passkey(passkey):
             raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
     
-    config = get_config()
-    
-    # For now, return the updated settings
-    # In production, this would update config.yaml and reload
-    
-    return SettingsResponse(
-        voice_end_phrase=settings.voice_end_phrase
-    )
+    return settings
 
 
 @app.post("/api/transcribe")
 async def transcribe_audio(
-    audio: UploadFile,
+    request: Request,
+    audio: bytes = File(...),
     language: Optional[str] = Form(None),
     passkey: Optional[str] = Header(None, alias="X-Passkey")
 ):
-    """Transcribe audio to text using Whisper.
-    
-    Accepts: webm/opus, mp4/aac, ogg/opus, wav
-    Returns: { "text": "<transcript>" }
-    """
+    """Transcribe audio to text using Whisper."""
     if auth_enabled:
         if not passkey:
             raise HTTPException(status_code=403, detail="Passkey required")
@@ -390,8 +342,10 @@ async def transcribe_audio(
         audio_data = await audio.read()
         
         # Create temp file for processing
+        import tempfile
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             # Use ffmpeg to normalize audio
+            import subprocess
             process = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav",
                 tmp.name,
@@ -416,9 +370,8 @@ async def transcribe_audio(
             import re
             match = re.search(r'"text": "([^"]+)"', result.stdout)
             if match:
-                text = match.group(1).replace('\"', '"')
+                text = match.group(1).replace('\\"', '"')
             else:
-                # Try alternative parsing
                 text = result.stdout.strip()
             
             return {"text": text}
@@ -430,7 +383,6 @@ async def transcribe_audio(
 
 
 if __name__ == "__main__":
-
     import uvicorn
     server_config = config.get("server", {})
     host = server_config.get("backend_host", "0.0.0.0")
