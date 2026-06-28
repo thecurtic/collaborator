@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from config import get_config
+from data.agents_md import load_agents_md
 from db import init_db, create_turn, get_recent_turns, update_turn_committed, get_turn_by_id
 from inference import call_llm
 from auth import validate_passkey, create_user_db
@@ -35,11 +36,15 @@ class MessageResponse(BaseModel):
     message: str
     response: str
     committed: bool
+    context_turns_used: List[dict]  # The turns that were used as context
+    system_prompt: str  # The system prompt applied to this conversation
+    agents_md_content: Optional[str] = None  # AGENTS.md content for frontend reference
 
 
 class MessagesListResponse(BaseModel):
     turns: List[dict]
     count: int
+    context_turns_used: Optional[int] = None  # Number of turns in context window
 
 
 class DiscardTurnResponse(BaseModel):
@@ -138,12 +143,43 @@ async def send_message(
         
         conn.close()
         
+        # Build context turns for response (include all relevant data)
+        context_data = []
+        if recent_turns:
+            for turn in recent_turns:
+                context_data.append({
+                    "id": turn["id"],
+                    "role": turn["role"],
+                    "content": turn["content"],
+                    "committed": turn.get("committed", True),
+                    "created_at": turn["created_at"],
+                    "model_name": turn.get("model_name"),
+                    "token_count": turn.get("token_count")
+                })
+        
+        # Load system prompt from file if specified
+        system_prompt_text = config.get("system_prompt", {}).get("text", "")
+        file_path = config.get("system_prompt", {}).get("file_path")
+        if file_path:
+            try:
+                from config import resolve_path
+                with open(resolve_path(file_path), 'r') as f:
+                    system_prompt_text = f.read().strip()
+            except IOError:
+                pass  # Keep fallback text
+        
+        # Load AGENTS.md content for frontend
+        agents_md_content = load_agents_md()
+        
         return MessageResponse(
             id=response_turn["id"],
             user_id=user_id,
             message=request.message,
             response=response,
-            committed=request.commit
+            committed=request.commit,
+            context_turns_used=context_data,
+            system_prompt=system_prompt_text,
+            agents_md_content=agents_md_content
         )
         
     except HTTPException:
@@ -185,9 +221,25 @@ async def get_messages(
         conn = sqlite3.connect(db_path)
         
         turns = get_recent_turns(conn, limit=limit, offset=offset)
+        
+        # Load system prompt for get_messages response
+        system_prompt_text = config.get("system_prompt", {}).get("text", "")
+        file_path = config.get("system_prompt", {}).get("file_path")
+        if file_path:
+            try:
+                from config import resolve_path
+                with open(resolve_path(file_path), 'r') as f:
+                    system_prompt_text = f.read().strip()
+            except IOError:
+                pass
+        
         conn.close()
         
-        return MessagesListResponse(turns=turns, count=len(turns))
+        return MessagesListResponse(
+            turns=turns, 
+            count=len(turns),
+            context_turns_used=config.get("memory", {}).get("default_context_window")
+        )
     except HTTPException:
         raise
     except Exception as e:
