@@ -355,9 +355,9 @@ async def patch_settings(
 
 
 @app.post("/api/transcribe")
-async def transcribe_audio(
+def transcribe_audio(
     request: Request,
-    audio: bytes = File(...),
+    audio: UploadFile = File(...),
     language: Optional[str] = Form(None),
     passkey: Optional[str] = Header(None, alias="X-Passkey")
 ):
@@ -383,29 +383,59 @@ async def transcribe_audio(
     
     try:
         # Read audio data
-        audio_data = await audio.read()
+        audio_data = audio.file.read()
         
         # Create temp file for processing
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             # Use ffmpeg to normalize audio
             import subprocess
-            process = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav",
-                tmp.name,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            # Use subprocess.Popen (synchronous since function is not async)
+            import subprocess
+            process = subprocess.Popen(
+                ["ffmpeg", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav", tmp.name],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
             )
             
-            stdout, stderr = await process.communicate(input=audio_data)
+            stdout, stderr = process.communicate(input=audio_data)
             
             if process.returncode != 0:
                 raise HTTPException(status_code=500, detail=f"FFmpeg error: {stderr.decode()}")
             
-            # Call Whisper
-            whisper_command = ["whisper", tmp.name, "--model", "base", "--language", language or ""]
-            result = subprocess.run(whisper_command, capture_output=True, text=True)
+            # Call Whisper (python module)
+            import whisper
+            
+            try:
+                model = whisper.load_model("base")
+                result_obj = model.transcribe(tmp.name, language=language or "en")
+                text = result_obj["text"]
+            except Exception as e:
+                # Fallback to whisper CLI if python module fails
+                whisper_command = ["whisper", tmp.name, "--model", "base", "--language", language or ""]
+                result = subprocess.run(whisper_command, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    raise Exception(f"Whisper error: {result.stderr}")
+                
+                # Try to extract text from various output formats
+                import re
+                
+                # Try JSON format first
+                match = re.search(r'"text": "([^"]+)"', result.stdout)
+                if match:
+                    text = match.group(1).replace('\"', '"')
+                else:
+                    # Try to find text after "Transcribed" or similar
+                    for line in result.stdout.split('\n'):
+                        if 'Transcribed' not in line and len(line.strip()) > 0:
+                            text = line.strip()
+                            break
+                    else:
+                        raise Exception("Could not extract transcription")
+            else:
+                text = result_obj["text"]
             
             if result.returncode != 0:
                 raise HTTPException(status_code=500, detail=f"Whisper error: {result.stderr}")
