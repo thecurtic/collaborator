@@ -102,7 +102,9 @@ export function useCall(open: boolean, onClose: () => void) {
     };
 
     const cumulativeBlob = () =>
-      new Blob(chunks, { type: mime || 'audio/webm' });
+      // Strip the ";codecs=…" parameter — the backend validates Content-Type
+      // against an exact-match allowlist that only has the base types.
+      new Blob(chunks, { type: (mime || 'audio/webm').split(';')[0] });
 
     const startListening = () => {
       if (!active || !stream) return;

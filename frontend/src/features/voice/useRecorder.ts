@@ -102,7 +102,9 @@ export function useRecorder() {
         return;
       }
       rec.onstop = () => {
-        const mimeType = rec.mimeType || 'audio/webm';
+        // Base MIME only (no ";codecs=…") so it matches the backend's
+        // Content-Type allowlist.
+        const mimeType = (rec.mimeType || 'audio/webm').split(';')[0];
         const blob = new Blob(chunksRef.current, { type: mimeType });
         releaseStream();
         recorderRef.current = null;
