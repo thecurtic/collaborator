@@ -285,7 +285,8 @@ def get_voice_end_phrase_from_config() -> str:
     """Get voice end phrase from config or default."""
     try:
         cfg = get_config()
-        return cfg.get("voice_end_phrase", "go ahead")
+        # Read from voice section to match save_voice_end_phrase
+        return cfg.get("voice", {}).get("voice_end_phrase", "go ahead")
     except:
         return "go ahead"
 
