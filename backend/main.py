@@ -118,7 +118,7 @@ async def send_message(
         recent_turns = get_recent_turns(conn, limit=request.context_turns)
         
         # Call the LLM with context
-        response = call_llm(request.message, recent_turns)
+        response = call_llm_streaming(request.message, recent_turns)
         
         # Persist the turn
         user_id = request.user_id or os.environ.get("USER_ID")
