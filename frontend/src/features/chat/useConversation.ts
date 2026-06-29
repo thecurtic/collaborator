@@ -21,21 +21,25 @@ export interface Streaming {
 interface NodeIndex {
   byId: Map<number, TreeNode>;
   childrenOf: Map<number, TreeNode[]>;
+  /** child id → parent id (VIRTUAL_ROOT for roots), derived from the nesting. */
+  parentOf: Map<number, number>;
 }
 
 function indexNodes(tree: ConversationTree): NodeIndex {
   const byId = new Map<number, TreeNode>();
   const childrenOf = new Map<number, TreeNode[]>();
+  const parentOf = new Map<number, number>();
   childrenOf.set(VIRTUAL_ROOT, tree.roots);
-  const walk = (nodes: TreeNode[]) => {
+  const walk = (nodes: TreeNode[], parentId: number) => {
     for (const n of nodes) {
       byId.set(n.id, n);
       childrenOf.set(n.id, n.children);
-      walk(n.children);
+      parentOf.set(n.id, parentId);
+      walk(n.children, n.id);
     }
   };
-  walk(tree.roots);
-  return { byId, childrenOf };
+  walk(tree.roots, VIRTUAL_ROOT);
+  return { byId, childrenOf, parentOf };
 }
 
 /** Walk root→leaf, picking the selected child at each fork (default: newest). */
@@ -93,18 +97,18 @@ export function useConversation(reloadSignal: number) {
   }, [load, reloadSignal]);
 
   // Point the active path at a specific turn by selecting it along its ancestry.
+  // Uses the nesting-derived parent map (robust even if nodes lack parent_turn_id).
   const selectPathTo = useCallback((turnId: number) => {
-    const { byId } = indexRef.current;
+    const { parentOf } = indexRef.current;
     setSelection((prev) => {
       const next = new Map(prev);
       let child = turnId;
-      let node = byId.get(turnId);
-      while (node) {
-        const parent = node.parentTurnId ?? VIRTUAL_ROOT;
+      let parent = parentOf.get(turnId);
+      while (parent !== undefined) {
         next.set(parent, child);
         if (parent === VIRTUAL_ROOT) break;
         child = parent;
-        node = byId.get(parent);
+        parent = parentOf.get(parent);
       }
       return next;
     });

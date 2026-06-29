@@ -15,6 +15,10 @@ interface TreeMapProps {
 const COL = 34; // px between branch columns
 const ROW = 26; // px per turn
 const PAD = 28;
+
+// NOTE: coloring is BRANCH-based for now. Per Curtis, this will likely change to
+// TOPIC-based (boundaries determined by LLM review), possibly as a separate mode
+// / toggle. Keep colorFor() as the single place to swap that in later.
 const COLORS = [
   '#3b82f6',
   '#10b981',
@@ -25,29 +29,56 @@ const COLORS = [
   '#f97316',
   '#6366f1',
 ];
+function colorFor(column: number): string {
+  const idx = column >= 0 ? column * 2 : -column * 2 - 1;
+  return COLORS[idx % COLORS.length];
+}
 
 interface Segment {
   startNodeId: number;
   count: number; // turns in this branch
-  column: number;
+  column: number; // signed: 0 = centered trunk, + right, - left
   startRow: number;
   parentColumn: number | null;
   forkRow: number | null; // row of the parent fork (for the connector)
   active: boolean;
 }
 
-/** Decompose the tree into branch segments (linear runs between forks). */
+/**
+ * Decompose the tree into branch segments. The main line (root + first-children)
+ * stays in the centered column 0; each other branch is placed in the nearest free
+ * side column, alternating left/right, so overlapping branches don't collide.
+ */
 function layout(roots: TreeNode[], activeIds: Set<number>) {
   const segments: Segment[] = [];
-  let column = -1;
-  const nextCol = () => (column += 1);
+  const occupancy = new Map<number, Array<[number, number]>>();
+  let sideToggle = 1;
+
+  const overlaps = (col: number, a: number, b: number) =>
+    (occupancy.get(col) ?? []).some(([s, e]) => a <= e && b >= s);
+  const record = (col: number, a: number, b: number) => {
+    const arr = occupancy.get(col) ?? [];
+    arr.push([a, b]);
+    occupancy.set(col, arr);
+  };
+  const allocateBranch = (a: number, b: number) => {
+    const first = sideToggle;
+    sideToggle = -sideToggle; // alternate which side we try first
+    for (let mag = 1; mag < 100; mag += 1) {
+      for (const sign of [first, -first]) {
+        const col = sign * mag;
+        if (!overlaps(col, a, b)) return col;
+      }
+    }
+    return first * 99;
+  };
 
   const build = (
     node: TreeNode,
-    col: number,
     startRow: number,
-    parentColumn: number | null,
+    parentColumn: number,
     forkRow: number | null,
+    isBranch: boolean,
   ) => {
     const ids: number[] = [];
     let cur = node;
@@ -59,38 +90,34 @@ function layout(roots: TreeNode[], activeIds: Set<number>) {
       }
       break;
     }
+    const count = ids.length;
+    const endRow = startRow + count - 1;
+    const column = isBranch ? allocateBranch(startRow, endRow) : parentColumn;
+    record(column, startRow, endRow);
     segments.push({
       startNodeId: node.id,
-      count: ids.length,
-      column: col,
+      count,
+      column,
       startRow,
-      parentColumn,
-      forkRow,
+      parentColumn: isBranch ? parentColumn : null,
+      forkRow: isBranch ? forkRow : null,
       active: ids.some((id) => activeIds.has(id)),
     });
     if (cur.children.length > 1) {
-      const myForkRow = startRow + ids.length - 1;
-      cur.children.forEach((child, i) => {
-        const childCol = i === 0 ? col : nextCol();
-        build(
-          child,
-          childCol,
-          myForkRow + 1,
-          i === 0 ? null : col,
-          i === 0 ? null : myForkRow,
-        );
-      });
+      const fr = endRow;
+      cur.children.forEach((child, i) =>
+        build(child, fr + 1, column, fr, i !== 0),
+      );
     }
   };
 
-  roots.forEach((root) => build(root, nextCol(), 0, null, null));
+  roots.forEach((root) => build(root, 0, 0, null, false));
 
-  const columns = column + 1;
-  const rows = segments.reduce(
-    (m, s) => Math.max(m, s.startRow + s.count),
-    0,
-  );
-  return { segments, columns, rows };
+  const cols = segments.map((s) => s.column);
+  const minCol = Math.min(0, ...cols);
+  const maxCol = Math.max(0, ...cols);
+  const rows = segments.reduce((m, s) => Math.max(m, s.startRow + s.count), 0);
+  return { segments, minCol, maxCol, rows };
 }
 
 export function TreeMap({
@@ -102,16 +129,16 @@ export function TreeMap({
   onClose,
 }: TreeMapProps) {
   const [selected, setSelected] = useState<Segment | null>(null);
-  const { segments, columns, rows } = useMemo(
+  const { segments, minCol, maxCol, rows } = useMemo(
     () => layout(tree.roots, activeIds),
     [tree, activeIds],
   );
 
   if (!open) return null;
 
-  const colX = (c: number) => PAD + c * COL;
+  const colX = (c: number) => PAD + (c - minCol) * COL;
   const rowY = (r: number) => PAD + r * ROW;
-  const width = Math.max(columns * COL + PAD, 200);
+  const width = Math.max((maxCol - minCol) * COL + PAD * 2, 200);
   const height = Math.max(rows * ROW + PAD, 200);
 
   return (
@@ -135,12 +162,12 @@ export function TreeMap({
             No conversation yet.
           </p>
         ) : (
-          <svg width={width} height={height} className="select-none">
+          <svg width={width} height={height} className="mx-auto select-none">
             {segments.map((seg) => {
               const x = colX(seg.column);
               const top = rowY(seg.startRow);
               const bottom = rowY(seg.startRow + seg.count - 1);
-              const color = COLORS[seg.column % COLORS.length];
+              const color = colorFor(seg.column);
               const isSel = selected?.startNodeId === seg.startNodeId;
               const opacity = seg.active || isSel ? 1 : 0.45;
               return (
@@ -149,7 +176,6 @@ export function TreeMap({
                   onClick={() => setSelected(seg)}
                   className="cursor-pointer"
                 >
-                  {/* connector from the parent fork */}
                   {seg.parentColumn != null && seg.forkRow != null && (
                     <path
                       d={`M ${colX(seg.parentColumn)} ${rowY(seg.forkRow)} C ${colX(seg.parentColumn)} ${top} ${x} ${rowY(seg.forkRow)} ${x} ${top}`}
@@ -159,7 +185,6 @@ export function TreeMap({
                       opacity={opacity}
                     />
                   )}
-                  {/* the branch line (length ∝ turns) */}
                   <line
                     x1={x}
                     y1={top}
@@ -170,7 +195,6 @@ export function TreeMap({
                     strokeLinecap="round"
                     opacity={opacity}
                   />
-                  {/* a dot per turn */}
                   {Array.from({ length: seg.count }).map((_, i) => (
                     <circle
                       key={i}
@@ -181,7 +205,6 @@ export function TreeMap({
                       opacity={opacity}
                     />
                   ))}
-                  {/* wide transparent hit area for easy tapping */}
                   <line
                     x1={x}
                     y1={top - 8}
@@ -197,7 +220,6 @@ export function TreeMap({
         )}
       </div>
 
-      {/* Action sheet for the tapped branch. */}
       {selected && (
         <div className="border-t border-border bg-card p-4">
           <p className="mb-3 text-sm text-muted-foreground">
