@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
-import type { ConversationTree, TreeNode } from '@/domain/models';
+import type { ConversationTree, RecallBlock, TreeNode } from '@/domain/models';
+import { getRecallEnabled } from '@/features/settings/uiPrefs';
 
 const VIRTUAL_ROOT = 0;
 // Selection sentinel: "no branch chosen here — stop and continue from this turn".
@@ -120,6 +121,7 @@ export function useConversation(reloadSignal: number) {
   const [error, setError] = useState<string | null>(null);
   const [contextWindow, setContextWindow] = useState<number | null>(null);
   const [streaming, setStreaming] = useState<Streaming | null>(null);
+  const [recall, setRecall] = useState<RecallBlock | null>(null);
   // Index kept in a ref so it's fresh synchronously after a load (selectPathTo
   // runs right after) while still triggering re-render via the `version` bump.
   const indexRef = useRef<NodeIndex>(
@@ -168,17 +170,22 @@ export function useConversation(reloadSignal: number) {
   const runStream = useCallback(
     async (
       userText: string,
-      stream: (onToken: (c: string) => void) => Promise<{
+      stream: (
+        onToken: (c: string) => void,
+        onRecall: (block: RecallBlock) => void,
+      ) => Promise<{
         id: number | null;
         contextWindow: number | null;
       }>,
     ) => {
       setSending(true);
       setError(null);
+      setRecall(null);
       setStreaming({ user: userText, reply: '' });
       try {
-        const res = await stream((c) =>
-          setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
+        const res = await stream(
+          (c) => setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
+          (block) => setRecall(block),
         );
         await load();
         if (res.id != null) selectPathTo(res.id);
@@ -188,6 +195,7 @@ export function useConversation(reloadSignal: number) {
       } finally {
         setSending(false);
         setStreaming(null);
+        setRecall(null);
       }
     },
     [load, selectPathTo],
@@ -197,11 +205,17 @@ export function useConversation(reloadSignal: number) {
     (message: string) => {
       const trimmed = message.trim();
       if (!trimmed) return;
-      void runStream(trimmed, (onToken) =>
+      void runStream(trimmed, (onToken, onRecall) =>
         api.sendMessageStream(
           // Active leaf to continue from (omit for a brand-new conversation).
-          { message: trimmed, parentTurnId: leafRef.current ?? undefined },
+          {
+            message: trimmed,
+            parentTurnId: leafRef.current ?? undefined,
+            recall: getRecallEnabled(),
+          },
           onToken,
+          undefined,
+          onRecall,
         ),
       );
     },
@@ -217,16 +231,19 @@ export function useConversation(reloadSignal: number) {
     ) => {
       const trimmed = message.trim();
       if (!trimmed) return;
-      void runStream(trimmed, (onToken) =>
+      void runStream(trimmed, (onToken, onRecall) =>
         api.branchMessage(
           {
             parentTurnId,
             message: trimmed,
             paragraphIndex,
+            recall: getRecallEnabled(),
             // "Without context" → fresh branch, no prior turns injected.
             ...(withContext ? {} : { contextTurns: 0 }),
           },
           onToken,
+          undefined,
+          onRecall,
         ),
       );
     },
@@ -308,6 +325,7 @@ export function useConversation(reloadSignal: number) {
     error,
     contextWindow,
     streaming,
+    recall,
     send,
     branch,
     switchSibling,

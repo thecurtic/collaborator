@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Loader2, Network } from 'lucide-react';
+import { Brain, ChevronLeft, ChevronRight, Loader2, Network } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { BranchTarget } from './branchTarget';
 import { Composer } from './Composer';
@@ -38,6 +38,7 @@ export function ChatView({
     error,
     contextWindow,
     streaming,
+    recall,
     send,
     branch,
     switchSibling,
@@ -307,6 +308,40 @@ export function ChatView({
                 );
               })}
             </>
+          )}
+
+          {/* Recalled memory block (ephemeral) shown above the in-flight reply. */}
+          {recall && (
+            <div className="rounded-xl border border-primary/30 bg-primary/5 px-3.5 py-2.5 text-sm">
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-primary">
+                <Brain className="h-3.5 w-3.5" />
+                Recalled memory
+                {recall.sources.length > 0 && (
+                  <span className="text-muted-foreground">
+                    · {recall.sources.length}{' '}
+                    {recall.sources.length === 1 ? 'source' : 'sources'}
+                  </span>
+                )}
+              </div>
+              <p className="whitespace-pre-wrap break-words text-card-foreground">
+                {recall.content}
+              </p>
+              {recall.sources.length > 0 && (
+                <details className="mt-2 text-xs text-muted-foreground">
+                  <summary className="cursor-pointer select-none">Sources</summary>
+                  <ul className="mt-1 space-y-1">
+                    {recall.sources.map((s) => (
+                      <li key={s.turnId} className="truncate">
+                        <span className="opacity-70">#{s.turnId}</span> {s.preview}
+                        {s.tags.length > 0 && (
+                          <span className="text-primary"> · {s.tags.join(', ')}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
           )}
 
           {/* Optimistic streaming overlay while a send/branch is in flight. */}

@@ -9,12 +9,14 @@ import {
   setDebugEnabled,
   setEndWord,
   setPiperVoice,
+  setRecallEnabled,
   setStopWord,
   setSttEngine,
   setTtsEngine,
   useDebugEnabled,
   useEndWord,
   usePiperVoice,
+  useRecallEnabled,
   useStopWord,
   useSttEngine,
   useTtsEngine,
@@ -27,6 +29,7 @@ interface SettingsSheetProps {
 
 export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
   const debug = useDebugEnabled();
+  const recall = useRecallEnabled();
   const ttsEngine = useTtsEngine();
   const sttEngine = useSttEngine();
   const piperVoice = usePiperVoice();
@@ -182,6 +185,35 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
               </select>
             </label>
           )}
+        </div>
+
+        {/* Memory / recall. */}
+        <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
+          <div className="pr-3">
+            <p className="text-sm font-medium">Memory (recall)</p>
+            <p className="text-xs text-muted-foreground">
+              Search past turns and inject relevant memories into context. Shown as
+              a recall block above the reply.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={recall}
+            aria-label="Memory recall"
+            onClick={() => setRecallEnabled(!recall)}
+            className={cn(
+              'relative h-6 w-11 shrink-0 rounded-full transition-colors',
+              recall ? 'bg-primary' : 'bg-muted',
+            )}
+          >
+            <span
+              className={cn(
+                'block h-5 w-5 rounded-full bg-white transition-transform',
+                recall ? 'translate-x-5' : 'translate-x-0.5',
+              )}
+            />
+          </button>
         </div>
 
         {/* Client-side preference. */}

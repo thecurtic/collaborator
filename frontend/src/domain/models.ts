@@ -73,6 +73,8 @@ export interface BranchInput {
   contextTurns?: number;
   commit?: boolean;
   mode?: 'voice' | 'text';
+  /** Opt-in: search memory and inject a synthesized recall block into context. */
+  recall?: boolean;
 }
 
 export interface HealthStatus {
@@ -91,8 +93,27 @@ export interface TurnsPage {
   contextWindow: number | null;
 }
 
+/** A turn that recall matched (shown as a source under the recall block). */
+export interface RecallSource {
+  turnId: number;
+  role: string;
+  tags: string[];
+  branchRootId: number | null;
+  similarity: number;
+  score: number;
+  preview: string;
+}
+
+/** Synthesized memory block injected into context (recall SSE event). */
+export interface RecallBlock {
+  content: string;
+  sources: RecallSource[];
+}
+
 export interface SendMessageInput {
   message: string;
+  /** Opt-in: search memory and inject a synthesized recall block into context. */
+  recall?: boolean;
   /**
    * The active leaf turn id to continue from (its ancestor chain = context).
    * Omit ONLY for a brand-new conversation; omitting on an existing convo starts

@@ -14,6 +14,7 @@ const VOICE_KEY = 'collaborator_piper_voice';
 const END_WORD_KEY = 'collaborator_end_word';
 const STOP_WORD_KEY = 'collaborator_stop_word';
 const STT_KEY = 'collaborator_stt_engine';
+const RECALL_KEY = 'collaborator_recall';
 
 export const DEFAULT_END_WORD = 'go';
 export const DEFAULT_STOP_WORD = 'stop';
@@ -67,6 +68,17 @@ export function setTtsEngine(value: TtsEngine): void {
 }
 export function useTtsEngine(): TtsEngine {
   return useSyncExternalStore(subscribe, getTtsEngine, () => 'piper');
+}
+
+// --- Recall (memory): inject synthesized memories into context (opt-in) ---
+export function getRecallEnabled(): boolean {
+  return read(RECALL_KEY) === '1';
+}
+export function setRecallEnabled(value: boolean): void {
+  write(RECALL_KEY, value ? '1' : '0');
+}
+export function useRecallEnabled(): boolean {
+  return useSyncExternalStore(subscribe, getRecallEnabled, () => false);
 }
 
 // --- Speech-to-text engine (server Whisper vs on-device Transformers.js) ---

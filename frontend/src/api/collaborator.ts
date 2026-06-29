@@ -2,6 +2,8 @@ import type {
   BranchInput,
   ConversationTree,
   HealthStatus,
+  RecallBlock,
+  RecallSource,
   SendMessageInput,
   SendMessageResult,
   TurnsPage,
@@ -65,9 +67,30 @@ function parseSseData(line: string): Record<string, unknown> | null {
  * token and return the assembled text plus the `done` event payload. Tolerates a
  * non-streaming JSON fallback.
  */
+function toRecallBlock(evt: Record<string, unknown>): RecallBlock {
+  const raw = Array.isArray(evt.sources) ? evt.sources : [];
+  const sources: RecallSource[] = raw.map((s) => {
+    const o = s as Record<string, unknown>;
+    return {
+      turnId: typeof o.turn_id === 'number' ? o.turn_id : 0,
+      role: typeof o.role === 'string' ? o.role : '',
+      tags: Array.isArray(o.tags) ? (o.tags as string[]) : [],
+      branchRootId: typeof o.branch_root_id === 'number' ? o.branch_root_id : null,
+      similarity: typeof o.similarity === 'number' ? o.similarity : 0,
+      score: typeof o.score === 'number' ? o.score : 0,
+      preview: typeof o.preview === 'string' ? o.preview : '',
+    };
+  });
+  return {
+    content: typeof evt.content === 'string' ? evt.content : '',
+    sources,
+  };
+}
+
 async function consumeStream(
   res: Response,
   onToken: (chunk: string) => void,
+  onRecall?: (block: RecallBlock) => void,
 ): Promise<{ text: string; done: Record<string, unknown> }> {
   const contentType = res.headers.get('content-type') ?? '';
   if (!contentType.includes('text/event-stream')) {
@@ -96,6 +119,8 @@ async function consumeStream(
         if (evt.type === 'token' && typeof evt.content === 'string') {
           text += evt.content;
           onToken(evt.content);
+        } else if (evt.type === 'recall') {
+          onRecall?.(toRecallBlock(evt));
         } else if (evt.type === 'done') {
           done = evt;
         } else if (evt.type === 'error') {
@@ -143,12 +168,14 @@ export interface CollaboratorApi {
     input: SendMessageInput,
     onToken: (chunk: string) => void,
     signal?: AbortSignal,
+    onRecall?: (block: RecallBlock) => void,
   ): Promise<SendStreamResult>;
   /** Branch from a turn (or paragraph), streaming the reply like sendMessageStream. */
   branchMessage(
     input: BranchInput,
     onToken: (chunk: string) => void,
     signal?: AbortSignal,
+    onRecall?: (block: RecallBlock) => void,
   ): Promise<BranchStreamResult>;
   /** Full conversation tree (for branch navigation / metro map). */
   getTree(): Promise<ConversationTree>;
@@ -207,6 +234,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
     input: SendMessageInput,
     onToken: (chunk: string) => void,
     signal?: AbortSignal,
+    onRecall?: (block: RecallBlock) => void,
   ): Promise<SendStreamResult> {
     const res = await requestStream('/api/messages', {
       method: 'POST',
@@ -218,10 +246,11 @@ class HttpCollaboratorApi implements CollaboratorApi {
         commit: input.commit,
         user_id: input.userId,
         mode: input.mode,
+        recall: input.recall,
       }),
       signal,
     });
-    const { text, done } = await consumeStream(res, onToken);
+    const { text, done } = await consumeStream(res, onToken, onRecall);
     return {
       id: numOrNull(done.id),
       contextWindow: numOrNull(done.context_turns_used),
@@ -233,6 +262,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
     input: BranchInput,
     onToken: (chunk: string) => void,
     signal?: AbortSignal,
+    onRecall?: (block: RecallBlock) => void,
   ): Promise<BranchStreamResult> {
     const res = await requestStream(`/api/branches/${input.parentTurnId}`, {
       method: 'POST',
@@ -242,10 +272,11 @@ class HttpCollaboratorApi implements CollaboratorApi {
         context_turns: input.contextTurns,
         commit: input.commit,
         mode: input.mode,
+        recall: input.recall,
       }),
       signal,
     });
-    const { text, done } = await consumeStream(res, onToken);
+    const { text, done } = await consumeStream(res, onToken, onRecall);
     return {
       id: numOrNull(done.id),
       userTurnId: numOrNull(done.user_turn_id),
