@@ -1,15 +1,18 @@
 import type {
+  BranchInput,
+  ConversationTree,
   HealthStatus,
   SendMessageInput,
   SendMessageResult,
   TurnsPage,
 } from '@/domain/models';
-import { toHealth, toSendResult, toTurnsPage } from '@/domain/adapters';
+import { toHealth, toSendResult, toTree, toTurnsPage } from '@/domain/adapters';
 import { ApiRequestError, request, requestStream } from './http';
 import type {
   ApiHealth,
   ApiSendMessageResponse,
   ApiTranscription,
+  ApiTree,
   ApiTurnsResponse,
 } from './types';
 
@@ -22,6 +25,16 @@ export interface TranscribeOptions {
 export interface ListTurnsParams {
   limit?: number;
   offset?: number;
+}
+
+/** Final result of a streamed branch, after the `done` event. */
+export interface BranchStreamResult {
+  id: number | null;
+  userTurnId: number | null;
+  parentTurnId: number | null;
+  paragraphIndex: number | null;
+  contextWindow: number | null;
+  text: string;
 }
 
 /** Final result of a streamed send, after the `done` event. */
@@ -45,6 +58,62 @@ function parseSseData(line: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Consume an SSE stream from /api/messages or /api/branches: fire `onToken` per
+ * token and return the assembled text plus the `done` event payload. Tolerates a
+ * non-streaming JSON fallback.
+ */
+async function consumeStream(
+  res: Response,
+  onToken: (chunk: string) => void,
+): Promise<{ text: string; done: Record<string, unknown> }> {
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!contentType.includes('text/event-stream')) {
+    const data = (await res.json()) as ApiSendMessageResponse;
+    const full = data.response ?? '';
+    if (full) onToken(full);
+    return { text: full, done: { id: data.id ?? null } };
+  }
+  if (!res.body) throw new ApiRequestError('No response stream', 0);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  let done: Record<string, unknown> = {};
+  try {
+    for (;;) {
+      const { done: streamDone, value } = await reader.read();
+      if (streamDone) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        const evt = parseSseData(line);
+        if (!evt) continue;
+        if (evt.type === 'token' && typeof evt.content === 'string') {
+          text += evt.content;
+          onToken(evt.content);
+        } else if (evt.type === 'done') {
+          done = evt;
+        } else if (evt.type === 'error') {
+          throw new ApiRequestError(
+            typeof evt.detail === 'string' ? evt.detail : 'Stream error',
+            500,
+          );
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return { text, done };
+}
+
+function numOrNull(v: unknown): number | null {
+  return typeof v === 'number' ? v : null;
 }
 
 /**
@@ -75,6 +144,14 @@ export interface CollaboratorApi {
     onToken: (chunk: string) => void,
     signal?: AbortSignal,
   ): Promise<SendStreamResult>;
+  /** Branch from a turn (or paragraph), streaming the reply like sendMessageStream. */
+  branchMessage(
+    input: BranchInput,
+    onToken: (chunk: string) => void,
+    signal?: AbortSignal,
+  ): Promise<BranchStreamResult>;
+  /** Full conversation tree (for branch navigation / metro map). */
+  getTree(): Promise<ConversationTree>;
   discardTurn(turnId: number): Promise<void>;
 
   /** Transcribe recorded audio to text (Whisper, backend). */
@@ -138,60 +215,43 @@ class HttpCollaboratorApi implements CollaboratorApi {
       }),
       signal,
     });
+    const { text, done } = await consumeStream(res, onToken);
+    return {
+      id: numOrNull(done.id),
+      contextWindow: numOrNull(done.context_turns_used),
+      text,
+    };
+  }
 
-    // Drift tolerance: the backend's streaming one-pager describes SSE, but the
-    // as-built endpoint currently returns a single JSON object. If it isn't an
-    // event-stream, surface the full response at once. This upgrades to true
-    // live tokens automatically once the backend emits text/event-stream.
-    const contentType = res.headers.get('content-type') ?? '';
-    if (!contentType.includes('text/event-stream')) {
-      const data = (await res.json()) as ApiSendMessageResponse;
-      const full = data.response ?? '';
-      if (full) onToken(full);
-      return { id: data.id ?? null, contextWindow: null, text: full };
-    }
+  async branchMessage(
+    input: BranchInput,
+    onToken: (chunk: string) => void,
+    signal?: AbortSignal,
+  ): Promise<BranchStreamResult> {
+    const res = await requestStream(`/api/branches/${input.parentTurnId}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        message: input.message,
+        paragraph_index: input.paragraphIndex,
+        context_turns: input.contextTurns,
+        commit: input.commit,
+        mode: input.mode,
+      }),
+      signal,
+    });
+    const { text, done } = await consumeStream(res, onToken);
+    return {
+      id: numOrNull(done.id),
+      userTurnId: numOrNull(done.user_turn_id),
+      parentTurnId: numOrNull(done.parent_turn_id),
+      paragraphIndex: numOrNull(done.paragraph_index),
+      contextWindow: numOrNull(done.context_turns_used),
+      text,
+    };
+  }
 
-    if (!res.body) throw new ApiRequestError('No response stream', 0);
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let text = '';
-    let id: number | null = null;
-    let contextWindow: number | null = null;
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        // SSE events are newline-delimited; keep the trailing partial line.
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-          const evt = parseSseData(line);
-          if (!evt) continue;
-          if (evt.type === 'token' && typeof evt.content === 'string') {
-            text += evt.content;
-            onToken(evt.content);
-          } else if (evt.type === 'done') {
-            if (typeof evt.id === 'number') id = evt.id;
-            if (typeof evt.context_turns_used === 'number') {
-              contextWindow = evt.context_turns_used;
-            }
-          } else if (evt.type === 'error') {
-            throw new ApiRequestError(
-              typeof evt.detail === 'string' ? evt.detail : 'Stream error',
-              500,
-            );
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-
-    return { id, contextWindow, text };
+  async getTree(): Promise<ConversationTree> {
+    return toTree(await request<ApiTree>('/api/tree'));
   }
 
   async discardTurn(turnId: number): Promise<void> {

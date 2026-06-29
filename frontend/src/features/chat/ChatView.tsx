@@ -1,74 +1,66 @@
-import { Loader2 } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef } from 'react';
-import type { Turn } from '@/domain/models';
+import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Composer } from './Composer';
-import { MessageBubble } from './MessageBubble';
-import { useChat } from './useChat';
-
-// Backend default context window (backend/config.yaml: default_context_window)
-// used as a fallback when the API doesn't report the window size.
-const DEFAULT_CONTEXT_WINDOW = 5;
+import { TreeBubble } from './TreeBubble';
+import { useConversation } from './useConversation';
 
 interface ChatViewProps {
-  /** Bumped to force a history reload (e.g. after returning from call mode). */
+  /** Bumped to force a reload (e.g. after returning from call mode). */
   reloadSignal?: number;
 }
 
+interface BranchTarget {
+  turnId: number;
+  paragraphIndex?: number;
+  label: string;
+}
+
 export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
-  const { turns, loading, sending, error, contextWindow, sendMessage, discardTurn, reload } =
-    useChat();
+  const { path, loading, sending, error, streaming, send, branch, switchSibling } =
+    useConversation(reloadSignal);
+  const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Whether the view is pinned to the bottom. When the user scrolls up (e.g. to
-  // re-read a streaming answer), we stop auto-following so we don't fight them.
   const pinnedRef = useRef(true);
 
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    pinnedRef.current = distanceFromBottom < 80;
+    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
-  const scrollToBottom = (behavior: ScrollBehavior) => {
-    pinnedRef.current = true;
-    bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
-  };
-
-  // Always open at the newest message: jump instantly (no top→bottom animation)
-  // on first load, on reload, and when returning to chat from a call.
+  // Jump to the newest message on load / reload / return.
   useLayoutEffect(() => {
-    if (!loading) scrollToBottom('auto');
+    if (!loading) {
+      pinnedRef.current = true;
+      bottomRef.current?.scrollIntoView({ block: 'end' });
+    }
   }, [loading, reloadSignal]);
 
-  // During an active session, follow new/streaming content — but only while the
-  // user hasn't scrolled up to read.
-  const lastTurn = turns[turns.length - 1];
-  const tailLength = lastTurn
-    ? lastTurn.message.length + lastTurn.response.length
-    : 0;
+  // Follow new/streaming content while pinned to the bottom.
   useEffect(() => {
     if (!loading && pinnedRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
-  }, [turns.length, tailLength, sending, loading]);
+  }, [path.length, streaming?.reply, sending, loading]);
 
-  // Reload history when asked (call mode persisted turns while we were away).
-  useEffect(() => {
-    if (reloadSignal > 0) void reload();
-  }, [reloadSignal, reload]);
+  const handleSend = (message: string) => {
+    if (branchTarget) {
+      branch(branchTarget.turnId, message, branchTarget.paragraphIndex);
+      setBranchTarget(null);
+    } else {
+      send(message);
+    }
+  };
 
-  // The backend feeds the model the most recent N committed turns; GET only
-  // returns committed turns, so the next message's context is simply the last N
-  // of what's shown. Highlight that group.
-  const windowSize = contextWindow ?? DEFAULT_CONTEXT_WINDOW;
-  const contextStart = Math.max(0, turns.length - windowSize);
-  const olderTurns = turns.slice(0, contextStart);
-  const contextTurns = turns.slice(contextStart);
-
-  const renderBubble = (turn: Turn) => (
-    <MessageBubble key={turn.id} turn={turn} onDiscard={discardTurn} />
-  );
+  const handleBranch = (
+    turnId: number,
+    paragraphIndex: number | undefined,
+    label: string,
+  ) => {
+    setBranchTarget({ turnId, paragraphIndex, label: label.slice(0, 80) });
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -83,7 +75,7 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading conversation…
             </div>
-          ) : turns.length === 0 ? (
+          ) : path.length === 0 && !streaming ? (
             <div className="py-16 text-center text-muted-foreground">
               <p className="text-lg font-medium text-foreground">
                 Start a conversation
@@ -93,17 +85,70 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
               </p>
             </div>
           ) : (
-            <>
-              {olderTurns.map(renderBubble)}
-
-              {contextTurns.length > 0 && (
-                <div className="flex flex-col gap-3 rounded-2xl border border-yellow-400/30 bg-yellow-300/10 p-3 sm:gap-4">
-                  <p className="text-[10px] font-medium uppercase tracking-wide text-yellow-600/90 dark:text-yellow-400/80">
-                    Included in your next message’s context
-                  </p>
-                  {contextTurns.map(renderBubble)}
+            path.map((entry) => {
+              const idx = entry.siblings.findIndex(
+                (s) => s.id === entry.node.id,
+              );
+              return (
+                <div key={entry.node.id} className="flex flex-col gap-1">
+                  {entry.siblings.length > 1 && (
+                    <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
+                      <button
+                        type="button"
+                        aria-label="Previous branch"
+                        onClick={() =>
+                          switchSibling(entry.parentId, entry.siblings, -1)
+                        }
+                        className="rounded p-0.5 hover:text-foreground active:scale-90"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </button>
+                      <span>
+                        {idx + 1} / {entry.siblings.length}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Next branch"
+                        onClick={() =>
+                          switchSibling(entry.parentId, entry.siblings, 1)
+                        }
+                        className="rounded p-0.5 hover:text-foreground active:scale-90"
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                  <TreeBubble node={entry.node} onBranch={handleBranch} />
                 </div>
-              )}
+              );
+            })
+          )}
+
+          {/* Optimistic streaming overlay while a send/branch is in flight. */}
+          {streaming && (
+            <>
+              <div className="flex w-full justify-end">
+                <div className="max-w-[85%] rounded-2xl bg-primary px-3.5 py-2.5 text-[15px] leading-relaxed text-primary-foreground sm:max-w-[80%] sm:text-sm">
+                  <p className="whitespace-pre-wrap break-words">
+                    {streaming.user}
+                  </p>
+                </div>
+              </div>
+              <div className="flex w-full justify-start">
+                <div className="max-w-[85%] rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:max-w-[80%] sm:text-sm">
+                  {streaming.reply ? (
+                    <p className="whitespace-pre-wrap break-words">
+                      {streaming.reply}
+                    </p>
+                  ) : (
+                    <span className="flex gap-1 py-1" aria-label="Responding">
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.3s]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.15s]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50" />
+                    </span>
+                  )}
+                </div>
+              </div>
             </>
           )}
 
@@ -118,7 +163,12 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
       )}
 
       <div className="mx-auto w-full max-w-3xl">
-        <Composer disabled={sending} onSend={(m) => void sendMessage(m)} />
+        <Composer
+          disabled={sending}
+          onSend={handleSend}
+          branchLabel={branchTarget?.label ?? null}
+          onCancelBranch={() => setBranchTarget(null)}
+        />
       </div>
     </div>
   );

@@ -35,6 +35,30 @@ export interface ApiTurn {
   model_name: string | null;
   token_count: number | null;
   tags: string | null;
+  // Branching (77ebdc7)
+  parent_turn_id?: number | null;
+  paragraph_index?: number | null;
+  paragraphs?: string[]; // assistant turns: content split on blank lines
+}
+
+/** A node in GET /api/tree (nested). */
+export interface ApiTreeNode {
+  id: number;
+  role: ApiRole;
+  content: string;
+  preview: string;
+  paragraphs?: string[];
+  parent_turn_id: number | null;
+  paragraph_index: number | null;
+  created_at?: string;
+  committed?: boolean | number;
+  children: ApiTreeNode[];
+}
+
+/** GET /api/tree */
+export interface ApiTree {
+  roots: ApiTreeNode[];
+  count: number;
 }
 
 /** GET /api/messages?limit&offset */

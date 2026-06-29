@@ -1,4 +1,4 @@
-import { Loader2, Mic, SendHorizontal, Square } from 'lucide-react';
+import { GitBranch, Loader2, Mic, SendHorizontal, Square, X } from 'lucide-react';
 import { type FormEvent, type KeyboardEvent, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
@@ -7,9 +7,17 @@ import { useRecorder } from '@/features/voice/useRecorder';
 interface ComposerProps {
   disabled: boolean;
   onSend: (message: string) => void;
+  /** When set, the next send branches from this point (shown as a chip). */
+  branchLabel?: string | null;
+  onCancelBranch?: () => void;
 }
 
-export function Composer({ disabled, onSend }: ComposerProps) {
+export function Composer({
+  disabled,
+  onSend,
+  branchLabel = null,
+  onCancelBranch,
+}: ComposerProps) {
   const [value, setValue] = useState('');
   const [transcribing, setTranscribing] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
@@ -65,6 +73,22 @@ export function Composer({ disabled, onSend }: ComposerProps) {
 
   return (
     <div className="px-safe pb-safe border-t border-border bg-background">
+      {branchLabel && (
+        <div className="flex items-center gap-2 px-4 pt-2 text-xs text-muted-foreground">
+          <GitBranch className="h-3.5 w-3.5 shrink-0 text-primary" />
+          <span className="min-w-0 flex-1 truncate">
+            Branching from: <span className="text-foreground">{branchLabel}</span>
+          </span>
+          <button
+            type="button"
+            aria-label="Cancel branch"
+            onClick={onCancelBranch}
+            className="shrink-0 rounded p-0.5 hover:text-foreground active:scale-90"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
       {error && (
         <p className="px-4 pt-2 text-xs text-destructive">{error}</p>
       )}

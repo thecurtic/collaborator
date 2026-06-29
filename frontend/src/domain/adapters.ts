@@ -1,12 +1,16 @@
 import type {
   ApiHealth,
   ApiSendMessageResponse,
+  ApiTree,
+  ApiTreeNode,
   ApiTurn,
   ApiTurnsResponse,
 } from '@/api/types';
 import type {
+  ConversationTree,
   HealthStatus,
   SendMessageResult,
+  TreeNode,
   Turn,
   TurnsPage,
 } from './models';
@@ -39,7 +43,27 @@ export function toTurn(api: ApiTurn): Turn {
     modelName: api.model_name,
     tokenCount: api.token_count,
     tags: parseTags(api.tags),
+    parentTurnId: api.parent_turn_id ?? null,
+    paragraphIndex: api.paragraph_index ?? null,
+    paragraphs: api.paragraphs ?? [],
   };
+}
+
+export function toTreeNode(api: ApiTreeNode): TreeNode {
+  return {
+    id: api.id,
+    role: api.role,
+    content: api.content,
+    preview: api.preview,
+    paragraphs: api.paragraphs ?? [],
+    parentTurnId: api.parent_turn_id ?? null,
+    paragraphIndex: api.paragraph_index ?? null,
+    children: (api.children ?? []).map(toTreeNode),
+  };
+}
+
+export function toTree(api: ApiTree): ConversationTree {
+  return { roots: (api.roots ?? []).map(toTreeNode), count: api.count };
 }
 
 export function toTurnsPage(api: ApiTurnsResponse): TurnsPage {

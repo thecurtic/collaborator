@@ -28,9 +28,45 @@ export interface Turn {
   /** Normalized to an array even though the API sends a single string today. */
   tags: string[];
 
+  // --- Branching ---
+  /** Fork point (the turn this one branched from); null = root. */
+  parentTurnId: number | null;
+  /** Which paragraph of the parent this branched from, if any. */
+  paragraphIndex: number | null;
+  /** Assistant turns: response split on blank lines (branch affordances). */
+  paragraphs: string[];
+
   // --- Reserved for INTENTS.md recall features (not yet served) ---
   relevanceScore?: number;
   embeddingId?: number;
+}
+
+/** A node in the conversation tree (GET /api/tree). */
+export interface TreeNode {
+  id: number;
+  role: Role;
+  /** Display text (user input or assistant response). */
+  content: string;
+  preview: string;
+  paragraphs: string[];
+  parentTurnId: number | null;
+  paragraphIndex: number | null;
+  children: TreeNode[];
+}
+
+export interface ConversationTree {
+  roots: TreeNode[];
+  count: number;
+}
+
+export interface BranchInput {
+  parentTurnId: number;
+  message: string;
+  /** 0-based paragraph of the parent to branch from (omit to branch the turn). */
+  paragraphIndex?: number;
+  contextTurns?: number;
+  commit?: boolean;
+  mode?: 'voice' | 'text';
 }
 
 export interface HealthStatus {
