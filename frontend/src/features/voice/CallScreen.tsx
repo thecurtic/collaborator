@@ -22,56 +22,88 @@ function Turn({
   role,
   text,
   live,
+  speaking,
+  readChars,
   onSkip,
 }: {
   role: 'user' | 'assistant';
   text: string;
   live?: boolean;
-  /** Tap a paragraph to (re)speak from there. Assistant, completed turns only. */
+  /** While true, render read-along (fade the not-yet-spoken remainder). */
+  speaking?: boolean;
+  readChars?: number;
+  /** Tap a paragraph to (re)speak from there. Assistant turns, when idle. */
   onSkip?: (paragraphIndex: number) => void;
 }) {
-  const paras = role === 'assistant' && onSkip ? text.split(/\n{2,}/) : null;
+  const label = role === 'user' ? 'You' : 'Assistant';
+
+  let body;
+  if (role === 'assistant' && speaking) {
+    const n = Math.min(Math.max(readChars ?? 0, 0), text.length);
+    body = (
+      <p className="whitespace-pre-wrap text-[17px] leading-relaxed">
+        <span className="text-foreground">{text.slice(0, n)}</span>
+        <span className="text-foreground opacity-40">{text.slice(n)}</span>
+      </p>
+    );
+  } else if (role === 'assistant' && onSkip) {
+    body = (
+      <div className="space-y-2">
+        {text.split(/\n{2,}/).map((p, i) => (
+          <p
+            key={i}
+            onClick={() => onSkip(i)}
+            title="Tap to play from here"
+            className="cursor-pointer whitespace-pre-wrap text-[17px] leading-relaxed text-foreground transition hover:text-primary active:opacity-70"
+          >
+            {p}
+          </p>
+        ))}
+      </div>
+    );
+  } else {
+    body = (
+      <p
+        className={cn(
+          'whitespace-pre-wrap text-[17px] leading-relaxed',
+          live ? 'text-foreground/80' : 'text-foreground',
+        )}
+      >
+        {text}
+      </p>
+    );
+  }
+
   return (
     <div>
       <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {role === 'user' ? 'You' : 'Assistant'}
+        {label}
       </p>
-      {paras ? (
-        <div className="space-y-2">
-          {paras.map((p, i) => (
-            <p
-              key={i}
-              onClick={() => onSkip?.(i)}
-              title="Tap to play from here"
-              className="cursor-pointer whitespace-pre-wrap text-[17px] leading-relaxed text-foreground transition hover:text-primary active:opacity-70"
-            >
-              {p}
-            </p>
-          ))}
-        </div>
-      ) : (
-        <p
-          className={cn(
-            'whitespace-pre-wrap text-[17px] leading-relaxed',
-            live ? 'text-foreground/80' : 'text-foreground',
-          )}
-        >
-          {text}
-        </p>
-      )}
+      {body}
     </div>
   );
 }
 
 export function CallScreen({ open, onClose }: CallScreenProps) {
-  const { phase, partial, response, transcript, error, logs, endTurn, end, skipTo } =
-    useCall(open, onClose);
+  const {
+    phase,
+    partial,
+    transcript,
+    speakingId,
+    spokenChars,
+    speakBase,
+    error,
+    logs,
+    endTurn,
+    end,
+    skipTo,
+  } = useCall(open, onClose);
   const showDebug = useDebugEnabled();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [transcript.length, partial, response]);
+  }, [transcript.length, partial, spokenChars]);
 
   if (!open) return null;
 
@@ -117,23 +149,25 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
       {/* Scrollable conversation — readable while listening or speaking. */}
       <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-5">
         <div className="mx-auto flex max-w-md flex-col gap-5">
-          {transcript.map((t) => (
-            <Turn
-              key={t.id}
-              role={t.role}
-              text={t.text}
-              onSkip={
-                t.role === 'assistant'
-                  ? (i) => skipTo(t.text, i)
-                  : undefined
-              }
-            />
-          ))}
+          {transcript.map((t) => {
+            const isSpeaking = t.id === speakingId;
+            return (
+              <Turn
+                key={t.id}
+                role={t.role}
+                text={t.text}
+                speaking={isSpeaking}
+                readChars={speakBase + spokenChars}
+                onSkip={
+                  t.role === 'assistant' && !isSpeaking
+                    ? (i) => skipTo(t.id, t.text, i)
+                    : undefined
+                }
+              />
+            );
+          })}
           {phase === 'listening' && partial && (
             <Turn role="user" text={partial} live />
-          )}
-          {phase === 'responding' && response && (
-            <Turn role="assistant" text={response} live />
           )}
           {error && <p className="text-sm text-destructive">{error}</p>}
           <div ref={bottomRef} />

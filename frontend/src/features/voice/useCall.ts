@@ -37,7 +37,7 @@ function stripTrailingWord(text: string, word: string): string {
 interface Controls {
   endTurn: () => void;
   end: () => void;
-  skipTo: (text: string, fromParagraph: number) => void;
+  skipTo: (turnId: number, text: string, fromParagraph: number) => void;
 }
 
 /**
@@ -50,8 +50,11 @@ interface Controls {
 export function useCall(open: boolean, onClose: () => void) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
   const [partial, setPartial] = useState('');
-  const [response, setResponse] = useState('');
   const [transcript, setTranscript] = useState<CallTurn[]>([]);
+  // Read-along: which transcript turn is being spoken, and how far.
+  const [speakingId, setSpeakingId] = useState<number | null>(null);
+  const [spokenChars, setSpokenChars] = useState(0);
+  const [speakBase, setSpeakBase] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const controlsRef = useRef<Controls | null>(null);
@@ -61,12 +64,20 @@ export function useCall(open: boolean, onClose: () => void) {
 
     let active = true;
     let turnId = 0;
-    const pushTurn = (role: CallTurn['role'], text: string) => {
+    const pushTurn = (role: CallTurn['role'], text: string): number => {
       turnId += 1;
       const id = turnId;
       setTranscript((prev) => [...prev, { id, role, text }]);
+      return id;
     };
+    const updateTurn = (id: number, text: string) =>
+      setTranscript((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, text } : t)),
+      );
     setTranscript([]);
+    setSpeakingId(null);
+    setSpokenChars(0);
+    setSpeakBase(0);
     let stream: MediaStream | null = null;
     let pcm: PcmStream | null = null;
     let transcriber: TranscriptionStream | null = null;
@@ -139,7 +150,6 @@ export function useCall(open: boolean, onClose: () => void) {
       if (!active || !stream) return;
       finalizing = false;
       setPartial('');
-      setResponse('');
       // Show a brief connecting state — don't signal "listening" until the socket
       // is open and PCM is actually flowing, or we'd drop the start of speech.
       setPhase('connecting');
@@ -208,18 +218,28 @@ export function useCall(open: boolean, onClose: () => void) {
       }
     };
 
+    // Speaking finished naturally → resume listening.
+    const onSpeechIdle = () => {
+      if (!active) return;
+      setSpeakingId(null);
+      setSpokenChars(0);
+      setSpeakBase(0);
+      stopKws();
+      void listen();
+    };
+
     const respond = async (text: string) => {
       if (!active) return;
       log(`responding to: "${text.slice(0, 40)}"`);
       pushTurn('user', text); // user's turn joins the transcript
+      const aid = pushTurn('assistant', ''); // grows as the reply streams
       setPartial('');
-      setResponse('');
+      setSpeakingId(aid);
+      setSpeakBase(0);
+      setSpokenChars(0);
       setPhase('responding');
-      queue = createSpeechSession(() => {
-        if (active) {
-          stopKws();
-          void listen();
-        }
+      queue = createSpeechSession(onSpeechIdle, (chars) => {
+        if (active) setSpokenChars(chars);
       });
       // Barge-in: spot the stop word while the assistant is speaking. Strict
       // threshold so the agent's own audio / room noise doesn't false-trigger.
@@ -238,7 +258,7 @@ export function useCall(open: boolean, onClose: () => void) {
           { message: text, commit: true, mode: 'voice' },
           (c) => {
             full += c;
-            setResponse((prev) => prev + c);
+            updateTurn(aid, full);
             queue?.push(c);
           },
           streamAbort.signal,
@@ -251,12 +271,9 @@ export function useCall(open: boolean, onClose: () => void) {
           stopKws();
           setError(err instanceof Error ? err.message : 'Something went wrong.');
           setPhase('error');
-          return;
         }
-        // aborted (barge-in): keep whatever was said so far
+        // aborted (barge-in): interrupt() handles the loop; reply text is kept
       }
-      if (full.trim()) pushTurn('assistant', full); // reply joins the transcript
-      setResponse('');
     };
 
     const interrupt = () => {
@@ -264,15 +281,20 @@ export function useCall(open: boolean, onClose: () => void) {
       streamAbort?.abort();
       queue?.stop();
       queue = null;
+      setSpeakingId(null);
+      setSpokenChars(0);
+      setSpeakBase(0);
       if (active) void listen();
     };
 
-    // Tap-to-skip/replay: re-speak a (completed) assistant turn from a paragraph.
-    const speakFrom = (text: string, fromParagraph: number) => {
+    // Tap-to-skip/replay: re-speak an assistant turn from a given paragraph.
+    const speakFrom = (turnId: number, text: string, fromParagraph: number) => {
       if (!active) return;
       const paras = text.split(/\n{2,}/);
       const slice = paras.slice(Math.max(0, fromParagraph)).join('\n\n').trim();
       if (!slice) return;
+      const para = paras[fromParagraph] ?? '';
+      const base = para ? Math.max(0, text.indexOf(para)) : 0;
       log(`skip → ¶${fromParagraph}`);
       stopKws();
       if (maxTimer) window.clearTimeout(maxTimer);
@@ -282,13 +304,12 @@ export function useCall(open: boolean, onClose: () => void) {
       transcriber = null;
       queue?.stop();
       setPartial('');
-      setResponse('');
+      setSpeakingId(turnId);
+      setSpeakBase(base);
+      setSpokenChars(0);
       setPhase('responding');
-      queue = createSpeechSession(() => {
-        if (active) {
-          stopKws();
-          void listen();
-        }
+      queue = createSpeechSession(onSpeechIdle, (chars) => {
+        if (active) setSpokenChars(chars);
       });
       startKws(
         [stopWord],
@@ -356,16 +377,18 @@ export function useCall(open: boolean, onClose: () => void) {
   const endTurn = useCallback(() => controlsRef.current?.endTurn(), []);
   const end = useCallback(() => controlsRef.current?.end(), []);
   const skipTo = useCallback(
-    (text: string, fromParagraph: number) =>
-      controlsRef.current?.skipTo(text, fromParagraph),
+    (turnId: number, text: string, fromParagraph: number) =>
+      controlsRef.current?.skipTo(turnId, text, fromParagraph),
     [],
   );
 
   return {
     phase,
     partial,
-    response,
     transcript,
+    speakingId,
+    spokenChars,
+    speakBase,
     error,
     logs,
     endTurn,
