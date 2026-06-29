@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from config import get_config, resolve_path
 from data.agents_md import load_agents_md
 from db import (
-    init_db, create_turn, get_recent_turns, update_turn_committed, get_turn_by_id,
+    init_db, create_turn, get_recent_turns, get_turn_by_id, delete_turn,
     get_ancestor_chain, get_latest_turn_id, get_turn_tree,
 )
 from inference import call_llm_streaming, call_llm_non_streaming, stream_llm_tokens
@@ -67,9 +67,13 @@ class MessagesListResponse(BaseModel):
     context_turns_used: Optional[int] = None
 
 
-class DiscardTurnResponse(BaseModel):
+class DeleteTurnResponse(BaseModel):
     id: int
-    committed: bool
+    deleted: bool
+    removed_turn_ids: List[int]
+    removed_count: int
+    reparented_children: List[int] = []
+    reparented_to: Optional[int] = None
 
 
 class BranchRequest(BaseModel):
@@ -384,30 +388,40 @@ async def get_messages(
 
 
 @app.delete("/api/messages/{turn_id}")
-async def discard_turn(
+async def delete_message(
     turn_id: int,
+    subtree: bool = False,
     passkey: Optional[str] = Header(None, alias="X-Passkey")
 ):
-    """Discard a specific turn (remove from context)."""
+    """Hard-delete a turn (the row is removed; ids are not reused).
+
+    - default: delete just this turn; its direct children are reparented to this
+      turn's parent (they rise one level rather than being orphaned).
+    - ?subtree=true: delete this turn and all its descendants (a whole branch) —
+      this is the metro-map "delete branch" action.
+    """
     _require_auth(passkey)
 
     try:
         db_path = _resolve_db_path(passkey)
 
         conn = sqlite3.connect(db_path)
-
-        turn = get_turn_by_id(conn, turn_id)
-        if not turn:
+        try:
+            result = delete_turn(conn, turn_id, subtree=subtree)
+        finally:
             conn.close()
+
+        if result is None:
             raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
 
-        result = update_turn_committed(conn, turn_id, committed=False)
-        conn.close()
-        
-        if not result:
-            raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
-        
-        return DiscardTurnResponse(id=turn_id, committed=False)
+        return DeleteTurnResponse(
+            id=turn_id,
+            deleted=True,
+            removed_turn_ids=result["removed_turn_ids"],
+            removed_count=len(result["removed_turn_ids"]),
+            reparented_children=result["reparented_children"],
+            reparented_to=result["reparented_to"],
+        )
     except HTTPException:
         raise
     except Exception as e:

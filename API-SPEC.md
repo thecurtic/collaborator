@@ -172,22 +172,39 @@ X-Passkey: <your-passkey>
 
 ---
 
-### 4. Discard Turn (Remove from Context)
+### 4. Delete Turn
 ```
 DELETE /api/messages/{turn_id}
+DELETE /api/messages/{turn_id}?subtree=true
 X-Passkey: <your-passkey>
 ```
 
+**Hard delete** — the row is removed from the DB (ids are not reused, so order is
+still derivable from id, just with gaps).
+
 **Path Parameters:**
-- `turn_id` (required): ID of the turn to discard
+- `turn_id` (required): ID of the turn to delete
+
+**Query Parameters:**
+- `subtree` (optional, default `false`):
+  - `false` — delete just this turn; its direct children are **reparented to this
+    turn's parent** (they rise one level instead of being orphaned).
+  - `true` — delete this turn and **all descendants** (a whole branch). This is the
+    metro-map "delete branch" action.
 
 **Response (200 OK)**
 ```json
 {
-  "id": 1,
-  "committed": false
+  "id": 45,
+  "deleted": true,
+  "removed_turn_ids": [45],
+  "removed_count": 1,
+  "reparented_children": [46, 47],
+  "reparented_to": 44
 }
 ```
+For a subtree delete, `removed_turn_ids` lists every removed turn and
+`reparented_children` is empty. Returns `404` if the turn doesn't exist.
 
 ---
 

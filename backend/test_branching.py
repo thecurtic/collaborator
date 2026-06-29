@@ -141,9 +141,36 @@ def test_branch_endpoint_and_tree_api():
     print("✓ branch endpoint, tree API, and validation all work")
 
 
+def test_delete_reparent_vs_subtree():
+    """Single delete lifts children to the grandparent; subtree delete removes all."""
+    main, db = _fresh_env()
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    root = db.create_turn(conn, None, "user", "root")
+    mid = db.create_turn(conn, None, "assistant", "mid", parent_turn_id=root["id"])
+    leafA = db.create_turn(conn, None, "user", "leafA", parent_turn_id=mid["id"])
+    leafB = db.create_turn(conn, None, "user", "leafB", parent_turn_id=mid["id"])
+
+    # Single delete of mid -> leafA/leafB reparent to root, mid row removed.
+    res = db.delete_turn(conn, mid["id"])
+    assert res["removed_turn_ids"] == [mid["id"]]
+    assert res["reparented_to"] == root["id"]
+    assert db.get_turn_by_id(conn, mid["id"]) is None
+    assert db.get_turn_by_id(conn, leafA["id"])["parent_turn_id"] == root["id"]
+    assert db.get_turn_by_id(conn, leafB["id"])["parent_turn_id"] == root["id"]
+
+    # Now subtree-delete root -> everything goes.
+    res2 = db.delete_turn(conn, root["id"], subtree=True)
+    assert set(res2["removed_turn_ids"]) == {root["id"], leafA["id"], leafB["id"]}
+    assert db.get_turn_by_id(conn, leafA["id"]) is None
+    assert db.delete_turn(conn, 999999) is None   # missing -> None
+    conn.close()
+    print("✓ delete reparents (single) and cascades (subtree)")
+
+
 if __name__ == "__main__":
     test_migration_backfills_linear_chain()
     test_ancestor_chain_inclusive_and_ordered()
     test_tree_structure()
     test_branch_endpoint_and_tree_api()
+    test_delete_reparent_vs_subtree()
     print("\n✓ All branching tests passed!")

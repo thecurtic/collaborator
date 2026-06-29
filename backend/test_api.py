@@ -1,151 +1,120 @@
 """Tests for FastAPI endpoints in Collaborator backend.
 
-Uses mocking to test without running actual server.
+Runs against a real temporary SQLite DB (auth disabled) with the LLM mocked.
 """
 
-from unittest.mock import patch, MagicMock
 import os
+import tempfile
 
-# Set test environment before importing app
+# Configure a throwaway DB and disable auth BEFORE importing the app.
 os.environ["BACKEND_HOST"] = "127.0.0.1"
 os.environ["PORT"] = "8001"
-# Disable auth for tests
 os.environ["AUTH_ENABLED"] = "false"
+os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "conversations.db")
 
-from main import app, config
+import config
+config.get_config._config = config.load_config()
+import main
+from main import app, config as app_config
+from starlette.testclient import TestClient
+
+
+def _mock_stream():
+    def fake_stream(message, context_turns=None, mode=None):
+        for tok in ["Hello!", " ", "How can I help?"]:
+            yield tok
+    main.stream_llm_tokens = fake_stream
 
 
 def test_config_loaded():
-    """Test that config is loaded on startup."""
-    assert config is not None
-    assert "inference" in config
-    assert "server" in config
+    assert app_config is not None
+    assert "inference" in app_config and "server" in app_config
 
 
 def test_health_check():
-    """Test the health check endpoint."""
-    from fastapi.testclient import TestClient
-    
     client = TestClient(app)
-    response = client.get("/api/health")
-    
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "healthy"
-    assert data["version"] == "0.1.0"
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    assert r.json()["status"] == "healthy"
+    assert r.json()["version"] == "0.2.0"
 
 
-def test_send_message_success():
-    """Test sending a message."""
-    from fastapi.testclient import TestClient
-    
+def test_send_message_streams_and_persists():
+    _mock_stream()
     client = TestClient(app)
-    
-    mock_db = MagicMock()
-    
-    # Mock recent turns
-    mock_recent_turns = []
-    
-    with patch('main.create_user_db') as mock_create_db, \
-         patch('main.get_recent_turns') as mock_get_recent, \
-         patch('main.call_llm') as mock_call_llm, \
-         patch('main.create_turn'):
-        
-        mock_create_db.return_value = "/tmp/test.db"
-        mock_get_recent.return_value = mock_recent_turns
-        
-        # Mock LLM response
-        mock_call_llm.return_value = "Hello! How can I help you?"
-        
-        # Mock turn creation
-        mock_turn_data = {
-            "id": 1,
-            "user_id": None,
-            "role": "assistant",
-            "content": "Hello! How can I help you?",
-            "context_turns": 5,
-            "committed": True,
-        }
-        
-        # Mock sqlite3.connect
-        with patch('sqlite3.connect') as mock_sqlite:
-            mock_conn = MagicMock()
-            mock_cursor = MagicMock()
-            mock_conn.cursor.return_value = mock_cursor
-            mock_sqlite.return_value = mock_conn
-            
-            response = client.post(
-                "/api/messages",
-                json={"message": "Hello"}
-            )
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert "response" in data
-        assert data["response"] == "Hello! How can I help you?"
-        assert data["committed"] is True
+    r = client.post("/api/messages", json={"message": "Hello", "context_turns": 5})
+    assert r.status_code == 200
+    assert '"type": "token"' in r.text
+    assert '"type": "done"' in r.text
+    # The exchange is now retrievable.
+    hist = client.get("/api/messages").json()
+    assert hist["count"] >= 2
+    assert any(t["role"] == "assistant" and t["content"] == "Hello! How can I help?"
+               for t in hist["turns"])
 
 
 def test_get_messages():
-    """Test retrieving messages."""
-    from fastapi.testclient import TestClient
-    
     client = TestClient(app)
-    
-    with patch('main.create_user_db') as mock_create_db, \
-         patch('main.get_recent_turns') as mock_get_recent:
-        
-        mock_create_db.return_value = "/tmp/test.db"
-        mock_get_recent.return_value = [
-            {"id": 1, "content": "Hello"},
-            {"id": 2, "content": "Hi there"},
-        ]
-        
-        response = client.get("/api/messages")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert "turns" in data
-        assert "count" in data
-        assert len(data["turns"]) == 2
-        assert data["count"] == 2
+    r = client.get("/api/messages")
+    assert r.status_code == 200
+    data = r.json()
+    assert "turns" in data and "count" in data
 
 
-def test_discard_turn_success():
-    """Test discarding a turn."""
-    from fastapi.testclient import TestClient
-    
+def test_delete_reparents_children():
+    _mock_stream()
+    import sqlite3, db
+    path = os.environ["DB_PATH"]
+    conn = sqlite3.connect(path)
+    root = db.create_turn(conn, None, "user", "root")
+    mid = db.create_turn(conn, None, "assistant", "mid", parent_turn_id=root["id"])
+    leaf = db.create_turn(conn, None, "user", "leaf", parent_turn_id=mid["id"])
+    conn.close()
+
     client = TestClient(app)
-    
-    with patch('main.create_user_db') as mock_create_db, \
-         patch('main.get_turn_by_id'), \
-         patch('main.update_turn_committed') as mock_update:
-        
-        mock_create_db.return_value = "/tmp/test.db"
-        mock_update.return_value = True
-        
-        response = client.delete("/api/messages/1")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert data["id"] == 1
-        assert data["committed"] is False
+    # Delete the middle turn: leaf should reparent up to root.
+    r = client.delete(f"/api/messages/{mid['id']}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deleted"] is True
+    assert body["removed_turn_ids"] == [mid["id"]]
+    assert body["reparented_to"] == root["id"]
+    assert leaf["id"] in body["reparented_children"]
+
+    conn = sqlite3.connect(path)
+    assert db.get_turn_by_id(conn, mid["id"]) is None          # row is gone (hard delete)
+    assert db.get_turn_by_id(conn, leaf["id"])["parent_turn_id"] == root["id"]
+    conn.close()
+
+    # Deleting a missing turn -> 404
+    assert client.delete("/api/messages/999999").status_code == 404
+
+
+def test_delete_subtree():
+    import sqlite3, db
+    path = os.environ["DB_PATH"]
+    conn = sqlite3.connect(path)
+    a = db.create_turn(conn, None, "user", "branch-root")
+    b = db.create_turn(conn, None, "assistant", "child", parent_turn_id=a["id"])
+    c = db.create_turn(conn, None, "user", "grandchild", parent_turn_id=b["id"])
+    conn.close()
+
+    client = TestClient(app)
+    r = client.delete(f"/api/messages/{a['id']}?subtree=true")
+    assert r.status_code == 200
+    assert r.json()["removed_count"] == 3
+    assert set(r.json()["removed_turn_ids"]) == {a["id"], b["id"], c["id"]}
+
+    conn = sqlite3.connect(path)
+    assert all(db.get_turn_by_id(conn, t) is None for t in (a["id"], b["id"], c["id"]))
+    conn.close()
 
 
 if __name__ == "__main__":
-    test_config_loaded()
-    print("✓ config loaded test passed")
-    
-    test_health_check()
-    print("✓ health check test passed")
-    
-    test_send_message_success()
-    print("✓ send message success test passed")
-    
-    test_get_messages()
-    print("✓ get messages test passed")
-    
-    test_discard_turn_success()
-    print("✓ discard turn success test passed")
-    
+    test_config_loaded(); print("✓ config loaded")
+    test_health_check(); print("✓ health check")
+    test_send_message_streams_and_persists(); print("✓ send message streams + persists")
+    test_get_messages(); print("✓ get messages")
+    test_delete_reparents_children(); print("✓ delete reparents children")
+    test_delete_subtree(); print("✓ delete subtree")
     print("\n✓ All API tests passed!")

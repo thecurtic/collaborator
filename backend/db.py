@@ -326,6 +326,62 @@ def update_turn_committed(db, turn_id: int, committed: bool) -> bool:
     return cursor.rowcount > 0
 
 
+def delete_turn(db, turn_id: int, subtree: bool = False) -> Optional[dict]:
+    """Hard-delete a turn (removes the row; ids are not reused).
+
+    - subtree=False: delete just this turn and reparent its direct children to
+      this turn's parent, so they rise one level instead of being orphaned.
+    - subtree=True: delete this turn and all of its descendants (a whole branch).
+
+    Returns a summary dict, or None if the turn does not exist.
+    """
+    cursor = db.cursor()
+    row = cursor.execute("SELECT parent_turn_id FROM turns WHERE id = ?", (turn_id,)).fetchone()
+    if row is None:
+        return None
+    parent_id = row[0]
+
+    if subtree:
+        # Collect this turn + all descendants (breadth-first over parent links).
+        to_delete: List[int] = []
+        frontier = [turn_id]
+        seen = set()
+        while frontier:
+            current = frontier.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            to_delete.append(current)
+            children = cursor.execute(
+                "SELECT id FROM turns WHERE parent_turn_id = ?", (current,)
+            ).fetchall()
+            frontier.extend(cid for (cid,) in children)
+
+        cursor.executemany("DELETE FROM turns WHERE id = ?", [(i,) for i in to_delete])
+        db.commit()
+        return {
+            "removed_turn_ids": sorted(to_delete),
+            "reparented_children": [],
+            "reparented_to": None,
+        }
+
+    # Single delete: reparent direct children to this turn's parent, then remove it.
+    child_rows = cursor.execute(
+        "SELECT id FROM turns WHERE parent_turn_id = ?", (turn_id,)
+    ).fetchall()
+    reparented = sorted(cid for (cid,) in child_rows)
+    cursor.execute(
+        "UPDATE turns SET parent_turn_id = ? WHERE parent_turn_id = ?", (parent_id, turn_id)
+    )
+    cursor.execute("DELETE FROM turns WHERE id = ?", (turn_id,))
+    db.commit()
+    return {
+        "removed_turn_ids": [turn_id],
+        "reparented_children": reparented,
+        "reparented_to": parent_id,
+    }
+
+
 def get_context_for_turn(db, after_turn_id: int, limit: int = 5) -> List[dict]:
     """Get committed turns BEFORE a specific turn_id (leading up to it).
 
