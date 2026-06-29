@@ -37,6 +37,8 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
+  // When entering a branch from the map, scroll to that turn (not the bottom).
+  const pendingScrollRef = useRef<number | null>(null);
 
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -54,10 +56,28 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
 
   // Follow new/streaming content while pinned to the bottom.
   useEffect(() => {
-    if (!loading && pinnedRef.current) {
+    if (!loading && pinnedRef.current && pendingScrollRef.current == null) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
   }, [path.length, streaming?.reply, sending, loading]);
+
+  // After entering a branch, scroll that turn into view once it's on the path.
+  useEffect(() => {
+    const id = pendingScrollRef.current;
+    if (id == null) return;
+    const el = scrollRef.current?.querySelector(`[data-tid="${id}"]`);
+    if (el) {
+      el.scrollIntoView({ block: 'center' });
+      pendingScrollRef.current = null;
+    }
+  });
+
+  const enterBranch = (id: number) => {
+    selectPathTo(id);
+    pinnedRef.current = false;
+    pendingScrollRef.current = id;
+    setMapOpen(false);
+  };
 
   const handleSend = (message: string) => {
     if (branchTarget) {
@@ -107,10 +127,7 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
         open={mapOpen}
         tree={tree}
         activeIds={activeIds}
-        onSelect={(id) => {
-          selectPathTo(id);
-          setMapOpen(false);
-        }}
+        onSelect={enterBranch}
         onDeleteSubtree={handleDeleteSubtree}
         onClose={() => setMapOpen(false)}
       />
@@ -181,13 +198,14 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
                       }
                     : undefined;
                 return (
-                  <TreeBubble
-                    key={entry.node.id}
-                    node={entry.node}
-                    onBranch={handleBranch}
-                    onDelete={handleDelete}
-                    fork={fork}
-                  />
+                  <div key={entry.node.id} data-tid={entry.node.id}>
+                    <TreeBubble
+                      node={entry.node}
+                      onBranch={handleBranch}
+                      onDelete={handleDelete}
+                      fork={fork}
+                    />
+                  </div>
                 );
               })}
             </>

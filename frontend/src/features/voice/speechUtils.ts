@@ -34,6 +34,30 @@ export function sanitizeForSpeech(text: string): string {
   );
 }
 
+export interface Paragraph {
+  text: string;
+  /** Character offset of this paragraph's start within the original text. */
+  start: number;
+}
+
+/**
+ * Split text into paragraphs on blank lines, keeping each paragraph's character
+ * offset so read-along and tap-to-skip can map a paragraph index ↔ char offset
+ * consistently. Indices match `text.split(/\n{2,}/)`.
+ */
+export function splitParagraphs(text: string): Paragraph[] {
+  const re = /\n{2,}/g;
+  const out: Paragraph[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    out.push({ text: text.slice(last, m.index), start: last });
+    last = m.index + m[0].length;
+  }
+  out.push({ text: text.slice(last), start: last });
+  return out;
+}
+
 /** Split off complete sentences from a buffer, returning the leftover tail. */
 export function extractSentences(buffer: string): {
   sentences: string[];

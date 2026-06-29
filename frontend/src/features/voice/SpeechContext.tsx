@@ -10,7 +10,7 @@ import { getStopWord, getTtsEngine } from '@/features/settings/uiPrefs';
 import { listenForWords } from './keywordSpotter';
 import { downloadVoice, isVoiceStored } from './piperTts';
 import { createSpeechSession, webSpeechSupported } from './speech';
-import type { SpeechSession } from './speechUtils';
+import { splitParagraphs, type SpeechSession } from './speechUtils';
 
 export type SpeechStatus = 'idle' | 'preparing' | 'speaking';
 
@@ -20,11 +20,15 @@ interface SpeechValue {
   status: SpeechStatus;
   /** Piper voice-model download progress (0..1) while `status === 'preparing'`. */
   progress: number;
-  /** Cumulative original characters spoken so far (read-along), for activeId. */
+  /** Cumulative original characters spoken (read-along), relative to speakBase. */
   spokenChars: number;
+  /** Char offset the current playback started from (tap-to-skip). */
+  speakBase: number;
   supported: boolean;
   /** Speak the text for a turn id; clicking the active one stops it. */
   toggle: (id: number, text: string) => void;
+  /** (Re)speak a turn from a given paragraph (tap-to-skip / replay). */
+  speakFrom: (id: number, text: string, fromParagraph: number) => void;
   stop: () => void;
 }
 
@@ -37,6 +41,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SpeechStatus>('idle');
   const [progress, setProgress] = useState(0);
   const [spokenChars, setSpokenChars] = useState(0);
+  const [speakBase, setSpeakBase] = useState(0);
   const sessionRef = useRef<SpeechSession | null>(null);
   const kwsStopRef = useRef<(() => void) | null>(null);
   const reqRef = useRef(0);
@@ -49,6 +54,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
     setStatus('idle');
     setProgress(0);
     setSpokenChars(0);
+    setSpeakBase(0);
   }, []);
 
   const stop = useCallback(() => {
@@ -58,18 +64,18 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
     reset();
   }, [reset]);
 
-  const toggle = useCallback(
-    (id: number, text: string) => {
-      if (activeId === id) {
-        stop();
-        return;
-      }
+  // Speak fullText from a character offset; reports read-along relative to base.
+  const startSpeaking = useCallback(
+    (id: number, fullText: string, base: number) => {
       const req = ++reqRef.current;
       sessionRef.current?.stop();
       sessionRef.current = null;
+      kwsStopRef.current?.();
+      kwsStopRef.current = null;
       setActiveId(id);
       setProgress(0);
       setSpokenChars(0);
+      setSpeakBase(base);
 
       void (async () => {
         try {
@@ -92,7 +98,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
             },
           );
           sessionRef.current = session;
-          session.push(text);
+          session.push(fullText.slice(base));
           session.finish();
 
           // Barge-in: listen for the stop word while speaking, then mic off.
@@ -117,12 +123,42 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
         }
       })();
     },
-    [activeId, stop, reset],
+    [reset, stop],
+  );
+
+  const toggle = useCallback(
+    (id: number, text: string) => {
+      if (activeId === id) {
+        stop();
+        return;
+      }
+      startSpeaking(id, text, 0);
+    },
+    [activeId, stop, startSpeaking],
+  );
+
+  const speakFrom = useCallback(
+    (id: number, text: string, fromParagraph: number) => {
+      const infos = splitParagraphs(text);
+      const idx = Math.max(0, Math.min(fromParagraph, infos.length - 1));
+      startSpeaking(id, text, infos[idx]?.start ?? 0);
+    },
+    [startSpeaking],
   );
 
   return (
     <SpeechContext.Provider
-      value={{ activeId, status, progress, spokenChars, supported, toggle, stop }}
+      value={{
+        activeId,
+        status,
+        progress,
+        spokenChars,
+        speakBase,
+        supported,
+        toggle,
+        speakFrom,
+        stop,
+      }}
     >
       {children}
     </SpeechContext.Provider>

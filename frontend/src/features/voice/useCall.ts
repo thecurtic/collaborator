@@ -5,6 +5,7 @@ import { chimeListenStart, chimeListenStop } from './chime';
 import { listenForWords, warmUpKeywordSpotter } from './keywordSpotter';
 import { startPcmStream, type PcmStream } from './pcmStreamer';
 import { createSpeechSession, type SpeechSession } from './speech';
+import { splitParagraphs } from './speechUtils';
 import { TranscriptionStream } from './transcriptionStream';
 
 export type CallPhase =
@@ -290,11 +291,11 @@ export function useCall(open: boolean, onClose: () => void) {
     // Tap-to-skip/replay: re-speak an assistant turn from a given paragraph.
     const speakFrom = (turnId: number, text: string, fromParagraph: number) => {
       if (!active) return;
-      const paras = text.split(/\n{2,}/);
-      const slice = paras.slice(Math.max(0, fromParagraph)).join('\n\n').trim();
+      const infos = splitParagraphs(text);
+      const idx = Math.max(0, Math.min(fromParagraph, infos.length - 1));
+      const base = infos[idx]?.start ?? 0;
+      const slice = text.slice(base).trim();
       if (!slice) return;
-      const para = paras[fromParagraph] ?? '';
-      const base = para ? Math.max(0, text.indexOf(para)) : 0;
       log(`skip → ¶${fromParagraph}`);
       stopKws();
       if (maxTimer) window.clearTimeout(maxTimer);

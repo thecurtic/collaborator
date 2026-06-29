@@ -12,9 +12,9 @@ interface TreeMapProps {
   onClose: () => void;
 }
 
-const COL = 34; // px between branch columns
-const ROW = 26; // px per turn
-const PAD = 28;
+const COL = 40; // px between branch columns
+const ROW = 30; // px per turn
+const PAD = 32;
 
 // NOTE: coloring is BRANCH-based for now. Per Curtis, this will likely change to
 // TOPIC-based (boundaries determined by LLM review), possibly as a separate mode
@@ -99,8 +99,10 @@ function layout(roots: TreeNode[], activeIds: Set<number>) {
       count,
       column,
       startRow,
-      parentColumn: isBranch ? parentColumn : null,
-      forkRow: isBranch ? forkRow : null,
+      // Keep the parent link for ALL non-root segments (forkRow === null only for
+      // roots) so continuations draw a connector and the trunk isn't broken.
+      parentColumn: forkRow === null ? null : parentColumn,
+      forkRow,
       active: ids.some((id) => activeIds.has(id)),
     });
     if (cur.children.length > 1) {
@@ -136,9 +138,11 @@ export function TreeMap({
 
   if (!open) return null;
 
-  const colX = (c: number) => PAD + (c - minCol) * COL;
+  // Symmetric span so the trunk (column 0) sits in the horizontal centre.
+  const half = Math.max(1, maxCol, -minCol);
+  const colX = (c: number) => PAD + (c + half) * COL;
   const rowY = (r: number) => PAD + r * ROW;
-  const width = Math.max((maxCol - minCol) * COL + PAD * 2, 200);
+  const width = Math.max(2 * half * COL + PAD * 2, 200);
   const height = Math.max(rows * ROW + PAD, 200);
 
   return (
@@ -162,7 +166,8 @@ export function TreeMap({
             No conversation yet.
           </p>
         ) : (
-          <svg width={width} height={height} className="mx-auto select-none">
+          <div className="flex min-h-full min-w-full justify-center">
+          <svg width={width} height={height} className="select-none">
             {segments.map((seg) => {
               const x = colX(seg.column);
               const top = rowY(seg.startRow);
@@ -181,7 +186,8 @@ export function TreeMap({
                       d={`M ${colX(seg.parentColumn)} ${rowY(seg.forkRow)} C ${colX(seg.parentColumn)} ${top} ${x} ${rowY(seg.forkRow)} ${x} ${top}`}
                       fill="none"
                       stroke={color}
-                      strokeWidth={2.5}
+                      strokeWidth={isSel ? 8 : seg.active ? 6 : 4}
+                      strokeLinecap="round"
                       opacity={opacity}
                     />
                   )}
@@ -191,7 +197,7 @@ export function TreeMap({
                     x2={x}
                     y2={bottom}
                     stroke={color}
-                    strokeWidth={isSel ? 7 : seg.active ? 5 : 3}
+                    strokeWidth={isSel ? 8 : seg.active ? 6 : 4}
                     strokeLinecap="round"
                     opacity={opacity}
                   />
@@ -200,23 +206,24 @@ export function TreeMap({
                       key={i}
                       cx={x}
                       cy={rowY(seg.startRow + i)}
-                      r={2.5}
+                      r={isSel || seg.active ? 5 : 4}
                       fill={color}
                       opacity={opacity}
                     />
                   ))}
                   <line
                     x1={x}
-                    y1={top - 8}
+                    y1={top - 10}
                     x2={x}
-                    y2={bottom + 8}
+                    y2={bottom + 10}
                     stroke="transparent"
-                    strokeWidth={22}
+                    strokeWidth={26}
                   />
                 </g>
               );
             })}
           </svg>
+          </div>
         )}
       </div>
 

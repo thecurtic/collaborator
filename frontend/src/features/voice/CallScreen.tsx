@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import { cn } from '@/lib/utils';
+import { splitParagraphs } from './speechUtils';
 import { useCall, type CallPhase } from './useCall';
 
 interface CallScreenProps {
@@ -38,27 +39,38 @@ function Turn({
   const label = role === 'user' ? 'You' : 'Assistant';
 
   let body;
-  if (role === 'assistant' && speaking) {
-    const n = Math.min(Math.max(readChars ?? 0, 0), text.length);
-    body = (
-      <p className="whitespace-pre-wrap text-[17px] leading-relaxed">
-        <span className="text-foreground">{text.slice(0, n)}</span>
-        <span className="text-foreground opacity-40">{text.slice(n)}</span>
-      </p>
-    );
-  } else if (role === 'assistant' && onSkip) {
+  if (role === 'assistant' && onSkip) {
+    // Tappable paragraphs (tap to (re)speak from here) with per-paragraph
+    // read-along fade while this turn is being spoken.
+    const read = readChars ?? 0;
     body = (
       <div className="space-y-2">
-        {text.split(/\n{2,}/).map((p, i) => (
-          <p
-            key={i}
-            onClick={() => onSkip(i)}
-            title="Tap to play from here"
-            className="cursor-pointer whitespace-pre-wrap text-[17px] leading-relaxed text-foreground transition hover:text-primary active:opacity-70"
-          >
-            {p}
-          </p>
-        ))}
+        {splitParagraphs(text).map(({ text: p, start }, i) =>
+          p.trim() ? (
+            <p
+              key={i}
+              onClick={() => onSkip(i)}
+              title="Tap to play from here"
+              className="cursor-pointer whitespace-pre-wrap text-[17px] leading-relaxed transition active:opacity-70"
+            >
+              {(() => {
+                const n = speaking
+                  ? Math.min(Math.max(read - start, 0), p.length)
+                  : p.length;
+                return (
+                  <>
+                    <span className="text-foreground">{p.slice(0, n)}</span>
+                    {n < p.length && (
+                      <span className="text-foreground opacity-40">
+                        {p.slice(n)}
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
+            </p>
+          ) : null,
+        )}
       </div>
     );
   } else {
@@ -159,7 +171,7 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
                 speaking={isSpeaking}
                 readChars={speakBase + spokenChars}
                 onSkip={
-                  t.role === 'assistant' && !isSpeaking
+                  t.role === 'assistant'
                     ? (i) => skipTo(t.id, t.text, i)
                     : undefined
                 }

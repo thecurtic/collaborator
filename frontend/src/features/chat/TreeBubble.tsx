@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useSpeech } from '@/features/voice/SpeechContext';
+import { splitParagraphs } from '@/features/voice/speechUtils';
 import { cn } from '@/lib/utils';
 import type { TreeNode } from '@/domain/models';
 
@@ -70,7 +71,10 @@ export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) 
 
   // Read-along: while this turn is being spoken, fade the not-yet-read text.
   const reading = isActive;
-  const readChars = Math.min(speech.spokenChars, node.content.length);
+  const readChars = Math.min(
+    speech.speakBase + speech.spokenChars,
+    node.content.length,
+  );
 
   // Which block is the fork's source paragraph (highlighted).
   const forkBlock = (i: number) => {
@@ -90,10 +94,30 @@ export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) 
         )}
       >
         {reading ? (
-          <p className="whitespace-pre-wrap break-words">
-            <span>{node.content.slice(0, readChars)}</span>
-            <span className="opacity-40">{node.content.slice(readChars)}</span>
-          </p>
+          <div className="space-y-1.5">
+            {splitParagraphs(node.content).map(({ text: p, start }, i) =>
+              p.trim() ? (
+                <p
+                  key={i}
+                  onClick={() => speech.speakFrom(node.id, node.content, i)}
+                  title="Tap to play from here"
+                  className="cursor-pointer whitespace-pre-wrap break-words active:opacity-70"
+                >
+                  {(() => {
+                    const n = Math.min(Math.max(readChars - start, 0), p.length);
+                    return (
+                      <>
+                        <span>{p.slice(0, n)}</span>
+                        {n < p.length && (
+                          <span className="opacity-40">{p.slice(n)}</span>
+                        )}
+                      </>
+                    );
+                  })()}
+                </p>
+              ) : null,
+            )}
+          </div>
         ) : (
           <div className="space-y-1.5">
           {blocks.map((block, i) => {
