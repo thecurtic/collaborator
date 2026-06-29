@@ -70,6 +70,7 @@ X-Passkey: <your-passkey>
 ```json
 {
   "message": "string",
+  "parent_turn_id": 42,
   "context_turns": 5,
   "commit": true,
   "user_id": "optional-string",
@@ -79,13 +80,25 @@ X-Passkey: <your-passkey>
 
 **Fields:**
 - `message` (required): User's input text
-- `context_turns` (optional, default: 5): Number of prior committed turns to include
+- `parent_turn_id` (optional): **The active leaf to continue from.** Context is built
+  from this turn's ancestor chain and the new turns chain off it — this is how the
+  backend knows which branch is active. **Omit it only to start a fresh root
+  conversation** (no prior context). Returns `404` if the id doesn't exist.
+- `context_turns` (optional): Prior committed turns to include. **Omitted/null** =
+  the configured default window (`memory.default_context_window`). **`0`** = fresh
+  context, no history injected (the model gets a clean slate) while the turn is still
+  stored and linked in the tree.
 - `commit` (optional, default: true): Whether to commit this turn to database
 - `user_id` (optional): User identifier
 - `mode` (optional): Turn source. `"voice"` = came from call mode (spoken); absent or
   `"text"` = normal chat. On `"voice"` turns the backend augments the system prompt
   with a spoken-style instruction (no markdown/symbols, short sentences) so the reply
   reads well via TTS. Configurable via `system_prompt.voice_text`.
+
+> Branch model: every continuation should send `parent_turn_id` = the active branch's
+> leaf turn. To fork from a mid-conversation turn or a specific paragraph, use
+> `POST /api/branches/{id}` instead. The `done` event echoes `parent_turn_id` and
+> `context_turns_used`.
 
 **Response (201 Created) - Server-Sent Events**
 ```
@@ -277,12 +290,20 @@ metro-map view.
       ]
     }
   ],
-  "count": 12
+  "count": 12,
+  "context_turns": 5
 }
 ```
 Only committed turns are included. Each assistant node carries a derived
 `paragraphs[]` array; `paragraph_index` on a node records which paragraph of its
 parent it branched from. `preview` is a single-line label.
+
+- Top-level `context_turns` is the default window size (how many recent turns feed
+  the next message) — use it to shade the in-context window on the active path.
+- Each node also carries its own stored `context_turns` and a `context_boundary`
+  boolean (`true` when that turn was generated with `context_turns: 0`, i.e. a
+  "branch without context" start). When shading back from the active leaf, stop at
+  the most recent `context_boundary` so without-context branches shade correctly.
 
 ---
 

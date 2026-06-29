@@ -66,6 +66,7 @@ export function useCall(
   open: boolean,
   onClose: () => void,
   branchTarget?: BranchTarget | null,
+  activeLeafId?: number | null,
   onBranchConsumed?: () => void,
 ) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
@@ -81,6 +82,8 @@ export function useCall(
   // Read at call start; not effect deps so changing them won't restart the call.
   const branchTargetRef = useRef(branchTarget);
   branchTargetRef.current = branchTarget;
+  const activeLeafIdRef = useRef(activeLeafId);
+  activeLeafIdRef.current = activeLeafId;
   const onBranchConsumedRef = useRef(onBranchConsumed);
   onBranchConsumedRef.current = onBranchConsumed;
 
@@ -89,8 +92,12 @@ export function useCall(
 
     let active = true;
     // The first spoken turn forks from this branch (if one was pending), then
-    // the loop continues normally on the new branch.
+    // the loop continues normally on the new branch. `leafId` is the active
+    // branch leaf to continue from; each turn updates it to the new turn's id.
     let pendingBranch: BranchTarget | null = branchTargetRef.current ?? null;
+    let leafId: number | null = pendingBranch
+      ? null
+      : (activeLeafIdRef.current ?? null);
     let turnId = 0;
     const pushTurn = (role: CallTurn['role'], text: string): number => {
       turnId += 1;
@@ -296,7 +303,7 @@ export function useCall(
           pendingBranch = null; // only the first turn forks
           onBranchConsumedRef.current?.();
           log(`branching from turn ${pb.turnId}${pb.withContext ? '' : ' (no ctx)'}`);
-          await api.branchMessage(
+          const res = await api.branchMessage(
             {
               parentTurnId: pb.turnId,
               message: text,
@@ -308,12 +315,19 @@ export function useCall(
             onToken,
             streamAbort.signal,
           );
+          if (res.id != null) leafId = res.id; // continue off the new branch
         } else {
-          await api.sendMessageStream(
-            { message: text, commit: true, mode: 'voice' },
+          const res = await api.sendMessageStream(
+            {
+              message: text,
+              parentTurnId: leafId ?? undefined, // continue the in-view branch
+              commit: true,
+              mode: 'voice',
+            },
             onToken,
             streamAbort.signal,
           );
+          if (res.id != null) leafId = res.id;
         }
         queue?.finish();
       } catch (err) {

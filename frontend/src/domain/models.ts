@@ -51,6 +51,8 @@ export interface TreeNode {
   paragraphs: string[];
   parentTurnId: number | null;
   paragraphIndex: number | null;
+  /** True when generated with context_turns:0 — a fresh-context boundary. */
+  contextBoundary: boolean;
   children: TreeNode[];
 }
 
@@ -89,6 +91,12 @@ export interface TurnsPage {
 
 export interface SendMessageInput {
   message: string;
+  /**
+   * The active leaf turn id to continue from (its ancestor chain = context).
+   * Omit ONLY for a brand-new conversation; omitting on an existing convo starts
+   * a new disconnected root.
+   */
+  parentTurnId?: number;
   contextTurns?: number;
   commit?: boolean;
   userId?: string;

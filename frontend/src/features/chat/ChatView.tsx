@@ -12,6 +12,8 @@ interface ChatViewProps {
   /** Shared with App so a call can fork from the same point. */
   branchTarget: BranchTarget | null;
   onBranchTargetChange: (b: BranchTarget | null) => void;
+  /** Reports the active branch leaf so a call continues the in-view branch. */
+  onActiveLeafChange: (id: number | null) => void;
 }
 
 interface BranchPoint {
@@ -24,11 +26,13 @@ export function ChatView({
   reloadSignal = 0,
   branchTarget,
   onBranchTargetChange,
+  onActiveLeafChange,
 }: ChatViewProps) {
   const {
     path,
     tree,
     activeIds,
+    activeLeafId,
     loading,
     sending,
     error,
@@ -84,6 +88,11 @@ export function ChatView({
       scrollTipRef.current = false;
     }
   });
+
+  // Keep App informed of the active leaf so a call continues the in-view branch.
+  useEffect(() => {
+    onActiveLeafChange(activeLeafId);
+  }, [activeLeafId, onActiveLeafChange]);
 
   const enterBranch = (id: number) => {
     selectPathTo(id);
@@ -143,9 +152,20 @@ export function ChatView({
     }
   };
 
-  // In-context turns = the last `contextWindow` turns of the active path.
+  // In-context turns = the last `contextWindow` turns of the active path, but
+  // never reaching past the most recent context boundary (a without-context
+  // branch start resets history).
+  let boundaryIdx = 0;
+  for (let i = path.length - 1; i >= 0; i--) {
+    if (path[i].node.contextBoundary) {
+      boundaryIdx = i;
+      break;
+    }
+  }
   const inCtxStart =
-    contextWindow != null ? Math.max(0, path.length - contextWindow) : 0;
+    contextWindow != null
+      ? Math.max(boundaryIdx, path.length - contextWindow)
+      : 0;
 
   return (
     <div className="relative flex h-full flex-col">

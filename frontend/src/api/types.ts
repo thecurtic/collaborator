@@ -52,6 +52,10 @@ export interface ApiTreeNode {
   paragraph_index: number | null;
   created_at?: string;
   committed?: boolean | number;
+  /** This turn's stored context window. */
+  context_turns?: number;
+  /** True when generated with context_turns:0 (a fresh-context boundary). */
+  context_boundary?: boolean;
   children: ApiTreeNode[];
 }
 

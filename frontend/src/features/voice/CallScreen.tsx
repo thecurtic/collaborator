@@ -12,6 +12,8 @@ interface CallScreenProps {
   onClose: () => void;
   /** If set, the first spoken turn forks from this branch point. */
   branchTarget?: BranchTarget | null;
+  /** Active branch leaf to continue from when not branching. */
+  activeLeafId?: number | null;
   onBranchConsumed?: () => void;
 }
 
@@ -125,6 +127,7 @@ export function CallScreen({
   open,
   onClose,
   branchTarget = null,
+  activeLeafId = null,
   onBranchConsumed,
 }: CallScreenProps) {
   const {
@@ -139,7 +142,7 @@ export function CallScreen({
     endTurn,
     end,
     skipTo,
-  } = useCall(open, onClose, branchTarget, onBranchConsumed);
+  } = useCall(open, onClose, branchTarget, activeLeafId, onBranchConsumed);
   const showDebug = useDebugEnabled();
   const bottomRef = useRef<HTMLDivElement>(null);
   const currentParaRef = useRef<HTMLParagraphElement>(null);

@@ -27,6 +27,8 @@ function AppShell() {
   const [chatReload, setChatReload] = useState(0);
   // A pending branch is shared so a call can fork from it too (not just typing).
   const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
+  // The active branch leaf, so a call continues the branch currently in view.
+  const [activeLeafId, setActiveLeafId] = useState<number | null>(null);
   // Closing a call refreshes the chat so the spoken exchange (persisted with
   // commit:true) shows up in the text history.
   const closeCall = useCallback(() => {
@@ -69,6 +71,7 @@ function AppShell() {
         open={callOpen}
         onClose={closeCall}
         branchTarget={branchTarget}
+        activeLeafId={activeLeafId}
         onBranchConsumed={() => setBranchTarget(null)}
       />
 
@@ -84,6 +87,7 @@ function AppShell() {
             reloadSignal={chatReload}
             branchTarget={branchTarget}
             onBranchTargetChange={setBranchTarget}
+            onActiveLeafChange={setActiveLeafId}
           />
         )}
       </main>

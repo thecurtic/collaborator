@@ -212,6 +212,8 @@ class HttpCollaboratorApi implements CollaboratorApi {
       method: 'POST',
       body: JSON.stringify({
         message: input.message,
+        // Active leaf to continue from; omit only for a brand-new conversation.
+        parent_turn_id: input.parentTurnId,
         context_turns: input.contextTurns,
         commit: input.commit,
         user_id: input.userId,

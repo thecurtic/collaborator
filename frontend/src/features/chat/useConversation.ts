@@ -83,6 +83,7 @@ export function useConversation(reloadSignal: number) {
     indexNodes({ roots: [], count: 0, contextWindow: null }),
   );
   const [version, setVersion] = useState(0);
+  const leafRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -154,7 +155,11 @@ export function useConversation(reloadSignal: number) {
       const trimmed = message.trim();
       if (!trimmed) return;
       void runStream(trimmed, (onToken) =>
-        api.sendMessageStream({ message: trimmed }, onToken),
+        api.sendMessageStream(
+          // Active leaf to continue from (omit for a brand-new conversation).
+          { message: trimmed, parentTurnId: leafRef.current ?? undefined },
+          onToken,
+        ),
       );
     },
     [runStream],
@@ -219,11 +224,15 @@ export function useConversation(reloadSignal: number) {
   void version;
   const path = computePath(indexRef.current.childrenOf, selection);
   const activeIds = new Set(path.map((e) => e.node.id));
+  const activeLeafId = path.length ? path[path.length - 1].node.id : null;
+  // Kept in a ref so `send` (a stable callback) always reads the current leaf.
+  leafRef.current = activeLeafId;
 
   return {
     path,
     tree,
     activeIds,
+    activeLeafId,
     loading,
     sending,
     error,
