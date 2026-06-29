@@ -57,6 +57,8 @@ export interface TreeNode {
 export interface ConversationTree {
   roots: TreeNode[];
   count: number;
+  /** Context window size (recent turns in context), if the backend provides it. */
+  contextWindow: number | null;
 }
 
 export interface BranchInput {

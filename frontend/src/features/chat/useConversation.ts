@@ -67,7 +67,11 @@ function errMessage(err: unknown): string {
 
 export function useConversation(reloadSignal: number) {
   const [selection, setSelection] = useState<Map<number, number>>(new Map());
-  const [tree, setTree] = useState<ConversationTree>({ roots: [], count: 0 });
+  const [tree, setTree] = useState<ConversationTree>({
+    roots: [],
+    count: 0,
+    contextWindow: null,
+  });
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,7 +79,9 @@ export function useConversation(reloadSignal: number) {
   const [streaming, setStreaming] = useState<Streaming | null>(null);
   // Index kept in a ref so it's fresh synchronously after a load (selectPathTo
   // runs right after) while still triggering re-render via the `version` bump.
-  const indexRef = useRef<NodeIndex>(indexNodes({ roots: [], count: 0 }));
+  const indexRef = useRef<NodeIndex>(
+    indexNodes({ roots: [], count: 0, contextWindow: null }),
+  );
   const [version, setVersion] = useState(0);
 
   const load = useCallback(async () => {
@@ -84,6 +90,7 @@ export function useConversation(reloadSignal: number) {
       const t = await api.getTree();
       indexRef.current = indexNodes(t);
       setTree(t);
+      if (t.contextWindow != null) setContextWindow(t.contextWindow);
       setVersion((v) => v + 1);
       setLoading(false);
     } catch (err) {
@@ -154,12 +161,23 @@ export function useConversation(reloadSignal: number) {
   );
 
   const branch = useCallback(
-    (parentTurnId: number, message: string, paragraphIndex?: number) => {
+    (
+      parentTurnId: number,
+      message: string,
+      paragraphIndex?: number,
+      withContext = true,
+    ) => {
       const trimmed = message.trim();
       if (!trimmed) return;
       void runStream(trimmed, (onToken) =>
         api.branchMessage(
-          { parentTurnId, message: trimmed, paragraphIndex },
+          {
+            parentTurnId,
+            message: trimmed,
+            paragraphIndex,
+            // "Without context" → fresh branch, no prior turns injected.
+            ...(withContext ? {} : { contextTurns: 0 }),
+          },
           onToken,
         ),
       );

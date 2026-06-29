@@ -32,6 +32,8 @@ interface TreeBubbleProps {
   onDelete: (turnId: number) => void;
   /** When set, this node is a fork — highlight the source paragraph + switcher. */
   fork?: Fork;
+  /** False → this turn is outside the next message's context window (lighter). */
+  inContext?: boolean;
 }
 
 function Switcher({ index, total, onPrev, onNext }: Omit<Fork, 'paragraphIndex'>) {
@@ -61,7 +63,13 @@ function Switcher({ index, total, onPrev, onNext }: Omit<Fork, 'paragraphIndex'>
   );
 }
 
-export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) {
+export function TreeBubble({
+  node,
+  onBranch,
+  onDelete,
+  fork,
+  inContext = true,
+}: TreeBubbleProps) {
   const isUser = node.role === 'user';
   const speech = useSpeech();
   const isActive = speech.activeId === node.id;
@@ -97,7 +105,7 @@ export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) 
         )}
       >
         {reading ? (
-          <div className="space-y-1.5">
+          <div className={cn('space-y-1.5', !inContext && 'opacity-60')}>
             {splitParagraphs(node.content).map(({ text: p, start }, i) =>
               p.trim() ? (
                 <p
@@ -122,7 +130,7 @@ export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) 
             )}
           </div>
         ) : (
-          <div className="space-y-1.5">
+          <div className={cn('space-y-1.5', !inContext && 'opacity-60')}>
           {blocks.map((block, i) => {
             const highlighted = forkBlock(i);
             return (

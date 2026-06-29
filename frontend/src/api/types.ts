@@ -59,6 +59,8 @@ export interface ApiTreeNode {
 export interface ApiTree {
   roots: ApiTreeNode[];
   count: number;
+  /** Context window size (recent turns fed to the next message), if provided. */
+  context_turns?: number;
 }
 
 /** GET /api/messages?limit&offset */

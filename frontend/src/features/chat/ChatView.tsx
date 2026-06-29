@@ -10,10 +10,13 @@ interface ChatViewProps {
   reloadSignal?: number;
 }
 
-interface BranchTarget {
+interface BranchPoint {
   turnId: number;
   paragraphIndex?: number;
   label: string;
+}
+interface BranchTarget extends BranchPoint {
+  withContext: boolean;
 }
 
 export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
@@ -24,6 +27,7 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
     loading,
     sending,
     error,
+    contextWindow,
     streaming,
     send,
     branch,
@@ -32,6 +36,8 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
     remove,
   } = useConversation(reloadSignal);
   const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
+  // Pending branch point awaiting a with/without-context choice.
+  const [branchChoice, setBranchChoice] = useState<BranchPoint | null>(null);
   const [mapOpen, setMapOpen] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -93,19 +99,30 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
 
   const handleSend = (message: string) => {
     if (branchTarget) {
-      branch(branchTarget.turnId, message, branchTarget.paragraphIndex);
+      branch(
+        branchTarget.turnId,
+        message,
+        branchTarget.paragraphIndex,
+        branchTarget.withContext,
+      );
       setBranchTarget(null);
     } else {
       send(message);
     }
   };
 
+  // Tapping a branch button asks with/without context first.
   const handleBranch = (
     turnId: number,
     paragraphIndex: number | undefined,
     label: string,
   ) => {
-    setBranchTarget({ turnId, paragraphIndex, label: label.slice(0, 80) });
+    setBranchChoice({ turnId, paragraphIndex, label: label.slice(0, 80) });
+  };
+
+  const chooseContext = (withContext: boolean) => {
+    if (branchChoice) setBranchTarget({ ...branchChoice, withContext });
+    setBranchChoice(null);
   };
 
   const handleDelete = (turnId: number) => {
@@ -121,6 +138,10 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
       void remove(turnId, true);
     }
   };
+
+  // In-context turns = the last `contextWindow` turns of the active path.
+  const inCtxStart =
+    contextWindow != null ? Math.max(0, path.length - contextWindow) : 0;
 
   return (
     <div className="relative flex h-full flex-col">
@@ -143,6 +164,45 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
         onDeleteSubtree={handleDeleteSubtree}
         onClose={() => setMapOpen(false)}
       />
+
+      {/* Branch context choice. */}
+      {branchChoice && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+          <button
+            aria-label="Cancel"
+            onClick={() => setBranchChoice(null)}
+            className="absolute inset-0 bg-black/60"
+          />
+          <div className="pb-safe relative w-full rounded-t-2xl border border-border bg-card p-5 sm:max-w-sm sm:rounded-2xl">
+            <p className="mb-1 text-sm font-medium">Branch from here</p>
+            <p className="mb-4 truncate text-xs text-muted-foreground">
+              {branchChoice.label}
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => chooseContext(true)}
+                className="rounded-lg border border-border px-4 py-3 text-left text-sm hover:bg-muted active:scale-[0.99]"
+              >
+                <span className="font-medium">Branch with context</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Keeps the conversation history in context.
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => chooseContext(false)}
+                className="rounded-lg border border-border px-4 py-3 text-left text-sm hover:bg-muted active:scale-[0.99]"
+              >
+                <span className="font-medium">Branch without context</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Fresh start — the model gets no prior history.
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
@@ -215,6 +275,7 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
                       onBranch={handleBranch}
                       onDelete={handleDelete}
                       fork={fork}
+                      inContext={i >= inCtxStart}
                     />
                   </div>
                 );
@@ -264,7 +325,11 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
         <Composer
           disabled={sending}
           onSend={handleSend}
-          branchLabel={branchTarget?.label ?? null}
+          branchLabel={
+            branchTarget
+              ? `${branchTarget.label}${branchTarget.withContext ? '' : ' · no context'}`
+              : null
+          }
           onCancelBranch={() => setBranchTarget(null)}
         />
       </div>

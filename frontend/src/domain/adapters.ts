@@ -63,7 +63,12 @@ export function toTreeNode(api: ApiTreeNode): TreeNode {
 }
 
 export function toTree(api: ApiTree): ConversationTree {
-  return { roots: (api.roots ?? []).map(toTreeNode), count: api.count };
+  return {
+    roots: (api.roots ?? []).map(toTreeNode),
+    count: api.count,
+    contextWindow:
+      typeof api.context_turns === 'number' ? api.context_turns : null,
+  };
 }
 
 export function toTurnsPage(api: ApiTurnsResponse): TurnsPage {
