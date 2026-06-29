@@ -15,7 +15,7 @@ from config import get_config, resolve_path
 from data.agents_md import load_agents_md
 from db import (
     init_db, create_turn, get_recent_turns, get_turn_by_id, delete_turn,
-    get_ancestor_chain, get_latest_turn_id, get_turn_tree,
+    get_ancestor_chain, get_turn_tree,
 )
 from inference import call_llm_streaming, call_llm_non_streaming, stream_llm_tokens
 from auth import validate_passkey, create_user_db
@@ -46,7 +46,12 @@ init_db()
 
 class UserMessage(BaseModel):
     message: str
-    context_turns: Optional[int] = 5
+    # The active leaf to continue from. Context is built from this turn's ancestor
+    # chain and the new turns chain off it. Omitted/None = start a fresh root
+    # conversation (no prior context).
+    parent_turn_id: Optional[int] = None
+    # None = use the configured default window; 0 = fresh context (no history).
+    context_turns: Optional[int] = None
     commit: Optional[bool] = True
     user_id: Optional[str] = None
     # "voice" = turn came from call mode (spoken); absent/"text" = normal chat.
@@ -82,7 +87,8 @@ class DeleteTurnResponse(BaseModel):
 class BranchRequest(BaseModel):
     message: str
     paragraph_index: Optional[int] = None
-    context_turns: Optional[int] = 5
+    # None = configured default window; 0 = "branch without context" (fresh).
+    context_turns: Optional[int] = None
     commit: Optional[bool] = True
     user_id: Optional[str] = None
     mode: Optional[str] = None
@@ -106,6 +112,15 @@ def _require_auth(passkey: Optional[str]) -> None:
             raise HTTPException(status_code=403, detail="Passkey required")
         if not validate_passkey(passkey):
             raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+
+
+def _default_context_window() -> int:
+    return config.get("memory", {}).get("default_context_window", 5)
+
+
+def _effective_context_turns(value: Optional[int]) -> int:
+    """Resolve a request's context_turns: None -> configured default; 0 -> fresh."""
+    return _default_context_window() if value is None else value
 
 
 def _resolve_db_path(passkey: Optional[str]) -> str:
@@ -145,6 +160,10 @@ def _enrich_tree_node(node: dict) -> dict:
     """Recursively add preview + paragraphs to tree nodes for the metro map."""
     node = dict(node)
     node["preview"] = _preview(node.get("content", ""))
+    # A turn generated with context_turns == 0 reset the context window ("branch
+    # without context"). The frontend should stop shading the in-context window at
+    # this boundary when walking back the active path.
+    node["context_boundary"] = (node.get("context_turns") == 0)
     if node.get("role") == "assistant":
         node["paragraphs"] = _split_paragraphs(node.get("content", ""))
     node["children"] = [_enrich_tree_node(c) for c in node.get("children", [])]
@@ -236,9 +255,12 @@ async def send_message(
 ):
     """
     Send a user message and get the model response (streaming).
-    
+
     - **message**: The user's input
-    - **context_turns**: Number of prior committed turns to include in context (default: 5)
+    - **parent_turn_id**: The active leaf to continue from. Context is built from
+      this turn's ancestor chain. Omit it to start a fresh root conversation.
+    - **context_turns**: Prior committed turns to include (None = configured default,
+      0 = fresh/no history).
     - **commit**: Whether to commit this turn to memory (default: true)
     - **X-Passkey**: User's passkey for authentication
     """
@@ -246,18 +268,20 @@ async def send_message(
 
     try:
         db_path = _resolve_db_path(passkey)
+        ctx_turns = _effective_context_turns(request.context_turns)
+        parent_id = request.parent_turn_id
 
-        # Continue from the current head: context is the ancestor chain leading up
-        # to the most recent turn (a proper branch path, not a global recent list).
-        # Read with a short-lived connection on THIS thread; the streaming
-        # generator opens its own connection on the worker thread.
+        # Build context from the active leaf's ancestor chain (the client tells us
+        # which branch is active via parent_turn_id). Omitted -> fresh root.
+        # Short-lived connection on THIS thread; the generator opens its own.
         conn = sqlite3.connect(db_path)
         try:
-            head_id = get_latest_turn_id(conn)
-            context_list = (
-                get_ancestor_chain(conn, head_id, limit=request.context_turns)
-                if head_id is not None else []
-            )
+            if parent_id is not None:
+                if get_turn_by_id(conn, parent_id) is None:
+                    raise HTTPException(status_code=404, detail=f"parent_turn_id {parent_id} not found")
+                context_list = get_ancestor_chain(conn, parent_id, limit=ctx_turns)
+            else:
+                context_list = []
         finally:
             conn.close()
 
@@ -265,11 +289,11 @@ async def send_message(
             db_path,
             message=request.message,
             context_list=context_list,
-            context_turns=request.context_turns,
+            context_turns=ctx_turns,
             commit=request.commit,
             user_id=request.user_id or os.environ.get("USER_ID"),
             mode=request.mode,
-            user_parent_id=head_id,
+            user_parent_id=parent_id,
             paragraph_index=None,
         )
         return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
@@ -296,6 +320,7 @@ async def create_branch(
 
     try:
         db_path = _resolve_db_path(passkey)
+        ctx_turns = _effective_context_turns(request.context_turns)
 
         conn = sqlite3.connect(db_path)
         try:
@@ -312,7 +337,7 @@ async def create_branch(
                                 f"parent turn {parent_turn_id} has {len(paragraphs)} paragraph(s)"),
                     )
 
-            context_list = get_ancestor_chain(conn, parent_turn_id, limit=request.context_turns)
+            context_list = get_ancestor_chain(conn, parent_turn_id, limit=ctx_turns)
         finally:
             conn.close()
 
@@ -320,7 +345,7 @@ async def create_branch(
             db_path,
             message=request.message,
             context_list=context_list,
-            context_turns=request.context_turns,
+            context_turns=ctx_turns,
             commit=request.commit,
             user_id=request.user_id or os.environ.get("USER_ID"),
             mode=request.mode,
@@ -351,7 +376,12 @@ async def get_tree(
             conn.close()
 
         enriched = [_enrich_tree_node(node) for node in roots]
-        return {"roots": enriched, "count": _count_nodes(enriched)}
+        return {
+            "roots": enriched,
+            "count": _count_nodes(enriched),
+            # Default window size: how many recent turns feed the next message.
+            "context_turns": _default_context_window(),
+        }
     except HTTPException:
         raise
     except Exception as e:

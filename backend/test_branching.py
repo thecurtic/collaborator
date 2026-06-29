@@ -167,10 +167,69 @@ def test_delete_reparent_vs_subtree():
     print("✓ delete reparents (single) and cascades (subtree)")
 
 
+def test_messages_continue_from_active_leaf():
+    """POST /api/messages builds context from parent_turn_id (the active leaf)."""
+    main, db = _fresh_env()
+    from starlette.testclient import TestClient
+    import json as _json
+
+    captured = {}
+    def fake_stream(message, context_turns=None, mode=None):
+        captured["context"] = [t["content"] for t in (context_turns or [])]
+        yield "ok"
+    main.stream_llm_tokens = fake_stream
+    c = TestClient(main.app)
+
+    def done(resp):
+        return [ _json.loads(l[6:]) for l in resp.text.splitlines()
+                 if l.startswith("data: ") and '"done"' in l ][0]
+
+    # Root conversation (no parent) -> fresh context, becomes a root.
+    r1 = c.post("/api/messages", json={"message": "A"})
+    assert captured["context"] == []
+    a_assistant = done(r1)["id"]
+
+    # Continue from that leaf -> context is its ancestor chain.
+    r2 = c.post("/api/messages", json={"message": "B", "parent_turn_id": a_assistant})
+    assert captured["context"] == ["A", "ok"]            # the A exchange
+    assert done(r2)["parent_turn_id"] == a_assistant
+
+    # A separate root + continue must NOT leak the other branch's turns.
+    r3 = c.post("/api/messages", json={"message": "X"})   # new root (latest by id)
+    x_assistant = done(r3)["id"]
+    # Continue the ORIGINAL branch, not the most-recent one.
+    c.post("/api/messages", json={"message": "C", "parent_turn_id": a_assistant})
+    assert captured["context"] == ["A", "ok"]             # still the A branch, not X
+
+    # Bad parent -> 404 (delivered as an SSE error is NOT used here; it's pre-stream)
+    assert c.post("/api/messages", json={"message": "z", "parent_turn_id": 99999}).status_code == 404
+    print("✓ /api/messages continues from the active leaf (parent_turn_id)")
+
+
+def test_tree_exposes_context_window_and_boundary():
+    main, db = _fresh_env()
+    import sqlite3
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    root = db.create_turn(conn, None, "user", "root", context_turns=5)
+    # a "branch without context" start: context_turns == 0
+    nob = db.create_turn(conn, None, "user", "fresh", parent_turn_id=root["id"], context_turns=0)
+    conn.close()
+
+    from starlette.testclient import TestClient
+    tree = TestClient(main.app).get("/api/tree").json()
+    assert tree["context_turns"] == 5                      # default window surfaced
+    root_node = tree["roots"][0]
+    assert root_node["context_boundary"] is False
+    assert root_node["children"][0]["context_boundary"] is True   # the fresh branch start
+    print("✓ tree exposes context_turns + per-node context_boundary")
+
+
 if __name__ == "__main__":
     test_migration_backfills_linear_chain()
     test_ancestor_chain_inclusive_and_ordered()
     test_tree_structure()
     test_branch_endpoint_and_tree_api()
     test_delete_reparent_vs_subtree()
+    test_messages_continue_from_active_leaf()
+    test_tree_exposes_context_window_and_boundary()
     print("\n✓ All branching tests passed!")
