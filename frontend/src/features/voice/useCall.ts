@@ -9,6 +9,7 @@ import { chimeListenStart, chimeListenStop } from './chime';
 import { DeviceTranscriber } from './deviceTranscriber';
 import { listenForWords, warmUpKeywordSpotter } from './keywordSpotter';
 import { startPcmStream, type PcmStream } from './pcmStreamer';
+import type { BranchTarget } from '@/features/chat/branchTarget';
 import { createSpeechSession, type SpeechSession } from './speech';
 import { splitParagraphs } from './speechUtils';
 import { TranscriptionStream } from './transcriptionStream';
@@ -61,7 +62,12 @@ interface Controls {
  *   spotting the stop word for barge-in) → listen again.
  * "Done" button and a max-duration are fallbacks for ending a turn.
  */
-export function useCall(open: boolean, onClose: () => void) {
+export function useCall(
+  open: boolean,
+  onClose: () => void,
+  branchTarget?: BranchTarget | null,
+  onBranchConsumed?: () => void,
+) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
   const [partial, setPartial] = useState('');
   const [transcript, setTranscript] = useState<CallTurn[]>([]);
@@ -72,11 +78,19 @@ export function useCall(open: boolean, onClose: () => void) {
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const controlsRef = useRef<Controls | null>(null);
+  // Read at call start; not effect deps so changing them won't restart the call.
+  const branchTargetRef = useRef(branchTarget);
+  branchTargetRef.current = branchTarget;
+  const onBranchConsumedRef = useRef(onBranchConsumed);
+  onBranchConsumedRef.current = onBranchConsumed;
 
   useEffect(() => {
     if (!open) return;
 
     let active = true;
+    // The first spoken turn forks from this branch (if one was pending), then
+    // the loop continues normally on the new branch.
+    let pendingBranch: BranchTarget | null = branchTargetRef.current ?? null;
     let turnId = 0;
     const pushTurn = (role: CallTurn['role'], text: string): number => {
       turnId += 1;
@@ -271,16 +285,36 @@ export function useCall(open: boolean, onClose: () => void) {
       );
       streamAbort = new AbortController();
       let full = '';
+      const onToken = (c: string) => {
+        full += c;
+        updateTurn(aid, full);
+        queue?.push(c);
+      };
       try {
-        await api.sendMessageStream(
-          { message: text, commit: true, mode: 'voice' },
-          (c) => {
-            full += c;
-            updateTurn(aid, full);
-            queue?.push(c);
-          },
-          streamAbort.signal,
-        );
+        if (pendingBranch) {
+          const pb = pendingBranch;
+          pendingBranch = null; // only the first turn forks
+          onBranchConsumedRef.current?.();
+          log(`branching from turn ${pb.turnId}${pb.withContext ? '' : ' (no ctx)'}`);
+          await api.branchMessage(
+            {
+              parentTurnId: pb.turnId,
+              message: text,
+              paragraphIndex: pb.paragraphIndex,
+              commit: true,
+              mode: 'voice',
+              ...(pb.withContext ? {} : { contextTurns: 0 }),
+            },
+            onToken,
+            streamAbort.signal,
+          );
+        } else {
+          await api.sendMessageStream(
+            { message: text, commit: true, mode: 'voice' },
+            onToken,
+            streamAbort.signal,
+          );
+        }
         queue?.finish();
       } catch (err) {
         const aborted = err instanceof DOMException && err.name === 'AbortError';

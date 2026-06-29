@@ -2,6 +2,8 @@ import { GitBranch, Loader2, Mic, SendHorizontal, Square, X } from 'lucide-react
 import { type FormEvent, type KeyboardEvent, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
+import { getSttEngine } from '@/features/settings/uiPrefs';
+import { transcribeBlobOnDevice } from '@/features/voice/deviceTranscriber';
 import { useRecorder } from '@/features/voice/useRecorder';
 
 interface ComposerProps {
@@ -53,9 +55,11 @@ export function Composer({
       if (!result) return;
       setTranscribing(true);
       try {
-        const text = (await api.transcribe(result.blob, {
-          filename: result.filename,
-        })).trim();
+        const text = (
+          getSttEngine() === 'device'
+            ? await transcribeBlobOnDevice(result.blob)
+            : await api.transcribe(result.blob, { filename: result.filename })
+        ).trim();
         if (text) setValue((v) => (v ? `${v.trimEnd()} ${text}` : text));
       } catch (err) {
         setVoiceError(

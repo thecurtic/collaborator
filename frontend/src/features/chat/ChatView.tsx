@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, Loader2, Network } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { BranchTarget } from './branchTarget';
 import { Composer } from './Composer';
 import { TreeBubble } from './TreeBubble';
 import { TreeMap } from './TreeMap';
@@ -8,6 +9,9 @@ import { useConversation } from './useConversation';
 interface ChatViewProps {
   /** Bumped to force a reload (e.g. after returning from call mode). */
   reloadSignal?: number;
+  /** Shared with App so a call can fork from the same point. */
+  branchTarget: BranchTarget | null;
+  onBranchTargetChange: (b: BranchTarget | null) => void;
 }
 
 interface BranchPoint {
@@ -15,11 +19,12 @@ interface BranchPoint {
   paragraphIndex?: number;
   label: string;
 }
-interface BranchTarget extends BranchPoint {
-  withContext: boolean;
-}
 
-export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
+export function ChatView({
+  reloadSignal = 0,
+  branchTarget,
+  onBranchTargetChange,
+}: ChatViewProps) {
   const {
     path,
     tree,
@@ -35,7 +40,6 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
     selectPathTo,
     remove,
   } = useConversation(reloadSignal);
-  const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
   // Pending branch point awaiting a with/without-context choice.
   const [branchChoice, setBranchChoice] = useState<BranchPoint | null>(null);
   const [mapOpen, setMapOpen] = useState(false);
@@ -105,7 +109,7 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
         branchTarget.paragraphIndex,
         branchTarget.withContext,
       );
-      setBranchTarget(null);
+      onBranchTargetChange(null);
     } else {
       send(message);
     }
@@ -121,7 +125,7 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
   };
 
   const chooseContext = (withContext: boolean) => {
-    if (branchChoice) setBranchTarget({ ...branchChoice, withContext });
+    if (branchChoice) onBranchTargetChange({ ...branchChoice, withContext });
     setBranchChoice(null);
   };
 
@@ -330,7 +334,7 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
               ? `${branchTarget.label}${branchTarget.withContext ? '' : ' · no context'}`
               : null
           }
-          onCancelBranch={() => setBranchTarget(null)}
+          onCancelBranch={() => onBranchTargetChange(null)}
         />
       </div>
     </div>

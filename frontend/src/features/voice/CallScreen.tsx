@@ -3,12 +3,16 @@ import { useEffect, useRef, type Ref } from 'react';
 import { Button } from '@/components/ui/button';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import { cn } from '@/lib/utils';
+import type { BranchTarget } from '@/features/chat/branchTarget';
 import { splitParagraphs } from './speechUtils';
 import { useCall, type CallPhase } from './useCall';
 
 interface CallScreenProps {
   open: boolean;
   onClose: () => void;
+  /** If set, the first spoken turn forks from this branch point. */
+  branchTarget?: BranchTarget | null;
+  onBranchConsumed?: () => void;
 }
 
 const LABELS: Record<CallPhase, string> = {
@@ -117,7 +121,12 @@ function Turn({
   );
 }
 
-export function CallScreen({ open, onClose }: CallScreenProps) {
+export function CallScreen({
+  open,
+  onClose,
+  branchTarget = null,
+  onBranchConsumed,
+}: CallScreenProps) {
   const {
     phase,
     partial,
@@ -130,7 +139,7 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
     endTurn,
     end,
     skipTo,
-  } = useCall(open, onClose);
+  } = useCall(open, onClose, branchTarget, onBranchConsumed);
   const showDebug = useDebugEnabled();
   const bottomRef = useRef<HTMLDivElement>(null);
   const currentParaRef = useRef<HTMLParagraphElement>(null);

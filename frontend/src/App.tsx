@@ -5,6 +5,7 @@ import { PasskeyScreen } from '@/auth/PasskeyScreen';
 import { Button } from '@/components/ui/button';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
+import type { BranchTarget } from '@/features/chat/branchTarget';
 import { SettingsSheet } from '@/features/settings/SettingsSheet';
 import { CallScreen } from '@/features/voice/CallScreen';
 import { SpeechProvider } from '@/features/voice/SpeechContext';
@@ -24,6 +25,8 @@ function AppShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [callOpen, setCallOpen] = useState(false);
   const [chatReload, setChatReload] = useState(0);
+  // A pending branch is shared so a call can fork from it too (not just typing).
+  const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
   // Closing a call refreshes the chat so the spoken exchange (persisted with
   // commit:true) shows up in the text history.
   const closeCall = useCallback(() => {
@@ -62,7 +65,12 @@ function AppShell() {
       </header>
 
       <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <CallScreen open={callOpen} onClose={closeCall} />
+      <CallScreen
+        open={callOpen}
+        onClose={closeCall}
+        branchTarget={branchTarget}
+        onBranchConsumed={() => setBranchTarget(null)}
+      />
 
       <main className="min-h-0 flex-1">
         {gate === 'checking' ? (
@@ -72,7 +80,11 @@ function AppShell() {
         ) : gate === 'locked' ? (
           <PasskeyScreen />
         ) : (
-          <ChatView reloadSignal={chatReload} />
+          <ChatView
+            reloadSignal={chatReload}
+            branchTarget={branchTarget}
+            onBranchTargetChange={setBranchTarget}
+          />
         )}
       </main>
     </div>

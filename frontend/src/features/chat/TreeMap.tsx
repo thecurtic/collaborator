@@ -44,42 +44,25 @@ interface Segment {
   active: boolean;
 }
 
+// Internal tree node used for tidy layout (a segment = a linear run of turns).
+interface Seg {
+  startNodeId: number;
+  count: number;
+  active: boolean;
+  children: Seg[];
+  offset: number; // column offset relative to the parent segment
+  left: number; // subtree extent (columns) left of own column
+  right: number; // subtree extent right of own column
+}
+
 /**
- * Decompose the tree into branch segments. The main line (root + first-children)
- * stays in the centered column 0; each other branch is placed in the nearest free
- * side column, alternating left/right, so overlapping branches don't collide.
+ * Tidy-tree layout. Each fork keeps its first child straight below it and fans
+ * the rest out alternately to the right/left of THAT parent. Every subtree is
+ * given a disjoint horizontal band (extents reserved bottom-up), so branches of
+ * one parent never cross another's — parents shift to make room as needed.
  */
 function layout(roots: TreeNode[], activeIds: Set<number>) {
-  const segments: Segment[] = [];
-  const occupancy = new Map<number, Array<[number, number]>>();
-  let sideToggle = 1;
-
-  const overlaps = (col: number, a: number, b: number) =>
-    (occupancy.get(col) ?? []).some(([s, e]) => a <= e && b >= s);
-  const record = (col: number, a: number, b: number) => {
-    const arr = occupancy.get(col) ?? [];
-    arr.push([a, b]);
-    occupancy.set(col, arr);
-  };
-  const allocateBranch = (a: number, b: number) => {
-    const first = sideToggle;
-    sideToggle = -sideToggle; // alternate which side we try first
-    for (let mag = 1; mag < 100; mag += 1) {
-      for (const sign of [first, -first]) {
-        const col = sign * mag;
-        if (!overlaps(col, a, b)) return col;
-      }
-    }
-    return first * 99;
-  };
-
-  const build = (
-    node: TreeNode,
-    startRow: number,
-    parentColumn: number,
-    forkRow: number | null,
-    isBranch: boolean,
-  ) => {
+  const build = (node: TreeNode): Seg => {
     const ids: number[] = [];
     let cur = node;
     while (true) {
@@ -90,34 +73,86 @@ function layout(roots: TreeNode[], activeIds: Set<number>) {
       }
       break;
     }
-    const count = ids.length;
-    const endRow = startRow + count - 1;
-    const column = isBranch ? allocateBranch(startRow, endRow) : parentColumn;
-    record(column, startRow, endRow);
-    segments.push({
+    return {
       startNodeId: node.id,
-      count,
-      column,
-      startRow,
-      // Keep the parent link for ALL non-root segments (forkRow === null only for
-      // roots) so continuations draw a connector and the trunk isn't broken.
-      parentColumn: forkRow === null ? null : parentColumn,
-      forkRow,
+      count: ids.length,
       active: ids.some((id) => activeIds.has(id)),
+      children: cur.children.length > 1 ? cur.children.map(build) : [],
+      offset: 0,
+      left: 0,
+      right: 0,
+    };
+  };
+
+  // Bottom-up: place children in disjoint bands, alternating sides.
+  const measure = (seg: Seg) => {
+    if (seg.children.length === 0) return;
+    seg.children.forEach(measure);
+    const c0 = seg.children[0];
+    c0.offset = 0;
+    let leftEdge = -c0.left;
+    let rightEdge = c0.right;
+    for (let i = 1; i < seg.children.length; i++) {
+      const c = seg.children[i];
+      if (i % 2 === 1) {
+        c.offset = rightEdge + 1 + c.left; // next free slot to the right
+        rightEdge = c.offset + c.right;
+      } else {
+        c.offset = leftEdge - 1 - c.right; // next free slot to the left
+        leftEdge = c.offset - c.left;
+      }
+    }
+    seg.left = -leftEdge;
+    seg.right = rightEdge;
+  };
+
+  // Top-down: resolve absolute columns + rows and flatten for rendering.
+  const segments: Segment[] = [];
+  const assign = (
+    seg: Seg,
+    col: number,
+    startRow: number,
+    parentColumn: number | null,
+    forkRow: number | null,
+  ) => {
+    segments.push({
+      startNodeId: seg.startNodeId,
+      count: seg.count,
+      column: col,
+      startRow,
+      parentColumn,
+      forkRow,
+      active: seg.active,
     });
-    if (cur.children.length > 1) {
-      const fr = endRow;
-      cur.children.forEach((child, i) =>
-        build(child, fr + 1, column, fr, i !== 0),
-      );
+    const myFork = startRow + seg.count - 1;
+    for (const c of seg.children) {
+      assign(c, col + c.offset, myFork + 1, col, myFork);
     }
   };
 
-  roots.forEach((root) => build(root, 0, 0, null, false));
+  // Roots are laid out like children of a virtual parent (alternating bands).
+  const rootSegs = roots.map(build);
+  rootSegs.forEach(measure);
+  if (rootSegs.length > 0) {
+    const bases: number[] = [0];
+    let leftEdge = -rootSegs[0].left;
+    let rightEdge = rootSegs[0].right;
+    for (let i = 1; i < rootSegs.length; i++) {
+      const r = rootSegs[i];
+      if (i % 2 === 1) {
+        bases[i] = rightEdge + 1 + r.left;
+        rightEdge = bases[i] + r.right;
+      } else {
+        bases[i] = leftEdge - 1 - r.right;
+        leftEdge = bases[i] - r.left;
+      }
+    }
+    rootSegs.forEach((r, i) => assign(r, bases[i], 0, null, null));
+  }
 
   const cols = segments.map((s) => s.column);
-  const minCol = Math.min(0, ...cols);
-  const maxCol = Math.max(0, ...cols);
+  const minCol = cols.length ? Math.min(...cols) : 0;
+  const maxCol = cols.length ? Math.max(...cols) : 0;
   const rows = segments.reduce((m, s) => Math.max(m, s.startRow + s.count), 0);
   return { segments, minCol, maxCol, rows };
 }
@@ -138,11 +173,10 @@ export function TreeMap({
 
   if (!open) return null;
 
-  // Symmetric span so the trunk (column 0) sits in the horizontal centre.
-  const half = Math.max(1, maxCol, -minCol);
-  const colX = (c: number) => PAD + (c + half) * COL;
+  // Place columns from the leftmost; the whole graph is centered in the viewport.
+  const colX = (c: number) => PAD + (c - minCol) * COL;
   const rowY = (r: number) => PAD + r * ROW;
-  const width = Math.max(2 * half * COL + PAD * 2, 200);
+  const width = Math.max((maxCol - minCol) * COL + PAD * 2, 200);
   const height = Math.max(rows * ROW + PAD, 200);
 
   return (
