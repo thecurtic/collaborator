@@ -92,10 +92,12 @@ export default defineConfig({
     // which gives a real HTTPS cert — required to install the PWA on a phone.
     allowedHosts: ['.ts.net'],
     // Proxy /api to the backend so the browser sees same-origin requests in dev.
+    // ws:true upgrades WS /api/transcribe/stream (streaming transcription).
     proxy: {
       '/api': {
         target: BACKEND_URL,
         changeOrigin: true,
+        ws: true,
       },
     },
   },

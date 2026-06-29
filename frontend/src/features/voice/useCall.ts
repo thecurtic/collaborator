@@ -3,7 +3,9 @@ import { api } from '@/api/collaborator';
 import { getEndWord, getStopWord } from '@/features/settings/uiPrefs';
 import { chimeListenStart, chimeListenStop } from './chime';
 import { listenForWords, warmUpKeywordSpotter } from './keywordSpotter';
+import { startPcmStream, type PcmStream } from './pcmStreamer';
 import { createSpeechSession, type SpeechSession } from './speech';
+import { TranscriptionStream } from './transcriptionStream';
 
 export type CallPhase =
   | 'connecting'
@@ -17,23 +19,6 @@ const MAX_UTTERANCE_MS = 60000; // safety cap on a single turn
 // audible, so it must be strict to avoid false interrupts that cut speech short.
 const END_WORD_THRESHOLD = 0.85;
 const STOP_WORD_THRESHOLD = 0.97;
-
-function pickMimeType(): string {
-  if (typeof MediaRecorder === 'undefined') return '';
-  const candidates = [
-    'audio/webm;codecs=opus',
-    'audio/webm',
-    'audio/mp4',
-    'audio/ogg;codecs=opus',
-  ];
-  return candidates.find((c) => MediaRecorder.isTypeSupported(c)) ?? '';
-}
-
-function extFor(mime: string): string {
-  if (mime.includes('mp4')) return 'mp4';
-  if (mime.includes('ogg')) return 'ogg';
-  return 'webm';
-}
 
 /** Strip a trailing command word (e.g. the spoken "go") from the transcript. */
 function stripTrailingWord(text: string, word: string): string {
@@ -49,9 +34,10 @@ interface Controls {
 }
 
 /**
- * Call loop with on-device keyword spotting (TF.js):
- *   listen (record + spot the end word) → transcribe once (Whisper) → stream the
- *   reply and speak it (while spotting the stop word for barge-in) → listen again.
+ * Call loop with on-device keyword spotting (TF.js) and streaming transcription:
+ *   listen (stream PCM16 to WS, show live partials, spot the end word) → on
+ *   end-of-turn take the final transcript → stream the reply and speak it (while
+ *   spotting the stop word for barge-in) → listen again.
  * "Done" button and a max-duration are fallbacks for ending a turn.
  */
 export function useCall(open: boolean, onClose: () => void) {
@@ -67,10 +53,8 @@ export function useCall(open: boolean, onClose: () => void) {
 
     let active = true;
     let stream: MediaStream | null = null;
-    let recorder: MediaRecorder | null = null;
-    let chunks: Blob[] = [];
-    let mime = '';
-    let baseType = 'audio/webm';
+    let pcm: PcmStream | null = null;
+    let transcriber: TranscriptionStream | null = null;
     let endWord = getEndWord();
     let stopWord = getStopWord();
     let queue: SpeechSession | null = null;
@@ -116,60 +100,50 @@ export function useCall(open: boolean, onClose: () => void) {
       setLogs((prev) => [...prev.slice(-13), `${t} ${m}`]);
     };
 
+    const stopCapture = () => {
+      pcm?.stop();
+      pcm = null;
+    };
+
     const cleanup = () => {
       active = false;
       if (maxTimer) window.clearTimeout(maxTimer);
       maxTimer = undefined;
       stopKws();
       streamAbort?.abort();
-      if (recorder && recorder.state !== 'inactive') {
-        recorder.onstop = null;
-        try {
-          recorder.stop();
-        } catch {
-          /* ignore */
-        }
-      }
-      recorder = null;
+      stopCapture();
+      transcriber?.close();
+      transcriber = null;
       queue?.stop();
       queue = null;
       stream?.getTracks().forEach((t) => t.stop());
       stream = null;
     };
 
-    const stopAndGetBlob = (): Promise<Blob | null> =>
-      new Promise((resolve) => {
-        const rec = recorder;
-        if (!rec || rec.state === 'inactive') {
-          resolve(null);
-          return;
-        }
-        rec.onstop = () => resolve(new Blob(chunks, { type: baseType }));
-        try {
-          rec.stop();
-        } catch {
-          resolve(null);
-        }
-      });
-
-    const listen = () => {
+    const listen = async () => {
       if (!active || !stream) return;
       finalizing = false;
-      chunks = [];
       setPhase('listening');
       setPartial('');
       setResponse('');
       try {
-        recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-      } catch {
+        transcriber = new TranscriptionStream((t) => {
+          if (active && !finalizing) setPartial(t);
+        });
+        await transcriber.ready();
+        if (!active) {
+          transcriber.close();
+          transcriber = null;
+          return;
+        }
+        pcm = await startPcmStream(stream, (buf) => transcriber?.sendPcm(buf));
+      } catch (e) {
+        if (!active) return;
+        log(`stream start FAIL: ${e instanceof Error ? e.message : e}`);
         setPhase('error');
-        setError('Could not start recording.');
+        setError('Could not open the transcription stream.');
         return;
       }
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
-      };
-      recorder.start();
       chimeListenStart(); // audible: mic now listening
       maxTimer = window.setTimeout(() => {
         log('max duration → finish');
@@ -189,27 +163,26 @@ export function useCall(open: boolean, onClose: () => void) {
       if (!active || finalizing) return;
       finalizing = true;
       chimeListenStop(); // audible: mic stopped listening
-      setPhase('processing'); // show a loading state while we transcribe
+      setPhase('processing'); // brief — final is usually ready immediately
       if (maxTimer) window.clearTimeout(maxTimer);
       maxTimer = undefined;
       stopKws();
-      const blob = await stopAndGetBlob();
-      if (!active) return;
+      stopCapture(); // stop sending audio before asking for the final
       let text = '';
-      if (blob && blob.size > 0) {
-        try {
-          text = await api.transcribe(blob, { filename: `turn.${extFor(baseType)}` });
-        } catch (e) {
-          log(`transcribe FAIL: ${e instanceof Error ? e.message : e}`);
-        }
+      try {
+        text = (await transcriber?.end()) ?? '';
+      } catch (e) {
+        log(`transcribe FAIL: ${e instanceof Error ? e.message : e}`);
       }
+      transcriber?.close();
+      transcriber = null;
       if (!active) return;
       const clean = stripTrailingWord(text, endWord);
       log(`heard(${text.trim().length}) → "${clean.slice(0, 40)}"`);
       if (clean) {
         await respond(clean);
       } else {
-        listen(); // nothing intelligible — listen again
+        void listen(); // nothing intelligible — listen again
       }
     };
 
@@ -222,7 +195,7 @@ export function useCall(open: boolean, onClose: () => void) {
       queue = createSpeechSession(() => {
         if (active) {
           stopKws();
-          listen();
+          void listen();
         }
       });
       // Barge-in: spot the stop word while the assistant is speaking. Strict
@@ -261,7 +234,7 @@ export function useCall(open: boolean, onClose: () => void) {
       streamAbort?.abort();
       queue?.stop();
       queue = null;
-      if (active) listen();
+      if (active) void listen();
     };
 
     controlsRef.current = {
@@ -290,16 +263,14 @@ export function useCall(open: boolean, onClose: () => void) {
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
-        mime = pickMimeType();
-        baseType = (mime || 'audio/webm').split(';')[0];
         try {
           await warmUpKeywordSpotter(); // preload model so detection is instant
         } catch (e) {
           log(`keyword model failed: ${e instanceof Error ? e.message : e}`);
         }
         if (!active) return;
-        log(`ready, mime=${baseType}`);
-        listen();
+        log('ready (streaming PCM16 16k)');
+        void listen();
       } catch (err) {
         if (!active) return;
         setPhase('error');
