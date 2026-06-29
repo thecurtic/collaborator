@@ -73,7 +73,9 @@ def load_config() -> dict:
         },
         "recall": {
             "enabled": False,
-            "embedding_model": "text-embedding-nomic-embed-text-v1.5",
+            "embedding_backend": "local",  # "local" (fastembed) or "lmstudio"
+            "embedding_model_local": "BAAI/bge-small-en-v1.5",  # used when backend=local
+            "embedding_model": "text-embedding-nomic-embed-text-v1.5",  # used when backend=lmstudio
             "search_limit": 10,
             "synthesis_max_tokens": 256,
             "tag_boosts": {

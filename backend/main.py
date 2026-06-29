@@ -21,7 +21,7 @@ from db import (
 )
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
-    get_embedding, synthesize_recall,
+    get_embedding, embed_texts, synthesize_recall,
 )
 from auth import validate_passkey, create_user_db
 
@@ -530,11 +530,15 @@ async def reindex_embeddings(
         try:
             pending = get_turns_missing_embeddings(conn, limit=1000)
             indexed = 0
-            for turn in pending:
-                vec = get_embedding(turn["content"])
-                if vec:
-                    set_turn_embedding(conn, turn["id"], vec)
-                    indexed += 1
+            # Embed in batches (one model call per chunk) for a fast backfill.
+            CHUNK = 64
+            for start in range(0, len(pending), CHUNK):
+                chunk = pending[start:start + CHUNK]
+                vectors = embed_texts([t["content"] for t in chunk])
+                for turn, vec in zip(chunk, vectors):
+                    if vec:
+                        set_turn_embedding(conn, turn["id"], vec)
+                        indexed += 1
         finally:
             conn.close()
         return {"indexed": indexed, "remaining": max(0, len(pending) - indexed)}

@@ -351,12 +351,12 @@ buffer), sends `final` on `end`, then closes. Segmenting is internal and may cha
 
 ### 8. Recall (Memory)
 
-Recall runs **inside the send** when enabled: the message is embedded (via LM Studio
-`/v1/embeddings`), the whole turns DB is cosine-searched with per-tag boosts, the top
-matches are synthesized into a first-person memory block (LM Studio chat, small token
-budget), streamed as a `recall` event, and injected into context (recall → window →
-current). The block is **ephemeral** — stored as the single "current" recall,
-overwritten each run.
+Recall runs **inside the send** when enabled: the message is embedded (locally via
+`fastembed` by default; LM Studio `/v1/embeddings` optional), the whole turns DB is
+cosine-searched with per-tag boosts, the top matches are synthesized into a
+first-person memory block (LM Studio chat, small token budget), streamed as a `recall`
+event, and injected into context (recall → window → current). The block is
+**ephemeral** — stored as the single "current" recall, overwritten each run.
 
 **`GET /api/recall/current`** → the current block (or null):
 ```json
@@ -379,10 +379,11 @@ boosts):
 ```
 `404` if the turn doesn't exist.
 
-> Setup: load an embedding model in LM Studio and set `recall.embedding_model`; enable
-> via `recall.enabled` or the per-request `recall` flag. Embeddings/synthesis both run
-> through LM Studio (no extra ML deps). Recall is best-effort — if embedding/synthesis
-> fails, the turn proceeds normally without a recall block.
+> Setup: embeddings run locally on the backend by default (`fastembed`, downloads a
+> small model once). Enable via `recall.enabled` or the per-request `recall` flag.
+> Synthesis uses the LM Studio chat model. Set `recall.embedding_backend: lmstudio`
+> (+ `recall.embedding_model`) to route embeddings through LM Studio instead. Recall
+> is best-effort — if embedding/synthesis fails, the turn proceeds without a block.
 
 ---
 

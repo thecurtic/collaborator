@@ -58,13 +58,19 @@ memory came from). The block is also injected into the model's context automatic
 
 ## Deploy / setup
 
-Backend code + schema migration only (adds an `embedding` BLOB + a `recall_blocks`
-table; auto-migrates). **No new Python deps.** To actually use recall:
-1. Load an **embedding model in LM Studio** and set `recall.embedding_model` (default
-   `text-embedding-nomic-embed-text-v1.5`).
-2. Set `recall.enabled: true` (or just pass `recall: true` per request).
-3. `POST /api/recall/reindex` once to index prior history.
-4. `git pull` + `./restart.sh`.
+Adds a schema migration (an `embedding` BLOB + a `recall_blocks` table; auto-migrates)
+and one Python dep, **`fastembed`** (ONNX, no PyTorch) for local embeddings. To use
+recall:
+1. `git pull` + `.venv/bin/pip install -r requirements.txt` (adds `fastembed`) +
+   `./restart.sh`.
+2. Set `recall.enabled: true` (or pass `recall: true` per request).
+3. `POST /api/recall/reindex` once to index prior history (now **batched** — fast).
+
+**Embeddings run locally on the backend by default** (`fastembed`,
+`BAAI/bge-small-en-v1.5`, downloads ~130MB once). No embedding model needs to be
+loaded in LM Studio. To route embeddings through LM Studio instead, set
+`recall.embedding_backend: lmstudio` and `recall.embedding_model`. Synthesis always
+uses the LM Studio chat model.
 
 ## Deferred (phase 2)
 

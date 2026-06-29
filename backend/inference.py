@@ -392,28 +392,65 @@ def _recall_config() -> Dict:
     return _get_config().get("recall", {}) or {}
 
 
-def get_embedding(text: str) -> Optional[List[float]]:
-    """Embed text via the LM Studio /v1/embeddings endpoint.
+_local_embedder = None
 
-    Returns the embedding vector, or None on failure (recall is best-effort and
-    must never break a turn).
+
+def _get_local_embedder():
+    """Lazy-load the in-process fastembed model (ONNX, no PyTorch).
+
+    Downloads the model once on first use, then caches it on disk and in memory.
     """
-    if not text or not text.strip():
-        return None
+    global _local_embedder
+    if _local_embedder is None:
+        from fastembed import TextEmbedding
+        model = _recall_config().get("embedding_model_local", "BAAI/bge-small-en-v1.5")
+        _local_embedder = TextEmbedding(model_name=model)
+    return _local_embedder
+
+
+def _embed_texts_lmstudio(texts: List[str]) -> List[Optional[List[float]]]:
     rc = _recall_config()
     model = rc.get("embedding_model", "text-embedding-nomic-embed-text-v1.5")
     try:
         response = requests.post(
             f"{_get_endpoint_url()}/embeddings",
-            json={"model": model, "input": text},
-            timeout=rc.get("embedding_timeout", 20),
+            json={"model": model, "input": list(texts)},
+            timeout=rc.get("embedding_timeout", 30),
         )
         response.raise_for_status()
-        data = response.json()
-        return data["data"][0]["embedding"]
+        data = sorted(response.json()["data"], key=lambda d: d.get("index", 0))
+        return [d["embedding"] for d in data]
     except Exception as e:
-        print(f"Warning: embedding request failed: {e}")
+        print(f"Warning: LM Studio embedding request failed: {e}")
+        return [None] * len(texts)
+
+
+def embed_texts(texts: List[str]) -> List[Optional[List[float]]]:
+    """Embed a batch of texts -> list of vectors (in order; None per failed item).
+
+    Dispatches on recall.embedding_backend: "local" (fastembed, default) runs
+    in-process on this machine; "lmstudio" calls the LM Studio /v1/embeddings
+    endpoint. Best-effort — recall must never break a turn.
+    """
+    if not texts:
+        return []
+    backend = _recall_config().get("embedding_backend", "local")
+    if backend == "lmstudio":
+        return _embed_texts_lmstudio(texts)
+    try:
+        embedder = _get_local_embedder()
+        return [vec.tolist() for vec in embedder.embed(list(texts))]
+    except Exception as e:
+        print(f"Warning: local embedding failed: {e}")
+        return [None] * len(texts)
+
+
+def get_embedding(text: str) -> Optional[List[float]]:
+    """Embed a single text. Returns the vector, or None on empty/failure."""
+    if not text or not text.strip():
         return None
+    out = embed_texts([text])
+    return out[0] if out else None
 
 
 def synthesize_recall(query: str, matches: List[Dict]) -> str:

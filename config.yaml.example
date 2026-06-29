@@ -43,12 +43,14 @@ system_prompt:
 #   device: "cpu"          # cpu | cuda
 #   compute_type: "int8"   # int8 (cpu) | float16 (gpu) | int8_float16
 
-# Recall (memory). Embeddings + synthesis both run through the LM Studio endpoint,
-# so load an embedding model there (embedding_model) alongside your chat model.
-# Disabled by default; the frontend can also toggle it per request.
+# Recall (memory). Embeddings run LOCALLY on the backend by default (fastembed,
+# ONNX, no PyTorch). Synthesis always uses the LM Studio chat model. Disabled by
+# default; the frontend can also toggle it per request.
 recall:
   enabled: false
-  embedding_model: "text-embedding-nomic-embed-text-v1.5"  # must be loaded in LM Studio
+  embedding_backend: "local"                  # "local" (fastembed) or "lmstudio"
+  embedding_model_local: "BAAI/bge-small-en-v1.5"  # local model (downloads once, ~130MB)
+  # embedding_model: "text-embedding-nomic-embed-text-v1.5"  # only if backend: lmstudio
   search_limit: 10            # max similar turns to feed synthesis
   synthesis_max_tokens: 256   # output budget to keep the recall block snappy
   tag_boosts:                 # multiplicative score boosts per tag

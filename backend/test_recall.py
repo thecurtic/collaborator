@@ -86,8 +86,40 @@ def test_recall_flow_emits_event_and_feeds_context():
     print("✓ recall flow: event + context + current block; off by default")
 
 
+def test_embed_texts_backend_dispatch():
+    """embed_texts uses local fastembed by default, or LM Studio when configured."""
+    import inference
+    import numpy as np
+    orig_rc = inference._recall_config
+    orig_post = inference.requests.post
+    orig_embedder = inference._local_embedder
+    try:
+        # Local backend: inject a fake in-process embedder (no fastembed needed).
+        class FakeEmbedder:
+            def embed(self, texts):
+                return [np.asarray([float(len(t)), 1.0], dtype="float32") for t in texts]
+        inference._local_embedder = FakeEmbedder()
+        inference._recall_config = lambda: {"embedding_backend": "local"}
+        assert inference.embed_texts(["ab", "abc"]) == [[2.0, 1.0], [3.0, 1.0]]
+
+        # LM Studio backend: mock the HTTP call; results must come back in input order.
+        inference._recall_config = lambda: {"embedding_backend": "lmstudio", "embedding_model": "m"}
+        class FakeResp:
+            def raise_for_status(self): pass
+            def json(self):
+                return {"data": [{"index": 1, "embedding": [9.0]}, {"index": 0, "embedding": [8.0]}]}
+        inference.requests.post = lambda *a, **k: FakeResp()
+        assert inference.embed_texts(["x", "y"]) == [[8.0], [9.0]]
+    finally:
+        inference._recall_config = orig_rc
+        inference.requests.post = orig_post
+        inference._local_embedder = orig_embedder
+    print("✓ embed_texts dispatch (local default + lmstudio, ordered)")
+
+
 if __name__ == "__main__":
     test_search_ranking_and_tag_boosts()
     test_tags_endpoint()
     test_recall_flow_emits_event_and_feeds_context()
+    test_embed_texts_backend_dispatch()
     print("\n✓ All recall tests passed!")
