@@ -35,3 +35,10 @@ system_prompt:
   # Appended to EVERY system prompt: tells the model to put distinct ideas in their
   # own paragraphs so paragraph-level branching is meaningful. Override if desired.
   # paragraph_text: "Put each distinct idea in its own paragraph separated by a blank line."
+
+# Speech-to-text (faster-whisper / CTranslate2). Defaults: CPU, int8, 'base' model.
+# For a GPU box use device: cuda and compute_type: float16.
+# transcription:
+#   model: "base"          # tiny | base | small | medium | large-v3 (or *.en variants)
+#   device: "cpu"          # cpu | cuda
+#   compute_type: "int8"   # int8 (cpu) | float16 (gpu) | int8_float16

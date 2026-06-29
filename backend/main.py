@@ -500,46 +500,19 @@ def transcribe_audio(
         if process.returncode != 0:
             raise HTTPException(status_code=500, detail=f"FFmpeg error: {stderr.decode(errors='replace')}")
 
-        # Transcribe: prefer the whisper python module, fall back to the CLI.
-        text = None
-
+        # Transcribe the normalized 16kHz mono wav with faster-whisper.
         try:
-            import whisper
-            model = whisper.load_model("base")
-            result_obj = model.transcribe(tmp_path, language=language or "en")
-            text = result_obj["text"]
+            text = _whisper_transcribe(tmp_path, language)
         except HTTPException:
             raise
-        except Exception:
-            # Python module unavailable/failed — fall back to the whisper CLI.
-            try:
-                result = subprocess.run(
-                    ["whisper", tmp_path, "--model", "base", "--language", language or "en",
-                     "--output_format", "txt"],
-                    capture_output=True, text=True
-                )
-            except FileNotFoundError:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Whisper is not installed on the server (neither the python "
-                           "module nor the CLI). Install 'openai-whisper' to enable transcription."
-                )
-
-            if result.returncode != 0:
-                raise HTTPException(status_code=500, detail=f"Whisper error: {result.stderr}")
-
-            # Extract text from CLI output (JSON-ish, then first non-empty line).
-            match = re.search(r'"text":\s*"([^"]+)"', result.stdout)
-            if match:
-                text = match.group(1).replace('\\"', '"')
-            else:
-                for line in result.stdout.split('\n'):
-                    if line.strip():
-                        text = line.strip()
-                        break
-
-        if text is None:
-            raise HTTPException(status_code=500, detail="Could not extract transcription")
+        except ImportError:
+            raise HTTPException(
+                status_code=500,
+                detail="faster-whisper is not installed on the server. Install it "
+                       "(pip install -r requirements.txt) to enable transcription.",
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
 
         return {"text": text.strip()}
 
@@ -560,19 +533,41 @@ def transcribe_audio(
 # Wire format for WS /api/transcribe/stream: raw PCM16, mono, 16 kHz, little-endian.
 STREAM_SAMPLE_RATE = 16000
 STREAM_BYTES_PER_SAMPLE = 2
-# Re-transcribe (emit a partial) roughly every ~2s of newly received audio.
-STREAM_PARTIAL_INTERVAL_BYTES = STREAM_SAMPLE_RATE * STREAM_BYTES_PER_SAMPLE * 2
+# Re-transcribe (emit a partial) roughly every ~1.5s of newly received audio.
+# faster-whisper makes each pass cheap enough to keep the running transcript close
+# to final by the time the user stops, so the final pass feels instant.
+STREAM_PARTIAL_INTERVAL_BYTES = int(STREAM_SAMPLE_RATE * STREAM_BYTES_PER_SAMPLE * 1.5)
 
 _whisper_model = None
 
 
 def _get_whisper_model():
-    """Load the Whisper model once and reuse it across connections."""
+    """Load the faster-whisper model once and reuse it across requests/connections.
+
+    Engine is CTranslate2 (no PyTorch). Model/device/compute are configurable under
+    a `transcription` config section; defaults are CPU int8 with the 'base' model.
+    Set device: cuda / compute_type: float16 to use a GPU.
+    """
     global _whisper_model
     if _whisper_model is None:
-        import whisper
-        _whisper_model = whisper.load_model("base")
+        from faster_whisper import WhisperModel
+        tcfg = config.get("transcription", {}) or {}
+        _whisper_model = WhisperModel(
+            tcfg.get("model", "base"),
+            device=tcfg.get("device", "cpu"),
+            compute_type=tcfg.get("compute_type", "int8"),
+        )
     return _whisper_model
+
+
+def _whisper_transcribe(audio, language: Optional[str]) -> str:
+    """Transcribe a file path or a float32 numpy array via faster-whisper.
+
+    faster-whisper returns a generator of segments; join their text.
+    """
+    model = _get_whisper_model()
+    segments, _info = model.transcribe(audio, language=language or "en")
+    return "".join(segment.text for segment in segments).strip()
 
 
 def _transcribe_pcm16(pcm_bytes: bytes, language: Optional[str]) -> str:
@@ -582,9 +577,7 @@ def _transcribe_pcm16(pcm_bytes: bytes, language: Optional[str]) -> str:
     import numpy as np
     # PCM16 LE -> float32 in [-1, 1], which is what Whisper expects at 16 kHz.
     audio = np.frombuffer(pcm_bytes, dtype="<i2").astype("float32") / 32768.0
-    model = _get_whisper_model()
-    result = model.transcribe(audio, language=language or "en", fp16=False)
-    return (result.get("text") or "").strip()
+    return _whisper_transcribe(audio, language)
 
 
 async def _ws_send(websocket: WebSocket, payload: dict) -> None:
