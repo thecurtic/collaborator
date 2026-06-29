@@ -7,3 +7,5 @@ pyyaml==6.0.2
 requests==2.32.3
 python-multipart==0.0.9
 openai-whisper==20240930  # speech-to-text for /api/transcribe (also requires the ffmpeg system package)
+numpy==1.26.4              # PCM16 -> float32 for streaming transcription
+websockets==13.1           # uvicorn WebSocket support for /api/transcribe/stream

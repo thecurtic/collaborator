@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException, Header, UploadFile, Form, Request, File
+from fastapi import (
+    FastAPI, HTTPException, Header, UploadFile, Form, Request, File,
+    WebSocket, WebSocketDisconnect, Query,
+)
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import sqlite3
@@ -550,6 +553,130 @@ def transcribe_audio(
                 _os.unlink(tmp_path)
             except OSError:
                 pass
+
+
+# --- Streaming transcription (WebSocket) -----------------------------------
+
+# Wire format for WS /api/transcribe/stream: raw PCM16, mono, 16 kHz, little-endian.
+STREAM_SAMPLE_RATE = 16000
+STREAM_BYTES_PER_SAMPLE = 2
+# Re-transcribe (emit a partial) roughly every ~2s of newly received audio.
+STREAM_PARTIAL_INTERVAL_BYTES = STREAM_SAMPLE_RATE * STREAM_BYTES_PER_SAMPLE * 2
+
+_whisper_model = None
+
+
+def _get_whisper_model():
+    """Load the Whisper model once and reuse it across connections."""
+    global _whisper_model
+    if _whisper_model is None:
+        import whisper
+        _whisper_model = whisper.load_model("base")
+    return _whisper_model
+
+
+def _transcribe_pcm16(pcm_bytes: bytes, language: Optional[str]) -> str:
+    """Transcribe raw PCM16 mono 16kHz bytes. Runs in a worker thread (blocking)."""
+    if not pcm_bytes:
+        return ""
+    import numpy as np
+    # PCM16 LE -> float32 in [-1, 1], which is what Whisper expects at 16 kHz.
+    audio = np.frombuffer(pcm_bytes, dtype="<i2").astype("float32") / 32768.0
+    model = _get_whisper_model()
+    result = model.transcribe(audio, language=language or "en", fp16=False)
+    return (result.get("text") or "").strip()
+
+
+async def _ws_send(websocket: WebSocket, payload: dict) -> None:
+    await websocket.send_text(json.dumps(payload))
+
+
+@app.websocket("/api/transcribe/stream")
+async def transcribe_stream(
+    websocket: WebSocket,
+    passkey: Optional[str] = Query(None),
+    language: Optional[str] = Query(None),
+):
+    """Stream mic audio in, get incremental transcripts back.
+
+    Protocol:
+      - Auth: ?passkey=... OR first text frame {"passkey": "..."} (browsers can't
+        set WebSocket headers). Invalid/missing -> error + close.
+      - Client -> server (binary): raw PCM16, mono, 16 kHz, little-endian.
+      - Client -> server (text): {"type":"end"} to finalize the turn.
+      - Server -> client (text): {"type":"partial","text":...} as it transcribes,
+        {"type":"final","text":...} after end, or {"type":"error","detail":...}.
+    """
+    await websocket.accept()
+
+    # --- Auth (query param, else first text frame carrying the passkey) ---
+    if auth_enabled:
+        pk = passkey
+        if not pk:
+            try:
+                first = await websocket.receive()
+            except WebSocketDisconnect:
+                return
+            if first.get("type") == "websocket.disconnect":
+                return
+            if first.get("text"):
+                try:
+                    pk = json.loads(first["text"]).get("passkey")
+                except Exception:
+                    pk = None
+        if not pk or not validate_passkey(pk):
+            await _ws_send(websocket, {"type": "error", "detail": "Invalid or missing passkey"})
+            await websocket.close(code=1008)
+            return
+
+    # Make sure Whisper is usable before we start accepting audio.
+    try:
+        await asyncio.to_thread(_get_whisper_model)
+    except Exception as e:
+        await _ws_send(websocket, {"type": "error", "detail": f"Whisper unavailable: {e}"})
+        await websocket.close(code=1011)
+        return
+
+    buffer = bytearray()
+    last_partial_bytes = 0
+
+    try:
+        while True:
+            message = await websocket.receive()
+
+            if message.get("type") == "websocket.disconnect":
+                return
+
+            data_bytes = message.get("bytes")
+            if data_bytes is not None:
+                buffer += data_bytes
+                # Emit a running partial every ~interval of new audio.
+                if len(buffer) - last_partial_bytes >= STREAM_PARTIAL_INTERVAL_BYTES:
+                    last_partial_bytes = len(buffer)
+                    text = await asyncio.to_thread(_transcribe_pcm16, bytes(buffer), language)
+                    await _ws_send(websocket, {"type": "partial", "text": text})
+                continue
+
+            text_frame = message.get("text")
+            if text_frame is not None:
+                try:
+                    payload = json.loads(text_frame)
+                except Exception:
+                    continue
+                if payload.get("type") == "end":
+                    final_text = await asyncio.to_thread(_transcribe_pcm16, bytes(buffer), language)
+                    await _ws_send(websocket, {"type": "final", "text": final_text})
+                    await websocket.close()
+                    return
+
+    except WebSocketDisconnect:
+        return
+    except Exception as e:
+        try:
+            await _ws_send(websocket, {"type": "error", "detail": str(e)})
+            await websocket.close(code=1011)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

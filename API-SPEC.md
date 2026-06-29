@@ -286,6 +286,37 @@ parent it branched from. `preview` is a single-line label.
 
 ---
 
+### 7. Streaming Transcription (WebSocket)
+```
+WS /api/transcribe/stream?passkey=<your-passkey>&language=en
+```
+
+Stream mic audio in and receive incremental transcripts. For tap-to-record, keep
+using the one-shot `POST /api/transcribe`.
+
+**Auth:** browsers can't set WebSocket headers, so pass the passkey as the
+`?passkey=` query param, **or** as the first text frame `{"passkey":"..."}`. Invalid
+/ missing → `{"type":"error"}` then close (1008).
+
+**Audio in (binary frames):** raw **PCM16, mono, 16 kHz, little-endian** — sent as
+captured (any frame size). This is fed straight to Whisper (no transcode).
+
+**Control in (text frames):**
+```json
+{"type":"end"}     // user's turn ended (e.g. on-device keyword / Done button)
+```
+
+**Server → client (text frames):**
+```json
+{"type":"partial","text":"running transcript so far"}   // emitted as audio arrives
+{"type":"final","text":"final transcript"}              // after {"type":"end"}
+{"type":"error","detail":"..."}
+```
+The server emits a `partial` roughly every ~2s of received audio (re-transcribing the
+buffer), sends `final` on `end`, then closes. Segmenting is internal and may change.
+
+---
+
 ## Data Models
 
 ### Turn
