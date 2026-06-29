@@ -1,5 +1,5 @@
 import { Check, Loader2, Mic, PhoneOff, Volume2 } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type Ref } from 'react';
 import { Button } from '@/components/ui/button';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import { cn } from '@/lib/utils';
@@ -26,6 +26,7 @@ function Turn({
   speaking,
   readChars,
   onSkip,
+  currentRef,
 }: {
   role: 'user' | 'assistant';
   text: string;
@@ -35,6 +36,8 @@ function Turn({
   readChars?: number;
   /** Tap a paragraph to (re)speak from there. Assistant turns, when idle. */
   onSkip?: (paragraphIndex: number) => void;
+  /** Attached to the paragraph currently being read (for follow-scroll). */
+  currentRef?: Ref<HTMLParagraphElement>;
 }) {
   const label = role === 'user' ? 'You' : 'Assistant';
 
@@ -43,12 +46,30 @@ function Turn({
     // Tappable paragraphs (tap to (re)speak from here) with per-paragraph
     // read-along fade while this turn is being spoken.
     const read = readChars ?? 0;
+    const paras = splitParagraphs(text);
+    // The paragraph currently being read (for follow-scroll).
+    let currentIdx = -1;
+    if (speaking) {
+      currentIdx = paras.findIndex(
+        ({ text: p, start }) =>
+          p.trim() !== '' && read >= start && read < start + p.length,
+      );
+      if (currentIdx === -1) {
+        for (let i = paras.length - 1; i >= 0; i--) {
+          if (paras[i].text.trim()) {
+            currentIdx = i;
+            break;
+          }
+        }
+      }
+    }
     body = (
       <div className="space-y-2">
-        {splitParagraphs(text).map(({ text: p, start }, i) =>
+        {paras.map(({ text: p, start }, i) =>
           p.trim() ? (
             <p
               key={i}
+              ref={speaking && i === currentIdx ? currentRef : undefined}
               onClick={() => onSkip(i)}
               title="Tap to play from here"
               className="cursor-pointer whitespace-pre-wrap text-[17px] leading-relaxed transition active:opacity-70"
@@ -112,10 +133,20 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
   } = useCall(open, onClose);
   const showDebug = useDebugEnabled();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const currentParaRef = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [transcript.length, partial, spokenChars]);
+    // While the agent speaks, keep the paragraph being read in view (centered);
+    // otherwise follow the bottom (new user speech / new turns).
+    if (speakingId != null && currentParaRef.current) {
+      currentParaRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    } else {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [transcript.length, partial, spokenChars, speakingId]);
 
   if (!open) return null;
 
@@ -170,6 +201,7 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
                 text={t.text}
                 speaking={isSpeaking}
                 readChars={speakBase + spokenChars}
+                currentRef={isSpeaking ? currentParaRef : undefined}
                 onSkip={
                   t.role === 'assistant'
                     ? (i) => skipTo(t.id, t.text, i)

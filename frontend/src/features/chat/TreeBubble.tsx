@@ -36,26 +36,26 @@ interface TreeBubbleProps {
 
 function Switcher({ index, total, onPrev, onNext }: Omit<Fork, 'paragraphIndex'>) {
   return (
-    <span className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-background px-1 py-0.5 text-[12px] font-medium text-foreground shadow-sm">
-      <GitBranch className="mx-0.5 h-3.5 w-3.5 text-primary" />
+    <span className="inline-flex items-center gap-1 rounded-xl border border-border bg-background px-1.5 py-1 text-[13px] font-medium text-foreground shadow-sm">
+      <GitBranch className="mx-0.5 h-4 w-4 text-primary" />
       <button
         type="button"
         aria-label="Previous branch"
         onClick={onPrev}
-        className="rounded p-0.5 hover:text-primary active:scale-90"
+        className="rounded-md p-1.5 hover:text-primary active:scale-90"
       >
-        <ChevronLeft className="h-4 w-4" />
+        <ChevronLeft className="h-5 w-5" />
       </button>
-      <span className="min-w-[2.2rem] text-center tabular-nums">
+      <span className="min-w-[2.4rem] text-center tabular-nums">
         {index + 1} / {total}
       </span>
       <button
         type="button"
         aria-label="Next branch"
         onClick={onNext}
-        className="rounded p-0.5 hover:text-primary active:scale-90"
+        className="rounded-md p-1.5 hover:text-primary active:scale-90"
       >
-        <ChevronRight className="h-4 w-4" />
+        <ChevronRight className="h-5 w-5" />
       </button>
     </span>
   );
@@ -148,9 +148,9 @@ export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) 
                         multiPara ? block : node.preview,
                       )
                     }
-                    className="mt-0.5 shrink-0 rounded p-1 opacity-40 transition hover:opacity-100 active:scale-90"
+                    className="mt-0.5 shrink-0 rounded p-2 opacity-50 transition hover:opacity-100 active:scale-90"
                   >
-                    <GitBranch className="h-3.5 w-3.5" />
+                    <GitBranch className="h-4 w-4" />
                   </button>
                 </div>
               </div>
@@ -171,23 +171,23 @@ export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) 
           </div>
         )}
 
-        <div className="mt-1.5 flex items-center gap-1 text-[10px] opacity-60">
+        <div className="mt-1.5 flex items-center gap-2 text-[10px] opacity-60">
           {node.paragraphIndex != null && <span>branched</span>}
-          <span className="ml-auto flex items-center gap-1">
+          <span className="ml-auto flex items-center gap-2">
             {canSpeak && (
               <Button
                 variant="ghost"
                 size="icon"
                 aria-label={ttsPlaying ? 'Stop reading' : 'Read aloud'}
                 onClick={() => speech.toggle(node.id, node.content)}
-                className="-my-1 h-7 w-7 opacity-70 hover:opacity-100"
+                className="-my-1 h-9 w-9 opacity-70 hover:opacity-100"
               >
                 {ttsLoading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" />
                 ) : ttsPlaying ? (
-                  <Square className="h-3.5 w-3.5" />
+                  <Square className="h-4 w-4" />
                 ) : (
-                  <Volume2 className="h-3.5 w-3.5" />
+                  <Volume2 className="h-4 w-4" />
                 )}
               </Button>
             )}
@@ -197,9 +197,9 @@ export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) 
               aria-label="Delete this turn"
               title="Delete this turn"
               onClick={() => onDelete(node.id)}
-              className="-my-1 h-7 w-7 opacity-70 hover:opacity-100"
+              className="-my-1 h-9 w-9 opacity-70 hover:opacity-100"
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              <Trash2 className="h-4 w-4" />
             </Button>
           </span>
         </div>

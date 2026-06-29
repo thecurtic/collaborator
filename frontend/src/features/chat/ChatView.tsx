@@ -37,8 +37,9 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
-  // When entering a branch from the map, scroll to that turn (not the bottom).
-  const pendingScrollRef = useRef<number | null>(null);
+  // Entering a branch jumps to its tip; switching siblings keeps the view put.
+  const scrollTipRef = useRef(false);
+  const suppressScrollRef = useRef(false);
 
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -54,29 +55,40 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
     }
   }, [loading, reloadSignal]);
 
-  // Follow new/streaming content while pinned to the bottom.
+  // Follow new/streaming content while pinned to the bottom — but not when
+  // switching siblings (keep the tapped toggle under the finger).
   useEffect(() => {
-    if (!loading && pinnedRef.current && pendingScrollRef.current == null) {
+    if (suppressScrollRef.current) {
+      suppressScrollRef.current = false;
+      return;
+    }
+    if (!loading && pinnedRef.current && !scrollTipRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
   }, [path.length, streaming?.reply, sending, loading]);
 
-  // After entering a branch, scroll that turn into view once it's on the path.
+  // After entering a branch, jump to the branch tip (bottom of the new path).
   useEffect(() => {
-    const id = pendingScrollRef.current;
-    if (id == null) return;
-    const el = scrollRef.current?.querySelector(`[data-tid="${id}"]`);
-    if (el) {
-      el.scrollIntoView({ block: 'center' });
-      pendingScrollRef.current = null;
+    if (scrollTipRef.current) {
+      bottomRef.current?.scrollIntoView({ block: 'end' });
+      scrollTipRef.current = false;
     }
   });
 
   const enterBranch = (id: number) => {
     selectPathTo(id);
-    pinnedRef.current = false;
-    pendingScrollRef.current = id;
+    pinnedRef.current = true;
+    scrollTipRef.current = true;
     setMapOpen(false);
+  };
+
+  const switchAt = (
+    parentId: number,
+    siblings: Parameters<typeof switchSibling>[1],
+    dir: 1 | -1,
+  ) => {
+    suppressScrollRef.current = true;
+    switchSibling(parentId, siblings, dir);
   };
 
   const handleSend = (message: string) => {
@@ -159,10 +171,10 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
                   <button
                     type="button"
                     aria-label="Previous branch"
-                    onClick={() => switchSibling(0, path[0].siblings, -1)}
-                    className="rounded p-0.5 hover:text-foreground active:scale-90"
+                    onClick={() => switchAt(0, path[0].siblings, -1)}
+                    className="rounded p-1 hover:text-foreground active:scale-90"
                   >
-                    <ChevronLeft className="h-4 w-4" />
+                    <ChevronLeft className="h-5 w-5" />
                   </button>
                   <span>
                     {path[0].siblings.findIndex((s) => s.id === path[0].node.id) +
@@ -172,10 +184,10 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
                   <button
                     type="button"
                     aria-label="Next branch"
-                    onClick={() => switchSibling(0, path[0].siblings, 1)}
-                    className="rounded p-0.5 hover:text-foreground active:scale-90"
+                    onClick={() => switchAt(0, path[0].siblings, 1)}
+                    className="rounded p-1 hover:text-foreground active:scale-90"
                   >
-                    <ChevronRight className="h-4 w-4" />
+                    <ChevronRight className="h-5 w-5" />
                   </button>
                 </div>
               )}
@@ -192,9 +204,8 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
                         ),
                         total: child.siblings.length,
                         onPrev: () =>
-                          switchSibling(entry.node.id, child.siblings, -1),
-                        onNext: () =>
-                          switchSibling(entry.node.id, child.siblings, 1),
+                          switchAt(entry.node.id, child.siblings, -1),
+                        onNext: () => switchAt(entry.node.id, child.siblings, 1),
                       }
                     : undefined;
                 return (
