@@ -16,7 +16,8 @@ import type { TreeNode } from '@/domain/models';
 /** Describes the fork at this node: which child paragraph is active + switcher. */
 export interface Fork {
   paragraphIndex: number | null;
-  index: number; // 0-based active sibling
+  /** Displayed numerator: 0 = empty "continue here" slot, 1..n = branches. */
+  current: number;
   total: number;
   onPrev: () => void;
   onNext: () => void;
@@ -36,7 +37,12 @@ interface TreeBubbleProps {
   inContext?: boolean;
 }
 
-function Switcher({ index, total, onPrev, onNext }: Omit<Fork, 'paragraphIndex'>) {
+function Switcher({
+  current,
+  total,
+  onPrev,
+  onNext,
+}: Omit<Fork, 'paragraphIndex'>) {
   return (
     <span className="inline-flex items-center gap-1 rounded-xl border border-border bg-background px-1.5 py-1 text-[13px] font-medium text-foreground shadow-sm">
       <GitBranch className="mx-0.5 h-4 w-4 text-primary" />
@@ -49,7 +55,7 @@ function Switcher({ index, total, onPrev, onNext }: Omit<Fork, 'paragraphIndex'>
         <ChevronLeft className="h-5 w-5" />
       </button>
       <span className="min-w-[2.4rem] text-center tabular-nums">
-        {index + 1} / {total}
+        {current} / {total}
       </span>
       <button
         type="button"
@@ -171,7 +177,7 @@ export function TreeBubble({
         {fork && (
           <div className="mt-2 flex">
             <Switcher
-              index={fork.index}
+              current={fork.current}
               total={fork.total}
               onPrev={fork.onPrev}
               onNext={fork.onNext}

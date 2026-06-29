@@ -41,6 +41,7 @@ export function ChatView({
     send,
     branch,
     switchSibling,
+    cycleFork,
     selectPathTo,
     remove,
   } = useConversation(reloadSignal);
@@ -108,6 +109,12 @@ export function ChatView({
   ) => {
     suppressScrollRef.current = true;
     switchSibling(parentId, siblings, dir);
+  };
+
+  // Cycle a node's branch fork (keeps the tapped button under the finger).
+  const switchFork = (parentId: number, dir: 1 | -1) => {
+    suppressScrollRef.current = true;
+    cycleFork(parentId, dir);
   };
 
   const handleSend = (message: string) => {
@@ -276,22 +283,17 @@ export function ChatView({
                 </div>
               )}
               {path.map((entry, i) => {
-                // The fork lives on this node when its active child has siblings;
-                // highlight the source paragraph + show the switcher there.
-                const child = path[i + 1];
-                const fork =
-                  child && child.siblings.length > 1
-                    ? {
-                        paragraphIndex: child.node.paragraphIndex,
-                        index: child.siblings.findIndex(
-                          (s) => s.id === child.node.id,
-                        ),
-                        total: child.siblings.length,
-                        onPrev: () =>
-                          switchAt(entry.node.id, child.siblings, -1),
-                        onNext: () => switchAt(entry.node.id, child.siblings, 1),
-                      }
-                    : undefined;
+                // The switcher (incl. the empty "continue here" slot) is computed
+                // per node in useConversation; highlight its source paragraph.
+                const fork = entry.fork
+                  ? {
+                      paragraphIndex: entry.fork.paragraphIndex,
+                      current: entry.fork.current,
+                      total: entry.fork.total,
+                      onPrev: () => switchFork(entry.node.id, -1),
+                      onNext: () => switchFork(entry.node.id, 1),
+                    }
+                  : undefined;
                 return (
                   <div key={entry.node.id} data-tid={entry.node.id}>
                     <TreeBubble

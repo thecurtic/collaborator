@@ -2,7 +2,14 @@
 
 A living document describing the core philosophy, architecture decisions, and intended behavior of Collaborator.
 
-**Last Updated:** 2026-06-27
+**Last Updated:** 2026-06-29
+
+> **Implementation status (2026-06-29):** Recall v1 is implemented on the backend —
+> recall runs inside the send (embed → cosine search → synthesize → stream as a
+> `recall` event → inject into context), embeddings + synthesis go through LM Studio,
+> tags via `PATCH /api/turns/{id}/tags`, ephemeral current block via
+> `GET /api/recall/current`, backfill via `POST /api/recall/reindex`. Deferred:
+> edit-severity flow (interrupt/restart vs continue) and per-turn recall auditing.
 
 ---
 

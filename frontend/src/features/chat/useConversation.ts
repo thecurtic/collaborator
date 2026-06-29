@@ -3,13 +3,31 @@ import { api } from '@/api/collaborator';
 import type { ConversationTree, TreeNode } from '@/domain/models';
 
 const VIRTUAL_ROOT = 0;
+// Selection sentinel: "no branch chosen here — stop and continue from this turn".
+const CONTINUE = -1;
 
-export interface PathEntry {
+/** The branch switcher shown on a node that has branch children. */
+export interface ForkInfo {
+  parentId: number;
+  /** Displayed numerator: 0 = the empty "continue here" slot, 1..n = branches. */
+  current: number;
+  /** Number of branch/children options (n). */
+  total: number;
+  /** Source paragraph of the active option (for highlight); null for empty. */
+  paragraphIndex: number | null;
+}
+
+interface PathStep {
   node: TreeNode;
-  /** All children at this level (siblings of `node`) — for the branch switcher. */
+  /** All children at this level (siblings of `node`) — for the root switcher. */
   siblings: TreeNode[];
   /** Parent id (VIRTUAL_ROOT for top-level). Keys the selection map. */
   parentId: number;
+}
+
+export interface PathEntry extends PathStep {
+  /** Switcher for this node's children (branch fork), or null. */
+  fork: ForkInfo | null;
 }
 
 /** Streaming overlay shown at the bottom while a send/branch is in flight. */
@@ -46,19 +64,44 @@ function indexNodes(tree: ConversationTree): NodeIndex {
 function computePath(
   childrenOf: Map<number, TreeNode[]>,
   selection: Map<number, number>,
-): PathEntry[] {
-  const path: PathEntry[] = [];
+): PathStep[] {
+  const path: PathStep[] = [];
   let parentId = VIRTUAL_ROOT;
   let siblings = childrenOf.get(VIRTUAL_ROOT) ?? [];
   while (siblings.length > 0) {
-    const fallback = siblings[siblings.length - 1];
     const selId = selection.get(parentId);
+    if (selId === CONTINUE) break; // empty slot chosen → stop at this turn
+    const fallback = siblings[siblings.length - 1];
     const chosen = siblings.find((s) => s.id === selId) ?? fallback;
     path.push({ node: chosen, siblings, parentId });
     parentId = chosen.id;
     siblings = childrenOf.get(chosen.id) ?? [];
   }
   return path;
+}
+
+/** Branch-fork analysis for a node's children. */
+function forkOf(
+  children: TreeNode[],
+  selId: number | undefined,
+): {
+  hasEmpty: boolean;
+  options: (TreeNode | null)[]; // null = the empty "continue here" slot
+  activeIndex: number;
+} | null {
+  if (children.length === 0) return null;
+  const hasEmpty = children.every((c) => c.branched); // only explicit branches
+  if (!hasEmpty && children.length <= 1) return null; // a lone continuation
+  const options: (TreeNode | null)[] = hasEmpty ? [null, ...children] : children;
+  let activeIndex: number;
+  if (hasEmpty && selId === CONTINUE) {
+    activeIndex = 0;
+  } else {
+    const ci = children.findIndex((c) => c.id === selId);
+    const resolved = ci >= 0 ? ci : children.length - 1; // default: newest
+    activeIndex = hasEmpty ? resolved + 1 : resolved;
+  }
+  return { hasEmpty, options, activeIndex };
 }
 
 function errMessage(err: unknown): string {
@@ -220,9 +263,36 @@ export function useConversation(reloadSignal: number) {
     [load],
   );
 
+  // Cycle a node's branch switcher (incl. the empty "continue here" slot).
+  const cycleFork = useCallback((parentId: number, dir: 1 | -1) => {
+    setSelection((prev) => {
+      const children = indexRef.current.childrenOf.get(parentId) ?? [];
+      const f = forkOf(children, prev.get(parentId));
+      if (!f) return prev;
+      const nextIdx = (f.activeIndex + dir + f.options.length) % f.options.length;
+      const opt = f.options[nextIdx];
+      const next = new Map(prev);
+      next.set(parentId, opt === null ? CONTINUE : opt.id);
+      return next;
+    });
+  }, []);
+
   // Recomputed when the tree (version) or selection changes.
   void version;
-  const path = computePath(indexRef.current.childrenOf, selection);
+  const steps = computePath(indexRef.current.childrenOf, selection);
+  const path: PathEntry[] = steps.map((s) => {
+    const children = indexRef.current.childrenOf.get(s.node.id) ?? [];
+    const f = forkOf(children, selection.get(s.node.id));
+    const fork: ForkInfo | null = f
+      ? {
+          parentId: s.node.id,
+          current: f.hasEmpty ? f.activeIndex : f.activeIndex + 1,
+          total: children.length,
+          paragraphIndex: f.options[f.activeIndex]?.paragraphIndex ?? null,
+        }
+      : null;
+    return { ...s, fork };
+  });
   const activeIds = new Set(path.map((e) => e.node.id));
   const activeLeafId = path.length ? path[path.length - 1].node.id : null;
   // Kept in a ref so `send` (a stable callback) always reads the current leaf.
@@ -241,6 +311,7 @@ export function useConversation(reloadSignal: number) {
     send,
     branch,
     switchSibling,
+    cycleFork,
     selectPathTo,
     remove,
     reload: load,
