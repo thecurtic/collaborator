@@ -8,8 +8,8 @@ export function HealthIndicator() {
     state.status === 'online'
       ? {
           color: 'bg-green-500',
-          label: `online · v${state.health.version}`,
-          title: `Backend healthy (${state.health.status})`,
+          label: 'online',
+          title: `Backend healthy (v${state.health.version})`,
         }
       : state.status === 'checking'
         ? {

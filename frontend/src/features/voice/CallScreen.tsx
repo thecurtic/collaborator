@@ -1,4 +1,4 @@
-import { Check, Loader2, Mic, PhoneOff } from 'lucide-react';
+import { Check, Loader2, Mic, PhoneOff, Volume2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import { cn } from '@/lib/utils';
@@ -12,7 +12,8 @@ interface CallScreenProps {
 const LABELS: Record<CallPhase, string> = {
   connecting: 'Connecting…',
   listening: 'Listening…',
-  responding: 'Collaborator is responding…',
+  processing: 'Processing…',
+  responding: 'Responding…',
   error: 'Call error',
 };
 
@@ -25,6 +26,9 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
 
   if (!open) return null;
 
+  const speaking = phase === 'responding';
+  const busy = phase === 'connecting' || phase === 'processing';
+
   return (
     <div className="pt-safe pb-safe px-safe fixed inset-0 z-50 flex flex-col bg-background">
       <div className="flex flex-1 flex-col items-center justify-center gap-6 overflow-hidden px-6 text-center">
@@ -36,21 +40,23 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
               phase === 'listening' && 'animate-ping bg-primary/30',
               phase === 'responding' && 'animate-pulse bg-green-500/30',
               phase === 'error' && 'bg-destructive/20',
-              phase === 'connecting' && 'bg-muted',
+              busy && 'bg-muted',
             )}
           />
           <span
             className={cn(
               'relative flex h-20 w-20 items-center justify-center rounded-full',
-              phase === 'responding'
-                ? 'bg-green-500/20 text-green-400'
+              speaking
+                ? 'bg-green-500/20 text-green-500'
                 : phase === 'error'
                   ? 'bg-destructive/20 text-destructive'
                   : 'bg-primary/20 text-primary',
             )}
           >
-            {phase === 'connecting' ? (
+            {busy ? (
               <Loader2 className="h-7 w-7 animate-spin" />
+            ) : speaking ? (
+              <Volume2 className="h-7 w-7" />
             ) : (
               <Mic className="h-7 w-7" />
             )}
@@ -88,7 +94,7 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
           <Button
             variant="secondary"
             onClick={endTurn}
-            className="h-12 gap-2 rounded-full px-5"
+            className="h-12 gap-2 rounded-full px-5 active:scale-95"
           >
             <Check className="h-4 w-4" />
             Done speaking
@@ -99,7 +105,7 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
           size="icon"
           aria-label="End call"
           onClick={end}
-          className="h-14 w-14 rounded-full"
+          className="h-14 w-14 rounded-full active:scale-95"
         >
           <PhoneOff className="h-6 w-6" />
         </Button>

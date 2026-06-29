@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { getEndWord, getStopWord } from '@/features/settings/uiPrefs';
+import { chimeListenStart, chimeListenStop } from './chime';
 import { listenForWords, warmUpKeywordSpotter } from './keywordSpotter';
 import { createSpeechSession, type SpeechSession } from './speech';
 
-export type CallPhase = 'connecting' | 'listening' | 'responding' | 'error';
+export type CallPhase =
+  | 'connecting'
+  | 'listening'
+  | 'processing'
+  | 'responding'
+  | 'error';
 
 const MAX_UTTERANCE_MS = 60000; // safety cap on a single turn
 
@@ -152,6 +158,7 @@ export function useCall(open: boolean, onClose: () => void) {
         if (e.data.size > 0) chunks.push(e.data);
       };
       recorder.start();
+      chimeListenStart(); // audible: mic now listening
       maxTimer = window.setTimeout(() => {
         log('max duration → finish');
         void finalize();
@@ -165,6 +172,8 @@ export function useCall(open: boolean, onClose: () => void) {
     const finalize = async () => {
       if (!active || finalizing) return;
       finalizing = true;
+      chimeListenStop(); // audible: mic stopped listening
+      setPhase('processing'); // show a loading state while we transcribe
       if (maxTimer) window.clearTimeout(maxTimer);
       maxTimer = undefined;
       stopKws();

@@ -18,9 +18,22 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
   const { turns, loading, sending, error, contextWindow, sendMessage, discardTurn, reload } =
     useChat();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Whether the view is pinned to the bottom. When the user scrolls up (e.g. to
+  // re-read a streaming answer), we stop auto-following so we don't fight them.
+  const pinnedRef = useRef(true);
 
-  const scrollToBottom = (behavior: ScrollBehavior) =>
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    pinnedRef.current = distanceFromBottom < 80;
+  };
+
+  const scrollToBottom = (behavior: ScrollBehavior) => {
+    pinnedRef.current = true;
     bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
+  };
 
   // Always open at the newest message: jump instantly (no top→bottom animation)
   // on first load, on reload, and when returning to chat from a call.
@@ -28,13 +41,16 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
     if (!loading) scrollToBottom('auto');
   }, [loading, reloadSignal]);
 
-  // During an active session, smoothly follow new and streaming content.
+  // During an active session, follow new/streaming content — but only while the
+  // user hasn't scrolled up to read.
   const lastTurn = turns[turns.length - 1];
   const tailLength = lastTurn
     ? lastTurn.message.length + lastTurn.response.length
     : 0;
   useEffect(() => {
-    if (!loading) scrollToBottom('smooth');
+    if (!loading && pinnedRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
   }, [turns.length, tailLength, sending, loading]);
 
   // Reload history when asked (call mode persisted turns while we were away).
@@ -56,7 +72,11 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-y-auto overscroll-contain">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto overscroll-contain"
+      >
         <div className="mx-auto flex max-w-3xl flex-col gap-3 px-3 py-5 sm:gap-4 sm:px-4 sm:py-6">
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
