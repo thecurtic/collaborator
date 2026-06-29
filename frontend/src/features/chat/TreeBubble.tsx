@@ -36,23 +36,26 @@ interface TreeBubbleProps {
 
 function Switcher({ index, total, onPrev, onNext }: Omit<Fork, 'paragraphIndex'>) {
   return (
-    <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[11px] font-medium text-primary">
+    <span className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-background px-1 py-0.5 text-[12px] font-medium text-foreground shadow-sm">
+      <GitBranch className="mx-0.5 h-3.5 w-3.5 text-primary" />
       <button
         type="button"
         aria-label="Previous branch"
         onClick={onPrev}
-        className="active:scale-90"
+        className="rounded p-0.5 hover:text-primary active:scale-90"
       >
-        <ChevronLeft className="h-3.5 w-3.5" />
+        <ChevronLeft className="h-4 w-4" />
       </button>
-      {index + 1}/{total}
+      <span className="min-w-[2.2rem] text-center tabular-nums">
+        {index + 1} / {total}
+      </span>
       <button
         type="button"
         aria-label="Next branch"
         onClick={onNext}
-        className="active:scale-90"
+        className="rounded p-0.5 hover:text-primary active:scale-90"
       >
-        <ChevronRight className="h-3.5 w-3.5" />
+        <ChevronRight className="h-4 w-4" />
       </button>
     </span>
   );
@@ -150,17 +153,21 @@ export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) 
                     <GitBranch className="h-3.5 w-3.5" />
                   </button>
                 </div>
-                {highlighted && fork && (
-                  <Switcher
-                    index={fork.index}
-                    total={fork.total}
-                    onPrev={fork.onPrev}
-                    onNext={fork.onNext}
-                  />
-                )}
               </div>
             );
           })}
+          </div>
+        )}
+
+        {/* Persistent branch switcher — one per fork-turn, always visible. */}
+        {fork && (
+          <div className="mt-2 flex">
+            <Switcher
+              index={fork.index}
+              total={fork.total}
+              onPrev={fork.onPrev}
+              onNext={fork.onNext}
+            />
           </div>
         )}
 

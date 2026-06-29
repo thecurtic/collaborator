@@ -1,25 +1,67 @@
 // On-device transcription that mirrors TranscriptionStream's interface, so call
 // mode can swap between server (WebSocket) and device (Web Worker) freely.
 // Audio never leaves the device.
+//
+// The worker (and the loaded Whisper model) is a module-level singleton kept
+// resident across turns — re-creating it per turn reloaded the model each time,
+// which stalled the call between turns and starved the keyword spotter.
+
+interface WorkerMsg {
+  type: string;
+  text?: string;
+  detail?: string;
+}
+
+let worker: Worker | null = null;
+let readyPromise: Promise<void> | null = null;
+let activeInstance: DeviceTranscriber | null = null;
+
+function ensureWorker(): { worker: Worker; ready: Promise<void> } {
+  if (worker && readyPromise) return { worker, ready: readyPromise };
+
+  const w = new Worker(new URL('./whisperWorker.ts', import.meta.url), {
+    type: 'module',
+  });
+
+  readyPromise = new Promise<void>((resolve, reject) => {
+    const onInit = (e: MessageEvent) => {
+      const m = e.data as WorkerMsg;
+      if (m.type === 'ready') {
+        w.removeEventListener('message', onInit);
+        resolve();
+      } else if (m.type === 'error') {
+        w.removeEventListener('message', onInit);
+        reject(new Error(m.detail ?? 'on-device model failed'));
+      }
+    };
+    w.addEventListener('message', onInit);
+    w.addEventListener('error', () => reject(new Error('worker failed')), {
+      once: true,
+    });
+  });
+
+  // Route partial/final/error to whichever transcriber is currently active.
+  w.addEventListener('message', (e: MessageEvent) =>
+    activeInstance?.handle(e.data as WorkerMsg),
+  );
+  w.postMessage({ type: 'init' });
+
+  worker = w;
+  return { worker: w, ready: readyPromise };
+}
 
 export class DeviceTranscriber {
   private worker: Worker;
-  private opened: Promise<void>;
-  private resolveReady!: () => void;
-  private rejectReady!: (e: unknown) => void;
+  private readyP: Promise<void>;
   private finalPromise: Promise<string>;
   private resolveFinal!: (t: string) => void;
   private settled = false;
 
-  constructor(onPartial: (text: string) => void) {
-    this.worker = new Worker(new URL('./whisperWorker.ts', import.meta.url), {
-      type: 'module',
-    });
-
-    this.opened = new Promise((resolve, reject) => {
-      this.resolveReady = resolve;
-      this.rejectReady = reject;
-    });
+  constructor(private onPartial: (text: string) => void) {
+    const { worker: w, ready } = ensureWorker();
+    this.worker = w;
+    this.readyP = ready;
+    activeInstance = this;
     this.finalPromise = new Promise((resolve) => {
       this.resolveFinal = (t: string) => {
         if (!this.settled) {
@@ -28,27 +70,17 @@ export class DeviceTranscriber {
         }
       };
     });
+    w.postMessage({ type: 'reset' }); // fresh utterance buffer
+  }
 
-    this.worker.onmessage = (e: MessageEvent) => {
-      const m = e.data as { type: string; text?: string; detail?: string };
-      if (m.type === 'ready') this.resolveReady();
-      else if (m.type === 'partial') onPartial(m.text ?? '');
-      else if (m.type === 'final') this.resolveFinal(m.text ?? '');
-      else if (m.type === 'error') {
-        this.rejectReady(new Error(m.detail ?? 'on-device model failed'));
-        this.resolveFinal('');
-      }
-    };
-    this.worker.onerror = () => {
-      this.rejectReady(new Error('on-device transcription worker failed'));
-      this.resolveFinal('');
-    };
-
-    this.worker.postMessage({ type: 'init' });
+  handle(m: WorkerMsg): void {
+    if (m.type === 'partial') this.onPartial(m.text ?? '');
+    else if (m.type === 'final') this.resolveFinal(m.text ?? '');
+    else if (m.type === 'error') this.resolveFinal('');
   }
 
   ready(): Promise<void> {
-    return this.opened;
+    return this.readyP;
   }
 
   sendPcm(buf: ArrayBuffer): void {
@@ -61,10 +93,8 @@ export class DeviceTranscriber {
   }
 
   close(): void {
-    try {
-      this.worker.terminate();
-    } catch {
-      /* ignore */
-    }
+    if (activeInstance === this) activeInstance = null;
+    this.resolveFinal(''); // unblock any pending end()
+    // Worker is intentionally kept alive (model stays resident for next turn).
   }
 }
