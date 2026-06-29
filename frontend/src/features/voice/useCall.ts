@@ -37,6 +37,7 @@ function stripTrailingWord(text: string, word: string): string {
 interface Controls {
   endTurn: () => void;
   end: () => void;
+  skipTo: (text: string, fromParagraph: number) => void;
 }
 
 /**
@@ -266,6 +267,41 @@ export function useCall(open: boolean, onClose: () => void) {
       if (active) void listen();
     };
 
+    // Tap-to-skip/replay: re-speak a (completed) assistant turn from a paragraph.
+    const speakFrom = (text: string, fromParagraph: number) => {
+      if (!active) return;
+      const paras = text.split(/\n{2,}/);
+      const slice = paras.slice(Math.max(0, fromParagraph)).join('\n\n').trim();
+      if (!slice) return;
+      log(`skip → ¶${fromParagraph}`);
+      stopKws();
+      if (maxTimer) window.clearTimeout(maxTimer);
+      maxTimer = undefined;
+      stopCapture();
+      transcriber?.close();
+      transcriber = null;
+      queue?.stop();
+      setPartial('');
+      setResponse('');
+      setPhase('responding');
+      queue = createSpeechSession(() => {
+        if (active) {
+          stopKws();
+          void listen();
+        }
+      });
+      startKws(
+        [stopWord],
+        () => {
+          log(`stop word "${stopWord}" → interrupt`);
+          interrupt();
+        },
+        STOP_WORD_THRESHOLD,
+      );
+      queue.push(slice);
+      queue.finish();
+    };
+
     controlsRef.current = {
       endTurn: () => {
         log('Done tapped');
@@ -275,6 +311,7 @@ export function useCall(open: boolean, onClose: () => void) {
         cleanup();
         onClose();
       },
+      skipTo: speakFrom,
     };
 
     void (async () => {
@@ -318,6 +355,21 @@ export function useCall(open: boolean, onClose: () => void) {
 
   const endTurn = useCallback(() => controlsRef.current?.endTurn(), []);
   const end = useCallback(() => controlsRef.current?.end(), []);
+  const skipTo = useCallback(
+    (text: string, fromParagraph: number) =>
+      controlsRef.current?.skipTo(text, fromParagraph),
+    [],
+  );
 
-  return { phase, partial, response, transcript, error, logs, endTurn, end };
+  return {
+    phase,
+    partial,
+    response,
+    transcript,
+    error,
+    logs,
+    endTurn,
+    end,
+    skipTo,
+  };
 }

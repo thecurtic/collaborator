@@ -22,30 +22,49 @@ function Turn({
   role,
   text,
   live,
+  onSkip,
 }: {
   role: 'user' | 'assistant';
   text: string;
   live?: boolean;
+  /** Tap a paragraph to (re)speak from there. Assistant, completed turns only. */
+  onSkip?: (paragraphIndex: number) => void;
 }) {
+  const paras = role === 'assistant' && onSkip ? text.split(/\n{2,}/) : null;
   return (
     <div>
       <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {role === 'user' ? 'You' : 'Assistant'}
       </p>
-      <p
-        className={cn(
-          'whitespace-pre-wrap text-[17px] leading-relaxed',
-          live ? 'text-foreground/80' : 'text-foreground',
-        )}
-      >
-        {text}
-      </p>
+      {paras ? (
+        <div className="space-y-2">
+          {paras.map((p, i) => (
+            <p
+              key={i}
+              onClick={() => onSkip?.(i)}
+              title="Tap to play from here"
+              className="cursor-pointer whitespace-pre-wrap text-[17px] leading-relaxed text-foreground transition hover:text-primary active:opacity-70"
+            >
+              {p}
+            </p>
+          ))}
+        </div>
+      ) : (
+        <p
+          className={cn(
+            'whitespace-pre-wrap text-[17px] leading-relaxed',
+            live ? 'text-foreground/80' : 'text-foreground',
+          )}
+        >
+          {text}
+        </p>
+      )}
     </div>
   );
 }
 
 export function CallScreen({ open, onClose }: CallScreenProps) {
-  const { phase, partial, response, transcript, error, logs, endTurn, end } =
+  const { phase, partial, response, transcript, error, logs, endTurn, end, skipTo } =
     useCall(open, onClose);
   const showDebug = useDebugEnabled();
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -99,7 +118,16 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
       <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-5">
         <div className="mx-auto flex max-w-md flex-col gap-5">
           {transcript.map((t) => (
-            <Turn key={t.id} role={t.role} text={t.text} />
+            <Turn
+              key={t.id}
+              role={t.role}
+              text={t.text}
+              onSkip={
+                t.role === 'assistant'
+                  ? (i) => skipTo(t.text, i)
+                  : undefined
+              }
+            />
           ))}
           {phase === 'listening' && partial && (
             <Turn role="user" text={partial} live />
