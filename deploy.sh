@@ -61,6 +61,11 @@ cp -r .next/static .next/standalone/.next/static
 BACKEND_PORT=$(grep -E '^\s*backend_port:' config.yaml 2>/dev/null | grep -oE '[0-9]+' || echo "8001")
 PORT=${PORT:-3000}
 
+# Restart the Python backend so a deploy always brings it up to date.
+# (The Next.js server below is a separate process and does NOT manage the backend.)
+echo "Restarting Python backend..."
+./restart.sh || echo "WARNING: backend restart failed — check logs/backend.log"
+
 # Start the standalone Next.js server (serves both static assets and API proxy)
 echo "Starting Collaborator with Next.js standalone server..."
 echo "Frontend: http://localhost:$PORT"

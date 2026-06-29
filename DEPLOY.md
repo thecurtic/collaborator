@@ -47,6 +47,33 @@
    ./deploy.sh
    ```
 
+## Restarting the backend
+
+The Python backend (FastAPI/uvicorn) is a **separate process** from the Next.js
+server. Pulling code does not restart it. Use the one-command restarter:
+
+```bash
+./restart.sh
+```
+
+It reads the port from `config.yaml`, uses the project `.venv`, and prints a health
+check. `./deploy.sh` calls it automatically, so a normal deploy bounces the backend.
+
+**Optional — run it under systemd** (boot persistence + `journalctl` logs). Once
+installed, `./restart.sh` automatically uses it:
+
+```bash
+sudo cp deploy/collaborator-backend.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now collaborator-backend
+# adjust User/paths in the unit if your checkout isn't /srv/collaborator
+```
+
+Verify a restart took effect:
+```bash
+curl -s http://localhost:8001/api/health   # {"status":"healthy","version":"0.2.0"}
+```
+
 ## Configuration
 
 ### config.yaml
