@@ -77,7 +77,7 @@ def get_passkey_from_header(passkey: Optional[str] = Header(None, alias="X-Passk
 @app.get("/api/health")
 async def health_check():
     """Basic health check endpoint."""
-    return {"status": "healthy", "version": "0.1.0"}
+    return {"status": "healthy", "version": "0.2.0"}
 
 
 @app.post("/api/messages")
