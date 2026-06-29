@@ -1,4 +1,5 @@
 import { Check, Loader2, Mic, PhoneOff, Volume2 } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import { cn } from '@/lib/utils';
@@ -17,12 +18,41 @@ const LABELS: Record<CallPhase, string> = {
   error: 'Call error',
 };
 
-export function CallScreen({ open, onClose }: CallScreenProps) {
-  const { phase, partial, response, error, logs, endTurn, end } = useCall(
-    open,
-    onClose,
+function Turn({
+  role,
+  text,
+  live,
+}: {
+  role: 'user' | 'assistant';
+  text: string;
+  live?: boolean;
+}) {
+  return (
+    <div>
+      <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {role === 'user' ? 'You' : 'Assistant'}
+      </p>
+      <p
+        className={cn(
+          'whitespace-pre-wrap text-[17px] leading-relaxed',
+          live ? 'text-foreground/80' : 'text-foreground',
+        )}
+      >
+        {text}
+      </p>
+    </div>
   );
+}
+
+export function CallScreen({ open, onClose }: CallScreenProps) {
+  const { phase, partial, response, transcript, error, logs, endTurn, end } =
+    useCall(open, onClose);
   const showDebug = useDebugEnabled();
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [transcript.length, partial, response]);
 
   if (!open) return null;
 
@@ -31,9 +61,9 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
 
   return (
     <div className="pt-safe pb-safe px-safe fixed inset-0 z-50 flex flex-col bg-background">
-      <div className="flex flex-1 flex-col items-center justify-center gap-6 overflow-hidden px-6 text-center">
-        {/* State orb */}
-        <div className="relative flex h-28 w-28 items-center justify-center">
+      {/* Status indicator — kept up top so the transcript has room below. */}
+      <div className="flex flex-col items-center gap-2 border-b border-border px-4 py-4">
+        <div className="relative flex h-16 w-16 items-center justify-center">
           <span
             className={cn(
               'absolute inset-0 rounded-full',
@@ -45,7 +75,7 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
           />
           <span
             className={cn(
-              'relative flex h-20 w-20 items-center justify-center rounded-full',
+              'relative flex h-12 w-12 items-center justify-center rounded-full',
               speaking
                 ? 'bg-green-500/20 text-green-500'
                 : phase === 'error'
@@ -54,42 +84,44 @@ export function CallScreen({ open, onClose }: CallScreenProps) {
             )}
           >
             {busy ? (
-              <Loader2 className="h-7 w-7 animate-spin" />
+              <Loader2 className="h-6 w-6 animate-spin" />
             ) : speaking ? (
-              <Volume2 className="h-7 w-7" />
+              <Volume2 className="h-6 w-6" />
             ) : (
-              <Mic className="h-7 w-7" />
+              <Mic className="h-6 w-6" />
             )}
           </span>
         </div>
+        <p className="text-xs text-muted-foreground">{LABELS[phase]}</p>
+      </div>
 
-        <p className="text-sm text-muted-foreground">{LABELS[phase]}</p>
-
-        {partial && (
-          <p className="max-w-md text-lg font-medium leading-snug text-foreground">
-            “{partial}”
-          </p>
-        )}
-
-        {response && (
-          <p className="max-h-48 max-w-md overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-            {response}
-          </p>
-        )}
-
-        {error && <p className="max-w-md text-sm text-destructive">{error}</p>}
+      {/* Scrollable conversation — readable while listening or speaking. */}
+      <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-5">
+        <div className="mx-auto flex max-w-md flex-col gap-5">
+          {transcript.map((t) => (
+            <Turn key={t.id} role={t.role} text={t.text} />
+          ))}
+          {phase === 'listening' && partial && (
+            <Turn role="user" text={partial} live />
+          )}
+          {phase === 'responding' && response && (
+            <Turn role="assistant" text={response} live />
+          )}
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <div ref={bottomRef} />
+        </div>
       </div>
 
       {/* Diagnostics — toggled via Settings → Developer diagnostics. */}
       {showDebug && logs.length > 0 && (
-        <div className="mx-auto max-h-40 w-full max-w-md overflow-y-auto rounded-md border border-border bg-card p-2 font-mono text-[10px] leading-snug text-muted-foreground">
+        <div className="mx-auto max-h-32 w-full max-w-md overflow-y-auto border-t border-border bg-card p-2 font-mono text-[10px] leading-snug text-muted-foreground">
           {logs.map((line, i) => (
             <div key={i}>{line}</div>
           ))}
         </div>
       )}
 
-      <div className="flex items-center justify-center gap-6 p-6">
+      <div className="flex items-center justify-center gap-6 border-t border-border p-6">
         {phase === 'listening' && (
           <Button
             variant="secondary"

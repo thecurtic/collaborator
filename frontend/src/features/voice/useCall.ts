@@ -14,6 +14,12 @@ export type CallPhase =
   | 'responding'
   | 'error';
 
+export interface CallTurn {
+  id: number;
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 const MAX_UTTERANCE_MS = 60000; // safety cap on a single turn
 // Detection confidence. "stop" listens while the agent (and room noise) is
 // audible, so it must be strict to avoid false interrupts that cut speech short.
@@ -44,6 +50,7 @@ export function useCall(open: boolean, onClose: () => void) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
   const [partial, setPartial] = useState('');
   const [response, setResponse] = useState('');
+  const [transcript, setTranscript] = useState<CallTurn[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const controlsRef = useRef<Controls | null>(null);
@@ -52,6 +59,13 @@ export function useCall(open: boolean, onClose: () => void) {
     if (!open) return;
 
     let active = true;
+    let turnId = 0;
+    const pushTurn = (role: CallTurn['role'], text: string) => {
+      turnId += 1;
+      const id = turnId;
+      setTranscript((prev) => [...prev, { id, role, text }]);
+    };
+    setTranscript([]);
     let stream: MediaStream | null = null;
     let pcm: PcmStream | null = null;
     let transcriber: TranscriptionStream | null = null;
@@ -196,9 +210,10 @@ export function useCall(open: boolean, onClose: () => void) {
     const respond = async (text: string) => {
       if (!active) return;
       log(`responding to: "${text.slice(0, 40)}"`);
-      setPhase('responding');
-      setPartial(text);
+      pushTurn('user', text); // user's turn joins the transcript
+      setPartial('');
       setResponse('');
+      setPhase('responding');
       queue = createSpeechSession(() => {
         if (active) {
           stopKws();
@@ -216,10 +231,12 @@ export function useCall(open: boolean, onClose: () => void) {
         STOP_WORD_THRESHOLD,
       );
       streamAbort = new AbortController();
+      let full = '';
       try {
         await api.sendMessageStream(
           { message: text, commit: true, mode: 'voice' },
           (c) => {
+            full += c;
             setResponse((prev) => prev + c);
             queue?.push(c);
           },
@@ -227,13 +244,18 @@ export function useCall(open: boolean, onClose: () => void) {
         );
         queue?.finish();
       } catch (err) {
-        if (!active) return;
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        queue?.stop();
-        stopKws();
-        setError(err instanceof Error ? err.message : 'Something went wrong.');
-        setPhase('error');
+        const aborted = err instanceof DOMException && err.name === 'AbortError';
+        if (!aborted && active) {
+          queue?.stop();
+          stopKws();
+          setError(err instanceof Error ? err.message : 'Something went wrong.');
+          setPhase('error');
+          return;
+        }
+        // aborted (barge-in): keep whatever was said so far
       }
+      if (full.trim()) pushTurn('assistant', full); // reply joins the transcript
+      setResponse('');
     };
 
     const interrupt = () => {
@@ -297,5 +319,5 @@ export function useCall(open: boolean, onClose: () => void) {
   const endTurn = useCallback(() => controlsRef.current?.endTurn(), []);
   const end = useCallback(() => controlsRef.current?.end(), []);
 
-  return { phase, partial, response, error, logs, endTurn, end };
+  return { phase, partial, response, transcript, error, logs, endTurn, end };
 }
