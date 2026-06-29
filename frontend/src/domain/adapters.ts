@@ -59,6 +59,7 @@ export function toTreeNode(api: ApiTreeNode): TreeNode {
     parentTurnId: api.parent_turn_id ?? null,
     paragraphIndex: api.paragraph_index ?? null,
     contextBoundary: api.context_boundary === true,
+    branched: api.branched === true,
     children: (api.children ?? []).map(toTreeNode),
   };
 }

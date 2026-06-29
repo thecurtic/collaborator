@@ -108,6 +108,7 @@ function layout(roots: TreeNode[], activeIds: Set<number>) {
 
   // Top-down: resolve absolute columns + rows and flatten for rendering.
   const segments: Segment[] = [];
+  const segById = new Map<number, Seg>();
   const assign = (
     seg: Seg,
     col: number,
@@ -115,6 +116,7 @@ function layout(roots: TreeNode[], activeIds: Set<number>) {
     parentColumn: number | null,
     forkRow: number | null,
   ) => {
+    segById.set(seg.startNodeId, seg);
     segments.push({
       startNodeId: seg.startNodeId,
       count: seg.count,
@@ -154,7 +156,7 @@ function layout(roots: TreeNode[], activeIds: Set<number>) {
   const minCol = cols.length ? Math.min(...cols) : 0;
   const maxCol = cols.length ? Math.max(...cols) : 0;
   const rows = segments.reduce((m, s) => Math.max(m, s.startRow + s.count), 0);
-  return { segments, minCol, maxCol, rows };
+  return { segments, segById, minCol, maxCol, rows };
 }
 
 export function TreeMap({
@@ -166,10 +168,22 @@ export function TreeMap({
   onClose,
 }: TreeMapProps) {
   const [selected, setSelected] = useState<Segment | null>(null);
-  const { segments, minCol, maxCol, rows } = useMemo(
+  const { segments, segById, minCol, maxCol, rows } = useMemo(
     () => layout(tree.roots, activeIds),
     [tree, activeIds],
   );
+
+  // The selected branch's full line down to the tip (follows the newest child at
+  // each fork), so selecting highlights the whole branch — not just its segment.
+  const selectedLine = useMemo(() => {
+    const ids = new Set<number>();
+    let s = selected ? segById.get(selected.startNodeId) : undefined;
+    while (s) {
+      ids.add(s.startNodeId);
+      s = s.children.length ? s.children[s.children.length - 1] : undefined;
+    }
+    return ids;
+  }, [selected, segById]);
 
   if (!open) return null;
 
@@ -208,7 +222,10 @@ export function TreeMap({
               const bottom = rowY(seg.startRow + seg.count - 1);
               const color = colorFor(seg.column);
               const isSel = selected?.startNodeId === seg.startNodeId;
-              const opacity = seg.active || isSel ? 1 : 0.45;
+              const onLine = selectedLine.has(seg.startNodeId);
+              const emphasized = isSel || onLine || seg.active;
+              const opacity = emphasized ? 1 : 0.4;
+              const stroke = isSel || onLine ? 8 : seg.active ? 6 : 4;
               return (
                 <g
                   key={seg.startNodeId}
@@ -220,7 +237,7 @@ export function TreeMap({
                       d={`M ${colX(seg.parentColumn)} ${rowY(seg.forkRow)} C ${colX(seg.parentColumn)} ${top} ${x} ${rowY(seg.forkRow)} ${x} ${top}`}
                       fill="none"
                       stroke={color}
-                      strokeWidth={isSel ? 8 : seg.active ? 6 : 4}
+                      strokeWidth={onLine ? 8 : seg.active ? 6 : 4}
                       strokeLinecap="round"
                       opacity={opacity}
                     />
@@ -231,7 +248,7 @@ export function TreeMap({
                     x2={x}
                     y2={bottom}
                     stroke={color}
-                    strokeWidth={isSel ? 8 : seg.active ? 6 : 4}
+                    strokeWidth={stroke}
                     strokeLinecap="round"
                     opacity={opacity}
                   />
@@ -240,7 +257,7 @@ export function TreeMap({
                       key={i}
                       cx={x}
                       cy={rowY(seg.startRow + i)}
-                      r={isSel || seg.active ? 5 : 4}
+                      r={emphasized ? 5 : 4}
                       fill={color}
                       opacity={opacity}
                     />

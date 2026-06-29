@@ -53,6 +53,8 @@ export interface TreeNode {
   paragraphIndex: number | null;
   /** True when generated with context_turns:0 — a fresh-context boundary. */
   contextBoundary: boolean;
+  /** True when this turn was created as an explicit fork (POST /api/branches). */
+  branched: boolean;
   children: TreeNode[];
 }
 
