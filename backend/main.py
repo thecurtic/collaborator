@@ -188,6 +188,9 @@ def _enrich_tree_node(node: dict) -> dict:
     # without context"). The frontend should stop shading the in-context window at
     # this boundary when walking back the active path.
     node["context_boundary"] = (node.get("context_turns") == 0)
+    # True only for turns created via POST /api/branches (an explicit fork), so a
+    # with-context branch is distinguishable from a normal continuation.
+    node["branched"] = bool(node.get("branched"))
     if node.get("role") == "assistant":
         node["paragraphs"] = _split_paragraphs(node.get("content", ""))
     node["children"] = [_enrich_tree_node(c) for c in node.get("children", [])]
@@ -257,6 +260,7 @@ def _stream_turn_response(
     user_parent_id: Optional[int],
     paragraph_index: Optional[int],
     recall_enabled: bool = False,
+    branched: bool = False,
 ):
     """Build the SSE generator that streams the reply and persists both turns.
 
@@ -290,6 +294,7 @@ def _stream_turn_response(
                     conn, user_id=user_id, role="user", content=message,
                     context_turns=context_turns, committed=commit,
                     parent_turn_id=user_parent_id, paragraph_index=paragraph_index,
+                    branched=branched,
                 )
                 assistant_turn = create_turn(
                     conn, user_id=user_id, role="assistant", content=full_response,
@@ -435,6 +440,7 @@ async def create_branch(
             user_parent_id=parent_turn_id,
             paragraph_index=request.paragraph_index,
             recall_enabled=_recall_enabled(request.recall),
+            branched=True,
         )
         return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
 

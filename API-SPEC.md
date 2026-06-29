@@ -315,6 +315,10 @@ parent it branched from. `preview` is a single-line label.
   boolean (`true` when that turn was generated with `context_turns: 0`, i.e. a
   "branch without context" start). When shading back from the active leaf, stop at
   the most recent `context_boundary` so without-context branches shade correctly.
+- `branched` (boolean) is `true` only for turns created via `POST /api/branches` (an
+  explicit fork), `false` for `POST /api/messages` continuations. Use it to render the
+  fork switcher even when a with-context branch shares the parent of a continuation
+  (otherwise the two are structurally identical).
 
 ---
 

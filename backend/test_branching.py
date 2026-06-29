@@ -167,6 +167,41 @@ def test_delete_reparent_vs_subtree():
     print("✓ delete reparents (single) and cascades (subtree)")
 
 
+def test_branched_flag_distinguishes_fork_from_continuation():
+    """Tree nodes mark /api/branches turns branched=true; /api/messages = false."""
+    main, db = _fresh_env()
+    from starlette.testclient import TestClient
+    import json as _json
+
+    def fake_stream(message, context_turns=None, mode=None, recall=None):
+        yield "ok"
+    main.stream_llm_tokens = fake_stream
+    c = TestClient(main.app)
+
+    def done(resp):
+        return [_json.loads(l[6:]) for l in resp.text.splitlines()
+                if l.startswith("data: ") and '"done"' in l][0]
+
+    r1 = c.post("/api/messages", json={"message": "A"})
+    leaf = done(r1)["id"]
+    # Continuation from the leaf (no paragraph) -> NOT branched.
+    cont_user = done(c.post("/api/messages", json={"message": "B", "parent_turn_id": leaf}))["user_turn_id"]
+    # With-context branch from the same leaf -> branched.
+    branch_user = done(c.post(f"/api/branches/{leaf}", json={"message": "C"}))["user_turn_id"]
+
+    nodes = {}
+    def walk(n):
+        nodes[n["id"]] = n
+        for ch in n["children"]:
+            walk(ch)
+    for root in c.get("/api/tree").json()["roots"]:
+        walk(root)
+
+    assert nodes[cont_user]["branched"] is False
+    assert nodes[branch_user]["branched"] is True
+    print("✓ branched flag distinguishes fork from continuation")
+
+
 def test_messages_continue_from_active_leaf():
     """POST /api/messages builds context from parent_turn_id (the active leaf)."""
     main, db = _fresh_env()
@@ -230,6 +265,7 @@ if __name__ == "__main__":
     test_tree_structure()
     test_branch_endpoint_and_tree_api()
     test_delete_reparent_vs_subtree()
+    test_branched_flag_distinguishes_fork_from_continuation()
     test_messages_continue_from_active_leaf()
     test_tree_exposes_context_window_and_boundary()
     print("\n✓ All branching tests passed!")

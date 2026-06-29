@@ -11,7 +11,7 @@ from contextlib import contextmanager
 TURN_COLUMNS = [
     "id", "user_id", "role", "content", "context_turns", "committed",
     "created_at", "model_name", "token_count", "tags",
-    "parent_turn_id", "paragraph_index",
+    "parent_turn_id", "paragraph_index", "branched",
 ]
 _SELECT_COLS = ", ".join(TURN_COLUMNS)
 
@@ -99,6 +99,7 @@ def ensure_conversation_schema(conn) -> None:
             tags TEXT,
             parent_turn_id INTEGER,
             paragraph_index INTEGER,
+            branched INTEGER NOT NULL DEFAULT 0,
             embedding BLOB,
             FOREIGN KEY (parent_turn_id) REFERENCES turns(id)
         )
@@ -143,6 +144,8 @@ def _migrate_turns_branching(conn) -> None:
         added_parent = True
     if "paragraph_index" not in existing:
         cursor.execute("ALTER TABLE turns ADD COLUMN paragraph_index INTEGER")
+    if "branched" not in existing:
+        cursor.execute("ALTER TABLE turns ADD COLUMN branched INTEGER NOT NULL DEFAULT 0")
     if "embedding" not in existing:
         cursor.execute("ALTER TABLE turns ADD COLUMN embedding BLOB")
     conn.commit()
@@ -212,23 +215,25 @@ def create_turn(
     token_count: Optional[int] = None,
     parent_turn_id: Optional[int] = None,
     paragraph_index: Optional[int] = None,
+    branched: bool = False,
 ) -> dict:
     """Create a new turn in the database.
 
     parent_turn_id is the fork point this turn descends from (None = root).
     paragraph_index, when set, records which paragraph of the parent turn the
-    branch was taken from.
+    branch was taken from. branched=True marks a turn created via an explicit
+    fork (POST /api/branches) so it's distinguishable from a continuation.
     """
     cursor = db.cursor()
     cursor.execute(
         """
         INSERT INTO turns
             (user_id, role, content, context_turns, committed, model_name,
-             token_count, parent_turn_id, paragraph_index)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             token_count, parent_turn_id, paragraph_index, branched)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (user_id, role, content, context_turns, committed, model_name,
-         token_count, parent_turn_id, paragraph_index)
+         token_count, parent_turn_id, paragraph_index, 1 if branched else 0)
     )
     db.commit()
 
