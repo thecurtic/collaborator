@@ -86,9 +86,14 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
           session.finish();
 
           // Barge-in: listen for the stop word while speaking, then mic off.
-          void listenForWords([getStopWord()], () => {
-            if (reqRef.current === req) stop();
-          })
+          // Strict threshold — the agent's own audio must not false-trigger it.
+          void listenForWords(
+            [getStopWord()],
+            () => {
+              if (reqRef.current === req) stop();
+            },
+            0.97,
+          )
             .then((s) => {
               if (reqRef.current !== req) {
                 s();

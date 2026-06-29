@@ -13,6 +13,10 @@ export type CallPhase =
   | 'error';
 
 const MAX_UTTERANCE_MS = 60000; // safety cap on a single turn
+// Detection confidence. "stop" listens while the agent (and room noise) is
+// audible, so it must be strict to avoid false interrupts that cut speech short.
+const END_WORD_THRESHOLD = 0.85;
+const STOP_WORD_THRESHOLD = 0.97;
 
 function pickMimeType(): string {
   if (typeof MediaRecorder === 'undefined') return '';
@@ -82,13 +86,21 @@ export function useCall(open: boolean, onClose: () => void) {
       kwsStop?.();
       kwsStop = null;
     };
-    const startKws = (words: string[], onMatch: (w: string) => void) => {
+    const startKws = (
+      words: string[],
+      onMatch: (w: string) => void,
+      threshold: number,
+    ) => {
       const token = ++kwsToken;
       kwsStop?.();
       kwsStop = null;
-      void listenForWords(words, (w) => {
-        if (active && kwsToken === token) onMatch(w);
-      })
+      void listenForWords(
+        words,
+        (w) => {
+          if (active && kwsToken === token) onMatch(w);
+        },
+        threshold,
+      )
         .then((stop) => {
           if (!active || kwsToken !== token) {
             stop();
@@ -163,10 +175,14 @@ export function useCall(open: boolean, onClose: () => void) {
         log('max duration → finish');
         void finalize();
       }, MAX_UTTERANCE_MS);
-      startKws([endWord], () => {
-        log(`end word "${endWord}" → finish`);
-        void finalize();
-      });
+      startKws(
+        [endWord],
+        () => {
+          log(`end word "${endWord}" → finish`);
+          void finalize();
+        },
+        END_WORD_THRESHOLD,
+      );
     };
 
     const finalize = async () => {
@@ -209,11 +225,16 @@ export function useCall(open: boolean, onClose: () => void) {
           listen();
         }
       });
-      // Barge-in: spot the stop word while the assistant is speaking.
-      startKws([stopWord], () => {
-        log(`stop word "${stopWord}" → interrupt`);
-        interrupt();
-      });
+      // Barge-in: spot the stop word while the assistant is speaking. Strict
+      // threshold so the agent's own audio / room noise doesn't false-trigger.
+      startKws(
+        [stopWord],
+        () => {
+          log(`stop word "${stopWord}" → interrupt`);
+          interrupt();
+        },
+        STOP_WORD_THRESHOLD,
+      );
       streamAbort = new AbortController();
       try {
         await api.sendMessageStream(
