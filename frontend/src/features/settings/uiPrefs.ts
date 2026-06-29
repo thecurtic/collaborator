@@ -13,11 +13,13 @@ const ENGINE_KEY = 'collaborator_tts_engine';
 const VOICE_KEY = 'collaborator_piper_voice';
 const END_WORD_KEY = 'collaborator_end_word';
 const STOP_WORD_KEY = 'collaborator_stop_word';
+const STT_KEY = 'collaborator_stt_engine';
 
 export const DEFAULT_END_WORD = 'go';
 export const DEFAULT_STOP_WORD = 'stop';
 
 export type TtsEngine = 'piper' | 'browser';
+export type SttEngine = 'server' | 'device';
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
@@ -65,6 +67,17 @@ export function setTtsEngine(value: TtsEngine): void {
 }
 export function useTtsEngine(): TtsEngine {
   return useSyncExternalStore(subscribe, getTtsEngine, () => 'piper');
+}
+
+// --- Speech-to-text engine (server Whisper vs on-device Transformers.js) ---
+export function getSttEngine(): SttEngine {
+  return read(STT_KEY) === 'device' ? 'device' : 'server';
+}
+export function setSttEngine(value: SttEngine): void {
+  write(STT_KEY, value);
+}
+export function useSttEngine(): SttEngine {
+  return useSyncExternalStore(subscribe, getSttEngine, () => 'server');
 }
 
 // --- Piper voice ---

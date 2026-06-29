@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@diffusionstudio/vits-web": "^1.0.3",
+    "@huggingface/transformers": "^3.8.1",
     "@tensorflow-models/speech-commands": "^0.5.4",
     "@tensorflow/tfjs": "^4.22.0",
     "class-variance-authority": "^0.7.1",

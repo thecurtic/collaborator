@@ -10,11 +10,13 @@ import {
   setEndWord,
   setPiperVoice,
   setStopWord,
+  setSttEngine,
   setTtsEngine,
   useDebugEnabled,
   useEndWord,
   usePiperVoice,
   useStopWord,
+  useSttEngine,
   useTtsEngine,
 } from './uiPrefs';
 
@@ -26,6 +28,7 @@ interface SettingsSheetProps {
 export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
   const debug = useDebugEnabled();
   const ttsEngine = useTtsEngine();
+  const sttEngine = useSttEngine();
   const piperVoice = usePiperVoice();
   const endWord = useEndWord();
   const stopWord = useStopWord();
@@ -101,6 +104,36 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
               </select>
             </label>
           </div>
+        </div>
+
+        {/* Transcription (speech-to-text). */}
+        <div className="mt-5 space-y-3 border-t border-border pt-4">
+          <p className="text-sm font-medium">Transcription (speech-to-text)</p>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant={sttEngine === 'server' ? 'default' : 'outline'}
+              size="sm"
+              className="flex-1"
+              onClick={() => setSttEngine('server')}
+            >
+              Server
+            </Button>
+            <Button
+              type="button"
+              variant={sttEngine === 'device' ? 'default' : 'outline'}
+              size="sm"
+              className="flex-1"
+              onClick={() => setSttEngine('device')}
+            >
+              On-device
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {sttEngine === 'server'
+              ? 'Audio is streamed to your server for transcription (Whisper).'
+              : 'Transcribes on this device (Whisper-tiny, WebGPU when available). Audio never leaves the device; downloads the model once.'}
+          </p>
         </div>
 
         {/* Voice (text-to-speech). */}

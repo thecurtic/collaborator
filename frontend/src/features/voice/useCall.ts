@@ -1,12 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
-import { getEndWord, getStopWord } from '@/features/settings/uiPrefs';
+import {
+  getEndWord,
+  getStopWord,
+  getSttEngine,
+} from '@/features/settings/uiPrefs';
 import { chimeListenStart, chimeListenStop } from './chime';
+import { DeviceTranscriber } from './deviceTranscriber';
 import { listenForWords, warmUpKeywordSpotter } from './keywordSpotter';
 import { startPcmStream, type PcmStream } from './pcmStreamer';
 import { createSpeechSession, type SpeechSession } from './speech';
 import { splitParagraphs } from './speechUtils';
 import { TranscriptionStream } from './transcriptionStream';
+
+/** Common shape for server (WebSocket) and on-device (worker) transcribers. */
+interface Transcriber {
+  ready(): Promise<void>;
+  sendPcm(buf: ArrayBuffer): void;
+  end(): Promise<string>;
+  close(): void;
+}
 
 export type CallPhase =
   | 'connecting'
@@ -81,7 +94,7 @@ export function useCall(open: boolean, onClose: () => void) {
     setSpeakBase(0);
     let stream: MediaStream | null = null;
     let pcm: PcmStream | null = null;
-    let transcriber: TranscriptionStream | null = null;
+    let transcriber: Transcriber | null = null;
     let endWord = getEndWord();
     let stopWord = getStopWord();
     let queue: SpeechSession | null = null;
@@ -155,9 +168,13 @@ export function useCall(open: boolean, onClose: () => void) {
       // is open and PCM is actually flowing, or we'd drop the start of speech.
       setPhase('connecting');
       try {
-        transcriber = new TranscriptionStream((t) => {
+        const onPartial = (t: string) => {
           if (active && !finalizing) setPartial(t);
-        });
+        };
+        transcriber =
+          getSttEngine() === 'device'
+            ? new DeviceTranscriber(onPartial)
+            : new TranscriptionStream(onPartial);
         await transcriber.ready();
         if (!active) {
           transcriber.close();

@@ -40,16 +40,37 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        // Exclude the heavy ML chunks (TF.js / ONNX / speech-commands / Piper)
-        // from the precache — they're lazy-loaded only when voice is used.
+        // Exclude the heavy ML chunks (TF.js / ONNX / speech-commands / Piper /
+        // Transformers.js + the whisper worker) from the precache — they're
+        // lazy-loaded only when the relevant voice feature is used.
         globIgnores: [
           '**/tf-*.js',
           '**/ort*.js',
           '**/speech-commands*.js',
           '**/piper-*.js',
+          '**/transformers*.js',
+          '**/whisperWorker*.js',
+          '**/assets/worker-*.js',
         ],
         // Don't let the SW intercept API calls — always go to the network.
         navigateFallbackDenylist: [/^\/api/],
+        // Cache the on-device Whisper model weights (Hugging Face CDN) so the
+        // model only downloads once. Audio is never sent anywhere — this is just
+        // the model files.
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) =>
+              url.hostname === 'huggingface.co' ||
+              url.hostname.endsWith('.hf.co') ||
+              url.hostname.includes('cdn-lfs'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'hf-models',
+              expiration: { maxEntries: 60, maxAgeSeconds: 60 * 60 * 24 * 60 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
         // Take control immediately and drop stale precache on each new version
         // so an updated build never serves the old app shell.
         clientsClaim: true,
