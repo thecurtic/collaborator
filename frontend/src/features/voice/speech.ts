@@ -7,9 +7,12 @@ export type { SpeechSession } from './speechUtils';
 export { webSpeechSupported } from './webSpeech';
 
 /** Create a speech session for the engine selected in Settings. */
-export function createSpeechSession(onIdle?: () => void): SpeechSession {
+export function createSpeechSession(
+  onIdle?: () => void,
+  onProgress?: (chars: number) => void,
+): SpeechSession {
   if (getTtsEngine() === 'browser' && webSpeechSupported()) {
-    return new WebSpeechSession(onIdle);
+    return new WebSpeechSession(onIdle, onProgress);
   }
-  return new SpeechQueue(onIdle);
+  return new SpeechQueue(onIdle, onProgress);
 }

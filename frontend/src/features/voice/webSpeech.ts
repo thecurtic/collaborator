@@ -32,8 +32,12 @@ export class WebSpeechSession implements SpeechSession {
   private speaking = false;
   private finished = false;
   private stopped = false;
+  private spokenChars = 0;
 
-  constructor(private onIdle?: () => void) {}
+  constructor(
+    private onIdle?: () => void,
+    private onProgress?: (chars: number) => void,
+  ) {}
 
   push(chunk: string): void {
     if (this.stopped) return;
@@ -71,6 +75,9 @@ export class WebSpeechSession implements SpeechSession {
       if (this.finished) this.onIdle?.();
       return;
     }
+    // This sentence is now being read — advance the read-along position.
+    this.spokenChars += next.length;
+    this.onProgress?.(this.spokenChars);
     const clean = sanitizeForSpeech(next);
     if (!clean) {
       this.pump();

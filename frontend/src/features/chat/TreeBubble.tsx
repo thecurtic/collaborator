@@ -68,6 +68,10 @@ export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) 
   const multiPara = !isUser && node.paragraphs.length > 1;
   const blocks = multiPara ? node.paragraphs : [node.content];
 
+  // Read-along: while this turn is being spoken, fade the not-yet-read text.
+  const reading = isActive;
+  const readChars = Math.min(speech.spokenChars, node.content.length);
+
   // Which block is the fork's source paragraph (highlighted).
   const forkBlock = (i: number) => {
     if (!fork) return false;
@@ -85,7 +89,13 @@ export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) 
             : 'border border-border bg-card text-card-foreground',
         )}
       >
-        <div className="space-y-1.5">
+        {reading ? (
+          <p className="whitespace-pre-wrap break-words">
+            <span>{node.content.slice(0, readChars)}</span>
+            <span className="opacity-40">{node.content.slice(readChars)}</span>
+          </p>
+        ) : (
+          <div className="space-y-1.5">
           {blocks.map((block, i) => {
             const highlighted = forkBlock(i);
             return (
@@ -127,7 +137,8 @@ export function TreeBubble({ node, onBranch, onDelete, fork }: TreeBubbleProps) 
               </div>
             );
           })}
-        </div>
+          </div>
+        )}
 
         <div className="mt-1.5 flex items-center gap-1 text-[10px] opacity-60">
           {node.paragraphIndex != null && <span>branched</span>}

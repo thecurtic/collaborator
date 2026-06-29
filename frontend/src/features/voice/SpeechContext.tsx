@@ -20,6 +20,8 @@ interface SpeechValue {
   status: SpeechStatus;
   /** Piper voice-model download progress (0..1) while `status === 'preparing'`. */
   progress: number;
+  /** Cumulative original characters spoken so far (read-along), for activeId. */
+  spokenChars: number;
   supported: boolean;
   /** Speak the text for a turn id; clicking the active one stops it. */
   toggle: (id: number, text: string) => void;
@@ -34,6 +36,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [status, setStatus] = useState<SpeechStatus>('idle');
   const [progress, setProgress] = useState(0);
+  const [spokenChars, setSpokenChars] = useState(0);
   const sessionRef = useRef<SpeechSession | null>(null);
   const kwsStopRef = useRef<(() => void) | null>(null);
   const reqRef = useRef(0);
@@ -45,6 +48,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
     setActiveId(null);
     setStatus('idle');
     setProgress(0);
+    setSpokenChars(0);
   }, []);
 
   const stop = useCallback(() => {
@@ -65,6 +69,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
       sessionRef.current = null;
       setActiveId(id);
       setProgress(0);
+      setSpokenChars(0);
 
       void (async () => {
         try {
@@ -78,9 +83,14 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
           }
           if (reqRef.current !== req) return;
           setStatus('speaking');
-          const session = createSpeechSession(() => {
-            if (reqRef.current === req) reset();
-          });
+          const session = createSpeechSession(
+            () => {
+              if (reqRef.current === req) reset();
+            },
+            (chars) => {
+              if (reqRef.current === req) setSpokenChars(chars);
+            },
+          );
           sessionRef.current = session;
           session.push(text);
           session.finish();
@@ -112,7 +122,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
 
   return (
     <SpeechContext.Provider
-      value={{ activeId, status, progress, supported, toggle, stop }}
+      value={{ activeId, status, progress, spokenChars, supported, toggle, stop }}
     >
       {children}
     </SpeechContext.Provider>
