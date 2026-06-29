@@ -123,9 +123,11 @@ export function useCall(open: boolean, onClose: () => void) {
     const listen = async () => {
       if (!active || !stream) return;
       finalizing = false;
-      setPhase('listening');
       setPartial('');
       setResponse('');
+      // Show a brief connecting state — don't signal "listening" until the socket
+      // is open and PCM is actually flowing, or we'd drop the start of speech.
+      setPhase('connecting');
       try {
         transcriber = new TranscriptionStream((t) => {
           if (active && !finalizing) setPartial(t);
@@ -144,6 +146,11 @@ export function useCall(open: boolean, onClose: () => void) {
         setError('Could not open the transcription stream.');
         return;
       }
+      if (!active) {
+        stopCapture();
+        return;
+      }
+      setPhase('listening');
       chimeListenStart(); // audible: mic now listening
       maxTimer = window.setTimeout(() => {
         log('max duration → finish');
