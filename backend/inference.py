@@ -47,6 +47,15 @@ class StreamingResponse:
         self.metadata = metadata or {}
 
 
+# Appended to every system prompt so distinct ideas land in separate paragraphs.
+# This makes paragraph-level branching meaningful (each paragraph is a fork point).
+DEFAULT_PARAGRAPH_STYLE = (
+    "When your response covers more than one distinct idea, put each idea in its "
+    "own paragraph separated by a blank line, so individual points can be "
+    "referenced and branched from separately."
+)
+
+
 # Appended to the system prompt for call-mode (spoken) turns. The reply is read
 # aloud by TTS, so markdown/symbols read badly and should be avoided.
 DEFAULT_VOICE_STYLE = (
@@ -71,6 +80,10 @@ def _build_messages(
     config = _get_config()
     system_prompt = config.get("system_prompt", {})
     system_content = system_prompt.get("text", "You are Collaborator, a helpful assistant.")
+
+    # Encourage one-idea-per-paragraph so paragraph-level branching is meaningful.
+    paragraph_style = system_prompt.get("paragraph_text") or DEFAULT_PARAGRAPH_STYLE
+    system_content = f"{system_content}\n\n{paragraph_style}"
 
     if mode == "voice":
         voice_style = system_prompt.get("voice_text") or DEFAULT_VOICE_STYLE

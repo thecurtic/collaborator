@@ -125,39 +125,14 @@ def create_user_db(passkey: str) -> str:
     
     # Create database path
     db_path = os.path.join(user_dir, "conversations.db")
-    
-    # Initialize database schema if file doesn't exist
-    if not os.path.exists(db_path):
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # Create tables
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS turns (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-                content TEXT NOT NULL,
-                context_turns INTEGER NOT NULL DEFAULT 5,
-                committed BOOLEAN NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                model_name TEXT,
-                token_count INTEGER,
-                tags TEXT
-            )
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
-                first_turn_id INTEGER,
-                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
-                FOREIGN KEY (first_turn_id) REFERENCES turns(id)
-            )
-        """)
-        
-        conn.commit()
+
+    # Initialize/upgrade the conversation schema (turns + conversations, including
+    # branching columns). Run every time so existing user DBs get migrated too.
+    from db import ensure_conversation_schema
+    conn = sqlite3.connect(db_path)
+    try:
+        ensure_conversation_schema(conn)
+    finally:
         conn.close()
-    
+
     return db_path

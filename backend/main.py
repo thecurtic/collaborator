@@ -10,7 +10,10 @@ from starlette.responses import StreamingResponse
 from pydantic import BaseModel
 from config import get_config, resolve_path
 from data.agents_md import load_agents_md
-from db import init_db, create_turn, get_recent_turns, update_turn_committed, get_turn_by_id
+from db import (
+    init_db, create_turn, get_recent_turns, update_turn_committed, get_turn_by_id,
+    get_ancestor_chain, get_latest_turn_id, get_turn_tree,
+)
 from inference import call_llm_streaming, call_llm_non_streaming, stream_llm_tokens
 from auth import validate_passkey, create_user_db
 
@@ -69,9 +72,148 @@ class DiscardTurnResponse(BaseModel):
     committed: bool
 
 
+class BranchRequest(BaseModel):
+    message: str
+    paragraph_index: Optional[int] = None
+    context_turns: Optional[int] = 5
+    commit: Optional[bool] = True
+    user_id: Optional[str] = None
+    mode: Optional[str] = None
+
+
 def get_passkey_from_header(passkey: Optional[str] = Header(None, alias="X-Passkey")) -> str:
     """Extract passkey from header or query param."""
     return passkey
+
+
+SSE_HEADERS = {
+    "Cache-Control": "no-cache, no-transform",
+    "X-Accel-Buffering": "no",
+}
+
+
+def _require_auth(passkey: Optional[str]) -> None:
+    """Raise 403 if auth is enabled and the passkey is missing/invalid."""
+    if auth_enabled:
+        if not passkey:
+            raise HTTPException(status_code=403, detail="Passkey required")
+        if not validate_passkey(passkey):
+            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+
+
+def _resolve_db_path(passkey: Optional[str]) -> str:
+    """Resolve the conversation DB path (per-user when auth is enabled)."""
+    if auth_enabled:
+        return create_user_db(passkey)
+    db_path_config = config.get("memory", {}).get("db_path")
+    if db_path_config and not os.path.isabs(db_path_config):
+        return resolve_path(db_path_config)
+    return db_path_config
+
+
+def _split_paragraphs(text: str) -> List[str]:
+    """Split text into paragraphs on blank lines (the branchable unit)."""
+    if not text:
+        return []
+    import re
+    parts = re.split(r"\n\s*\n", text.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _preview(text: str, length: int = 80) -> str:
+    """Single-line preview for tree/metro-map node labels."""
+    collapsed = " ".join((text or "").split())
+    return collapsed[:length] + ("…" if len(collapsed) > length else "")
+
+
+def _enrich_turn(turn: dict) -> dict:
+    """Add a derived paragraphs[] array to assistant turns."""
+    turn = dict(turn)
+    if turn.get("role") == "assistant":
+        turn["paragraphs"] = _split_paragraphs(turn.get("content", ""))
+    return turn
+
+
+def _enrich_tree_node(node: dict) -> dict:
+    """Recursively add preview + paragraphs to tree nodes for the metro map."""
+    node = dict(node)
+    node["preview"] = _preview(node.get("content", ""))
+    if node.get("role") == "assistant":
+        node["paragraphs"] = _split_paragraphs(node.get("content", ""))
+    node["children"] = [_enrich_tree_node(c) for c in node.get("children", [])]
+    return node
+
+
+def _count_nodes(nodes: List[dict]) -> int:
+    return sum(1 + _count_nodes(n.get("children", [])) for n in nodes)
+
+
+def _sse_error(detail: str):
+    """Return a StreamingResponse that emits a single SSE error event."""
+    def gen():
+        yield f"data: {json.dumps({'type': 'error', 'detail': detail})}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+def _stream_turn_response(
+    db_path: str,
+    *,
+    message: str,
+    context_list: List[dict],
+    context_turns: int,
+    commit: bool,
+    user_id: Optional[str],
+    mode: Optional[str],
+    user_parent_id: Optional[int],
+    paragraph_index: Optional[int],
+):
+    """Build the SSE generator that streams the reply and persists both turns.
+
+    The new user turn's parent is `user_parent_id` (the fork point, or the current
+    head for a normal message); the assistant turn descends from that user turn.
+    The DB connection is opened INSIDE the generator (worker thread) to avoid
+    cross-thread SQLite use.
+    """
+    def event_generator():
+        full_response = ""
+        try:
+            for content in stream_llm_tokens(message, context_list, mode=mode):
+                full_response += content
+                yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+            return
+
+        try:
+            conn = sqlite3.connect(db_path)
+            try:
+                user_turn = create_turn(
+                    conn, user_id=user_id, role="user", content=message,
+                    context_turns=context_turns, committed=commit,
+                    parent_turn_id=user_parent_id, paragraph_index=paragraph_index,
+                )
+                assistant_turn = create_turn(
+                    conn, user_id=user_id, role="assistant", content=full_response,
+                    context_turns=context_turns, committed=commit,
+                    parent_turn_id=user_turn["id"], paragraph_index=None,
+                )
+            finally:
+                conn.close()
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+            return
+
+        done = {
+            "type": "done",
+            "id": assistant_turn["id"],
+            "user_turn_id": user_turn["id"],
+            "parent_turn_id": user_parent_id,
+            "paragraph_index": paragraph_index,
+            "context_turns_used": context_turns,
+        }
+        yield f"data: {json.dumps(done)}\n\n"
+
+    return event_generator
 
 
 @app.get("/api/health")
@@ -93,99 +235,120 @@ async def send_message(
     - **commit**: Whether to commit this turn to memory (default: true)
     - **X-Passkey**: User's passkey for authentication
     """
-    if auth_enabled:
-        if not passkey:
-            raise HTTPException(status_code=403, detail="Passkey required")
-        if not validate_passkey(passkey):
-            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
-    
+    _require_auth(passkey)
+
     try:
-        db_path_config = config.get("memory", {}).get("db_path")
-        
-        if auth_enabled:
-            db_path = create_user_db(passkey)
-        else:
-            if db_path_config and not os.path.isabs(db_path_config):
-                db_path = resolve_path(db_path_config)
-            else:
-                db_path = db_path_config
-        
-        # Fetch context with a short-lived connection on this (request) thread.
-        # The streaming generator below runs on a separate worker thread, so it
-        # must NOT reuse this connection — SQLite forbids cross-thread use.
+        db_path = _resolve_db_path(passkey)
+
+        # Continue from the current head: context is the ancestor chain leading up
+        # to the most recent turn (a proper branch path, not a global recent list).
+        # Read with a short-lived connection on THIS thread; the streaming
+        # generator opens its own connection on the worker thread.
         conn = sqlite3.connect(db_path)
         try:
-            recent_turns = get_recent_turns(conn, limit=request.context_turns)
+            head_id = get_latest_turn_id(conn)
+            context_list = (
+                get_ancestor_chain(conn, head_id, limit=request.context_turns)
+                if head_id is not None else []
+            )
         finally:
             conn.close()
 
-        # Streaming response generator
-        def event_generator():
-            full_response = ""
-            try:
-                # True token-by-token streaming from the LLM.
-                for content in stream_llm_tokens(request.message, recent_turns, mode=request.mode):
-                    full_response += content
-                    yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
-                return
-
-            # Persist both turns. Open a fresh connection on THIS thread so the
-            # write does not cross threads.
-            try:
-                user_id = request.user_id or os.environ.get("USER_ID")
-                gen_conn = sqlite3.connect(db_path)
-                try:
-                    create_turn(
-                        gen_conn,
-                        user_id=user_id,
-                        role="user",
-                        content=request.message,
-                        context_turns=request.context_turns,
-                        committed=request.commit,
-                    )
-                    assistant_turn = create_turn(
-                        gen_conn,
-                        user_id=user_id,
-                        role="assistant",
-                        content=full_response,
-                        context_turns=request.context_turns,
-                        committed=request.commit,
-                    )
-                finally:
-                    gen_conn.close()
-            except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
-                return
-
-            # Final done event with metadata
-            yield f"data: {json.dumps({'type': 'done', 'id': assistant_turn['id'], 'context_turns_used': request.context_turns})}\n\n"
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "X-Accel-Buffering": "no"
-            }
+        generator = _stream_turn_response(
+            db_path,
+            message=request.message,
+            context_list=context_list,
+            context_turns=request.context_turns,
+            commit=request.commit,
+            user_id=request.user_id or os.environ.get("USER_ID"),
+            mode=request.mode,
+            user_parent_id=head_id,
+            paragraph_index=None,
         )
-        
+        return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
+
     except HTTPException:
         raise
     except Exception as e:
-        # Emit error event then close stream
-        def error_generator():
-            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
-        
-        return StreamingResponse(
-            error_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "X-Accel-Buffering": "no"
-            }
+        return _sse_error(str(e))
+
+
+@app.post("/api/branches/{parent_turn_id}")
+async def create_branch(
+    parent_turn_id: int,
+    request: BranchRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Create a branch from a fork point and stream the reply.
+
+    The fork point is `parent_turn_id` (any turn). Optionally `paragraph_index`
+    records which paragraph of that turn the branch was taken from. The new branch
+    inherits context up to and including the parent turn.
+    """
+    _require_auth(passkey)
+
+    try:
+        db_path = _resolve_db_path(passkey)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            parent = get_turn_by_id(conn, parent_turn_id)
+            if not parent:
+                raise HTTPException(status_code=404, detail=f"Parent turn {parent_turn_id} not found")
+
+            if request.paragraph_index is not None:
+                paragraphs = _split_paragraphs(parent.get("content", ""))
+                if request.paragraph_index < 0 or request.paragraph_index >= len(paragraphs):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(f"paragraph_index {request.paragraph_index} out of range; "
+                                f"parent turn {parent_turn_id} has {len(paragraphs)} paragraph(s)"),
+                    )
+
+            context_list = get_ancestor_chain(conn, parent_turn_id, limit=request.context_turns)
+        finally:
+            conn.close()
+
+        generator = _stream_turn_response(
+            db_path,
+            message=request.message,
+            context_list=context_list,
+            context_turns=request.context_turns,
+            commit=request.commit,
+            user_id=request.user_id or os.environ.get("USER_ID"),
+            mode=request.mode,
+            user_parent_id=parent_turn_id,
+            paragraph_index=request.paragraph_index,
         )
+        return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return _sse_error(str(e))
+
+
+@app.get("/api/tree")
+async def get_tree(
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Return the full conversation tree (roots -> children) for the metro map."""
+    _require_auth(passkey)
+
+    try:
+        db_path = _resolve_db_path(passkey)
+        conn = sqlite3.connect(db_path)
+        try:
+            roots = get_turn_tree(conn)
+        finally:
+            conn.close()
+
+        enriched = [_enrich_tree_node(node) for node in roots]
+        return {"roots": enriched, "count": _count_nodes(enriched)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/messages")
@@ -195,39 +358,20 @@ async def get_messages(
     passkey: Optional[str] = Header(None, alias="X-Passkey")
 ):
     """Retrieve conversation history."""
-    if auth_enabled:
-        if not passkey:
-            raise HTTPException(status_code=403, detail="Passkey required")
-        if not validate_passkey(passkey):
-            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
-    
+    _require_auth(passkey)
+
     try:
-        db_path_config = config.get("memory", {}).get("db_path")
-        
-        if auth_enabled:
-            db_path = create_user_db(passkey)
-        else:
-            if db_path_config and not os.path.isabs(db_path_config):
-                db_path = resolve_path(db_path_config)
-            else:
-                db_path = db_path_config
-        
+        db_path = _resolve_db_path(passkey)
+
         conn = sqlite3.connect(db_path)
-        
-        turns = get_recent_turns(conn, limit=limit, offset=offset)
-        
-        # Load system prompt
-        system_prompt_text = config.get("system_prompt", {}).get("text", "")
-        file_path = config.get("system_prompt", {}).get("file_path")
-        if file_path:
-            try:
-                with open(resolve_path(file_path), 'r', encoding='utf-8') as f:
-                    system_prompt_text = f.read().strip()
-            except IOError:
-                pass
-        
-        conn.close()
-        
+        try:
+            turns = get_recent_turns(conn, limit=limit, offset=offset)
+        finally:
+            conn.close()
+
+        # Add a derived paragraphs[] array to assistant turns.
+        turns = [_enrich_turn(t) for t in turns]
+
         return MessagesListResponse(
             turns=turns,
             count=len(turns),
@@ -245,30 +389,18 @@ async def discard_turn(
     passkey: Optional[str] = Header(None, alias="X-Passkey")
 ):
     """Discard a specific turn (remove from context)."""
-    if auth_enabled:
-        if not passkey:
-            raise HTTPException(status_code=403, detail="Passkey required")
-        if not validate_passkey(passkey):
-            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
-    
+    _require_auth(passkey)
+
     try:
-        db_path_config = config.get("memory", {}).get("db_path")
-        
-        if auth_enabled:
-            db_path = create_user_db(passkey)
-        else:
-            if db_path_config and not os.path.isabs(db_path_config):
-                db_path = resolve_path(db_path_config)
-            else:
-                db_path = db_path_config
-        
+        db_path = _resolve_db_path(passkey)
+
         conn = sqlite3.connect(db_path)
-        
+
         turn = get_turn_by_id(conn, turn_id)
         if not turn:
             conn.close()
             raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
-        
+
         result = update_turn_committed(conn, turn_id, committed=False)
         conn.close()
         

@@ -191,6 +191,84 @@ X-Passkey: <your-passkey>
 
 ---
 
+### 5. Create Branch (Streaming)
+```
+POST /api/branches/{parent_turn_id}
+Content-Type: application/json
+X-Passkey: <your-passkey>
+```
+
+Creates a new branch whose fork point is `parent_turn_id` (any user or assistant
+turn), then streams the reply as SSE (same event shape as `POST /api/messages`).
+The branch inherits context **up to and including** the parent turn (its ancestor
+chain), not the global recent history.
+
+**Path Parameters:**
+- `parent_turn_id` (required): the turn to branch from (the fork point)
+
+**Request Body**
+```json
+{
+  "message": "what about X instead?",
+  "paragraph_index": 1,
+  "context_turns": 5,
+  "commit": true,
+  "user_id": "optional-string",
+  "mode": "voice"
+}
+```
+- `message` (required): the first message of the new branch
+- `paragraph_index` (optional): which paragraph of the parent turn this branch was
+  taken from (0-based, indexes into the parent's `paragraphs[]`). Validated against
+  the parent's paragraph count.
+- other fields: same as `POST /api/messages`
+
+**SSE events:** `token`, then `done`, e.g.
+```
+data: {"type":"token","content":"Sure"}
+data: {"type":"done","id":51,"user_turn_id":50,"parent_turn_id":42,"paragraph_index":1,"context_turns_used":5}
+```
+
+**Errors:** `404` if `parent_turn_id` doesn't exist; `422` if `paragraph_index` is
+out of range.
+
+---
+
+### 6. Get Conversation Tree
+```
+GET /api/tree
+X-Passkey: <your-passkey>
+```
+
+Returns the full conversation as a nested tree (roots → children) for the
+metro-map view.
+
+**Response (200 OK)**
+```json
+{
+  "roots": [
+    {
+      "id": 1, "role": "user", "content": "Hello", "preview": "Hello",
+      "parent_turn_id": null, "paragraph_index": null, "created_at": "...",
+      "children": [
+        {
+          "id": 2, "role": "assistant", "content": "First idea.\n\nSecond idea.",
+          "preview": "First idea. Second idea.",
+          "paragraphs": ["First idea.", "Second idea."],
+          "parent_turn_id": 1, "paragraph_index": null, "children": [ ... ]
+        }
+      ]
+    }
+  ],
+  "count": 12
+}
+```
+Only committed turns are included. Each assistant node carries a derived
+`paragraphs[]` array; `paragraph_index` on a node records which paragraph of its
+parent it branched from. `preview` is a single-line label.
+
+---
+
 ## Data Models
 
 ### Turn
@@ -207,6 +285,9 @@ interface Turn {
   model_name?: string | null;
   token_count?: number | null;
   tags?: string | null;
+  parent_turn_id?: number | null;   // fork point (null = root); chains form the tree
+  paragraph_index?: number | null;  // which paragraph of the parent this branched from
+  paragraphs?: string[];            // assistant turns only: content split on blank lines
 }
 ```
 
