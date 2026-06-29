@@ -152,7 +152,11 @@ export interface CollaboratorApi {
   ): Promise<BranchStreamResult>;
   /** Full conversation tree (for branch navigation / metro map). */
   getTree(): Promise<ConversationTree>;
-  discardTurn(turnId: number): Promise<void>;
+  /**
+   * Hard-delete a turn. Default reparents its children up one level; pass
+   * `subtree: true` to delete the whole branch (the turn + all descendants).
+   */
+  deleteTurn(turnId: number, subtree?: boolean): Promise<void>;
 
   /** Transcribe recorded audio to text (Whisper, backend). */
   transcribe(audio: Blob, opts?: TranscribeOptions): Promise<string>;
@@ -254,8 +258,9 @@ class HttpCollaboratorApi implements CollaboratorApi {
     return toTree(await request<ApiTree>('/api/tree'));
   }
 
-  async discardTurn(turnId: number): Promise<void> {
-    await request<unknown>(`/api/messages/${turnId}`, { method: 'DELETE' });
+  async deleteTurn(turnId: number, subtree = false): Promise<void> {
+    const qs = subtree ? '?subtree=true' : '';
+    await request<unknown>(`/api/messages/${turnId}${qs}`, { method: 'DELETE' });
   }
 
   async transcribe(audio: Blob, opts: TranscribeOptions = {}): Promise<string> {

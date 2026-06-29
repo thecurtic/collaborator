@@ -63,6 +63,7 @@ function errMessage(err: unknown): string {
 
 export function useConversation(reloadSignal: number) {
   const [selection, setSelection] = useState<Map<number, number>>(new Map());
+  const [tree, setTree] = useState<ConversationTree>({ roots: [], count: 0 });
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,8 +77,9 @@ export function useConversation(reloadSignal: number) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const tree = await api.getTree();
-      indexRef.current = indexNodes(tree);
+      const t = await api.getTree();
+      indexRef.current = indexNodes(t);
+      setTree(t);
       setVersion((v) => v + 1);
       setLoading(false);
     } catch (err) {
@@ -178,12 +180,28 @@ export function useConversation(reloadSignal: number) {
     [],
   );
 
+  const remove = useCallback(
+    async (turnId: number, subtree = false) => {
+      setError(null);
+      try {
+        await api.deleteTurn(turnId, subtree);
+        await load();
+      } catch (err) {
+        setError(errMessage(err));
+      }
+    },
+    [load],
+  );
+
   // Recomputed when the tree (version) or selection changes.
   void version;
   const path = computePath(indexRef.current.childrenOf, selection);
+  const activeIds = new Set(path.map((e) => e.node.id));
 
   return {
     path,
+    tree,
+    activeIds,
     loading,
     sending,
     error,
@@ -192,6 +210,8 @@ export function useConversation(reloadSignal: number) {
     send,
     branch,
     switchSibling,
+    selectPathTo,
+    remove,
     reload: load,
   };
 }

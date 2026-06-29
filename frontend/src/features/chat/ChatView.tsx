@@ -1,7 +1,8 @@
-import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, Network } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Composer } from './Composer';
 import { TreeBubble } from './TreeBubble';
+import { TreeMap } from './TreeMap';
 import { useConversation } from './useConversation';
 
 interface ChatViewProps {
@@ -16,9 +17,22 @@ interface BranchTarget {
 }
 
 export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
-  const { path, loading, sending, error, streaming, send, branch, switchSibling } =
-    useConversation(reloadSignal);
+  const {
+    path,
+    tree,
+    activeIds,
+    loading,
+    sending,
+    error,
+    streaming,
+    send,
+    branch,
+    switchSibling,
+    selectPathTo,
+    remove,
+  } = useConversation(reloadSignal);
   const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
+  const [mapOpen, setMapOpen] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -62,8 +76,44 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
     setBranchTarget({ turnId, paragraphIndex, label: label.slice(0, 80) });
   };
 
+  const handleDelete = (turnId: number) => {
+    if (window.confirm('Delete this turn? This is permanent.')) {
+      void remove(turnId, false);
+    }
+  };
+
+  const handleDeleteSubtree = (turnId: number) => {
+    if (
+      window.confirm('Delete this branch and all its replies? This is permanent.')
+    ) {
+      void remove(turnId, true);
+    }
+  };
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
+      {!loading && (
+        <button
+          type="button"
+          aria-label="Conversation map"
+          title="Conversation map"
+          onClick={() => setMapOpen(true)}
+          className="absolute right-3 top-3 z-10 rounded-full border border-border bg-card p-2 text-muted-foreground shadow-sm hover:text-foreground active:scale-95"
+        >
+          <Network className="h-4 w-4" />
+        </button>
+      )}
+      <TreeMap
+        open={mapOpen}
+        tree={tree}
+        activeIds={activeIds}
+        onSelect={(id) => {
+          selectPathTo(id);
+          setMapOpen(false);
+        }}
+        onDeleteSubtree={handleDeleteSubtree}
+        onClose={() => setMapOpen(false)}
+      />
       <div
         ref={scrollRef}
         onScroll={handleScroll}
@@ -85,43 +135,62 @@ export function ChatView({ reloadSignal = 0 }: ChatViewProps) {
               </p>
             </div>
           ) : (
-            path.map((entry) => {
-              const idx = entry.siblings.findIndex(
-                (s) => s.id === entry.node.id,
-              );
-              return (
-                <div key={entry.node.id} className="flex flex-col gap-1">
-                  {entry.siblings.length > 1 && (
-                    <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
-                      <button
-                        type="button"
-                        aria-label="Previous branch"
-                        onClick={() =>
-                          switchSibling(entry.parentId, entry.siblings, -1)
-                        }
-                        className="rounded p-0.5 hover:text-foreground active:scale-90"
-                      >
-                        <ChevronLeft className="h-4 w-4" />
-                      </button>
-                      <span>
-                        {idx + 1} / {entry.siblings.length}
-                      </span>
-                      <button
-                        type="button"
-                        aria-label="Next branch"
-                        onClick={() =>
-                          switchSibling(entry.parentId, entry.siblings, 1)
-                        }
-                        className="rounded p-0.5 hover:text-foreground active:scale-90"
-                      >
-                        <ChevronRight className="h-4 w-4" />
-                      </button>
-                    </div>
-                  )}
-                  <TreeBubble node={entry.node} onBranch={handleBranch} />
+            <>
+              {/* Root-level branches (multiple conversation roots). */}
+              {path[0] && path[0].siblings.length > 1 && (
+                <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
+                  <button
+                    type="button"
+                    aria-label="Previous branch"
+                    onClick={() => switchSibling(0, path[0].siblings, -1)}
+                    className="rounded p-0.5 hover:text-foreground active:scale-90"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <span>
+                    {path[0].siblings.findIndex((s) => s.id === path[0].node.id) +
+                      1}{' '}
+                    / {path[0].siblings.length}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="Next branch"
+                    onClick={() => switchSibling(0, path[0].siblings, 1)}
+                    className="rounded p-0.5 hover:text-foreground active:scale-90"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
                 </div>
-              );
-            })
+              )}
+              {path.map((entry, i) => {
+                // The fork lives on this node when its active child has siblings;
+                // highlight the source paragraph + show the switcher there.
+                const child = path[i + 1];
+                const fork =
+                  child && child.siblings.length > 1
+                    ? {
+                        paragraphIndex: child.node.paragraphIndex,
+                        index: child.siblings.findIndex(
+                          (s) => s.id === child.node.id,
+                        ),
+                        total: child.siblings.length,
+                        onPrev: () =>
+                          switchSibling(entry.node.id, child.siblings, -1),
+                        onNext: () =>
+                          switchSibling(entry.node.id, child.siblings, 1),
+                      }
+                    : undefined;
+                return (
+                  <TreeBubble
+                    key={entry.node.id}
+                    node={entry.node}
+                    onBranch={handleBranch}
+                    onDelete={handleDelete}
+                    fork={fork}
+                  />
+                );
+              })}
+            </>
           )}
 
           {/* Optimistic streaming overlay while a send/branch is in flight. */}
