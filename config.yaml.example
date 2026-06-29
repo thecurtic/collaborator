@@ -42,3 +42,18 @@ system_prompt:
 #   model: "base"          # tiny | base | small | medium | large-v3 (or *.en variants)
 #   device: "cpu"          # cpu | cuda
 #   compute_type: "int8"   # int8 (cpu) | float16 (gpu) | int8_float16
+
+# Recall (memory). Embeddings + synthesis both run through the LM Studio endpoint,
+# so load an embedding model there (embedding_model) alongside your chat model.
+# Disabled by default; the frontend can also toggle it per request.
+recall:
+  enabled: false
+  embedding_model: "text-embedding-nomic-embed-text-v1.5"  # must be loaded in LM Studio
+  search_limit: 10            # max similar turns to feed synthesis
+  synthesis_max_tokens: 256   # output budget to keep the recall block snappy
+  tag_boosts:                 # multiplicative score boosts per tag
+    decision: 1.5
+    open_question: 1.2
+    concept: 1.3
+    reference: 1.4
+    emotion: 1.1

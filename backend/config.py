@@ -70,6 +70,19 @@ def load_config() -> dict:
         "system_prompt": {
             "text": "You are Collaborator, a helpful assistant.",
             "file_path": None
+        },
+        "recall": {
+            "enabled": False,
+            "embedding_model": "text-embedding-nomic-embed-text-v1.5",
+            "search_limit": 10,
+            "synthesis_max_tokens": 256,
+            "tag_boosts": {
+                "decision": 1.5,
+                "open_question": 1.2,
+                "concept": 1.3,
+                "reference": 1.4,
+                "emotion": 1.1,
+            },
         }
     }
     

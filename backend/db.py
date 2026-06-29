@@ -99,6 +99,7 @@ def ensure_conversation_schema(conn) -> None:
             tags TEXT,
             parent_turn_id INTEGER,
             paragraph_index INTEGER,
+            embedding BLOB,
             FOREIGN KEY (parent_turn_id) REFERENCES turns(id)
         )
     """)
@@ -112,6 +113,18 @@ def ensure_conversation_schema(conn) -> None:
             FOREIGN KEY (first_turn_id) REFERENCES turns(id)
         )
     """)
+
+    # Single-row store for the current (ephemeral) recall block. Overwritten each
+    # time recall runs; shared with the frontend for display.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS recall_blocks (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            content TEXT,
+            sources TEXT,
+            query TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
     conn.commit()
 
     _migrate_turns_branching(conn)
@@ -120,7 +133,7 @@ def ensure_conversation_schema(conn) -> None:
 
 
 def _migrate_turns_branching(conn) -> None:
-    """Add branching columns to an existing turns table and backfill a linear chain."""
+    """Add branching/recall columns to an existing turns table; backfill a chain."""
     cursor = conn.cursor()
     existing = {row[1] for row in cursor.execute("PRAGMA table_info(turns)").fetchall()}
 
@@ -130,6 +143,8 @@ def _migrate_turns_branching(conn) -> None:
         added_parent = True
     if "paragraph_index" not in existing:
         cursor.execute("ALTER TABLE turns ADD COLUMN paragraph_index INTEGER")
+    if "embedding" not in existing:
+        cursor.execute("ALTER TABLE turns ADD COLUMN embedding BLOB")
     conn.commit()
 
     # When parent_turn_id was just introduced, link pre-existing turns into one
@@ -407,3 +422,175 @@ def get_context_for_turn(db, after_turn_id: int, limit: int = 5) -> List[dict]:
     rows = cursor.fetchall()
     turns = [_row_to_turn(row) for row in rows]
     return list(reversed(turns))  # Return oldest first
+
+
+# --- Recall: embeddings, tags, similarity search, ephemeral recall block -------
+
+import json as _json
+
+
+def _parse_tags(raw) -> List[str]:
+    """Parse the free-form tags column (JSON list, CSV, or empty) into a list."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(t).strip() for t in raw if str(t).strip()]
+    try:
+        parsed = _json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(t).strip() for t in parsed if str(t).strip()]
+    except Exception:
+        pass
+    return [t.strip() for t in str(raw).split(",") if t.strip()]
+
+
+def get_root_id(db, turn_id: int) -> Optional[int]:
+    """Walk parent_turn_id to the root; returns the root turn id (the branch id)."""
+    cursor = db.cursor()
+    current = turn_id
+    seen = set()
+    root = turn_id
+    while current is not None and current not in seen:
+        seen.add(current)
+        row = cursor.execute("SELECT parent_turn_id FROM turns WHERE id = ?", (current,)).fetchone()
+        if row is None:
+            break
+        root = current
+        current = row[0]
+    return root
+
+
+def set_turn_embedding(db, turn_id: int, vector: List[float]) -> None:
+    """Store an embedding (float32 bytes) for a turn."""
+    if vector is None:
+        return
+    import numpy as np
+    blob = np.asarray(vector, dtype="float32").tobytes()
+    cursor = db.cursor()
+    cursor.execute("UPDATE turns SET embedding = ? WHERE id = ?", (blob, turn_id))
+    db.commit()
+
+
+def get_turns_missing_embeddings(db, limit: int = 500) -> List[dict]:
+    """Committed turns that don't yet have an embedding (for backfill)."""
+    cursor = db.cursor()
+    rows = cursor.execute(
+        "SELECT id, content FROM turns WHERE committed = 1 AND embedding IS NULL LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [{"id": r[0], "content": r[1]} for r in rows]
+
+
+def search_similar_turns(db, query_vector: List[float], limit: int = 10,
+                         tag_boosts: Optional[Dict[str, float]] = None,
+                         exclude_ids: Optional[List[int]] = None) -> List[dict]:
+    """Brute-force cosine similarity over committed turns with embeddings.
+
+    Applies per-tag multiplicative boosts, returns top `limit` matches with
+    content + metadata (incl. branch_root_id). The corpus is personal-scale, so a
+    full numpy scan is plenty.
+    """
+    if query_vector is None:
+        return []
+    import numpy as np
+
+    tag_boosts = {k.lower(): v for k, v in (tag_boosts or {}).items()}
+    exclude = set(exclude_ids or [])
+
+    cursor = db.cursor()
+    rows = cursor.execute(
+        "SELECT id, role, content, tags, created_at, parent_turn_id, embedding "
+        "FROM turns WHERE committed = 1 AND embedding IS NOT NULL"
+    ).fetchall()
+    if not rows:
+        return []
+
+    q = np.asarray(query_vector, dtype="float32")
+    q_norm = np.linalg.norm(q)
+    if q_norm == 0:
+        return []
+
+    scored = []
+    for (tid, role, content, tags_raw, created_at, parent_id, blob) in rows:
+        if tid in exclude or not blob:
+            continue
+        vec = np.frombuffer(blob, dtype="float32")
+        if vec.shape != q.shape:
+            continue
+        denom = q_norm * np.linalg.norm(vec)
+        if denom == 0:
+            continue
+        similarity = float(np.dot(q, vec) / denom)
+        tags = _parse_tags(tags_raw)
+        boost = 1.0
+        for t in tags:
+            boost *= tag_boosts.get(t.lower(), 1.0)
+        scored.append({
+            "turn_id": tid,
+            "role": role,
+            "text": content,
+            "tags": tags,
+            "created_at": created_at,
+            "parent_turn_id": parent_id,
+            "branch_root_id": get_root_id(db, tid),
+            "similarity": similarity,
+            "score": similarity * boost,
+        })
+
+    scored.sort(key=lambda m: m["score"], reverse=True)
+    return scored[:limit]
+
+
+def update_turn_tags(db, turn_id: int, add: Optional[List[str]] = None,
+                     remove: Optional[List[str]] = None) -> Optional[List[str]]:
+    """Add/remove free-form tags on a turn (case-insensitive). Returns new tags."""
+    cursor = db.cursor()
+    row = cursor.execute("SELECT tags FROM turns WHERE id = ?", (turn_id,)).fetchone()
+    if row is None:
+        return None
+
+    tags = _parse_tags(row[0])
+    lower = {t.lower(): t for t in tags}
+    for t in (add or []):
+        t = str(t).strip()
+        if t and t.lower() not in lower:
+            lower[t.lower()] = t
+    for t in (remove or []):
+        lower.pop(str(t).strip().lower(), None)
+
+    new_tags = list(lower.values())
+    cursor.execute("UPDATE turns SET tags = ? WHERE id = ?", (_json.dumps(new_tags), turn_id))
+    db.commit()
+    return new_tags
+
+
+def set_current_recall(db, content: str, sources: List[dict], query: str = "") -> None:
+    """Store/overwrite the single current (ephemeral) recall block."""
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM recall_blocks")
+    cursor.execute(
+        "INSERT INTO recall_blocks (id, content, sources, query) VALUES (1, ?, ?, ?)",
+        (content, _json.dumps(sources), query),
+    )
+    db.commit()
+
+
+def get_current_recall(db) -> Optional[dict]:
+    """Return the current recall block, or None."""
+    cursor = db.cursor()
+    row = cursor.execute(
+        "SELECT content, sources, query, created_at FROM recall_blocks WHERE id = 1"
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        sources = _json.loads(row[1]) if row[1] else []
+    except Exception:
+        sources = []
+    return {"content": row[0], "sources": sources, "query": row[2], "created_at": row[3]}
+
+
+def clear_current_recall(db) -> None:
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM recall_blocks")
+    db.commit()

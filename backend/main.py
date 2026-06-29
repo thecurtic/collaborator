@@ -16,8 +16,13 @@ from data.agents_md import load_agents_md
 from db import (
     init_db, create_turn, get_recent_turns, get_turn_by_id, delete_turn,
     get_ancestor_chain, get_turn_tree,
+    search_similar_turns, set_turn_embedding, update_turn_tags,
+    set_current_recall, get_current_recall, get_turns_missing_embeddings,
 )
-from inference import call_llm_streaming, call_llm_non_streaming, stream_llm_tokens
+from inference import (
+    call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
+    get_embedding, synthesize_recall,
+)
 from auth import validate_passkey, create_user_db
 
 app = FastAPI()
@@ -54,6 +59,8 @@ class UserMessage(BaseModel):
     context_turns: Optional[int] = None
     commit: Optional[bool] = True
     user_id: Optional[str] = None
+    # Run recall for this turn. None = use config default (recall.enabled).
+    recall: Optional[bool] = None
     # "voice" = turn came from call mode (spoken); absent/"text" = normal chat.
     # On voice turns the system prompt is augmented for spoken-style output.
     mode: Optional[str] = None
@@ -92,6 +99,12 @@ class BranchRequest(BaseModel):
     commit: Optional[bool] = True
     user_id: Optional[str] = None
     mode: Optional[str] = None
+    recall: Optional[bool] = None
+
+
+class TagsRequest(BaseModel):
+    add_tags: List[str] = []
+    remove_tags: List[str] = []
 
 
 def get_passkey_from_header(passkey: Optional[str] = Header(None, alias="X-Passkey")) -> str:
@@ -121,6 +134,17 @@ def _default_context_window() -> int:
 def _effective_context_turns(value: Optional[int]) -> int:
     """Resolve a request's context_turns: None -> configured default; 0 -> fresh."""
     return _default_context_window() if value is None else value
+
+
+def _recall_config() -> dict:
+    return config.get("recall", {}) or {}
+
+
+def _recall_enabled(value: Optional[bool]) -> bool:
+    """Resolve whether recall runs: request flag overrides config default."""
+    if value is not None:
+        return value
+    return bool(_recall_config().get("enabled", False))
 
 
 def _resolve_db_path(passkey: Optional[str]) -> str:
@@ -181,6 +205,46 @@ def _sse_error(detail: str):
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
+def _run_recall(db_path: str, message: str):
+    """Compute the recall block for `message`: embed -> search -> synthesize.
+
+    Best-effort: returns (recall_text, sources). On any failure returns ("", []).
+    Stores the block as the current (ephemeral) recall, overwriting the previous.
+    """
+    rc = _recall_config()
+    try:
+        query_vec = get_embedding(message)
+        if not query_vec:
+            return "", []
+        conn = sqlite3.connect(db_path)
+        try:
+            matches = search_similar_turns(
+                conn, query_vec,
+                limit=rc.get("search_limit", 10),
+                tag_boosts=rc.get("tag_boosts", {}),
+            )
+            if not matches:
+                return "", []
+            recall_text = synthesize_recall(message, matches)
+            sources = [{
+                "turn_id": m["turn_id"],
+                "role": m["role"],
+                "tags": m["tags"],
+                "branch_root_id": m["branch_root_id"],
+                "similarity": round(m["similarity"], 4),
+                "score": round(m["score"], 4),
+                "preview": (m["text"] or "")[:160],
+            } for m in matches]
+            if recall_text:
+                set_current_recall(conn, recall_text, sources, query=message)
+            return recall_text, sources
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Warning: recall failed: {e}")
+        return "", []
+
+
 def _stream_turn_response(
     db_path: str,
     *,
@@ -192,18 +256,27 @@ def _stream_turn_response(
     mode: Optional[str],
     user_parent_id: Optional[int],
     paragraph_index: Optional[int],
+    recall_enabled: bool = False,
 ):
     """Build the SSE generator that streams the reply and persists both turns.
 
-    The new user turn's parent is `user_parent_id` (the fork point, or the current
-    head for a normal message); the assistant turn descends from that user turn.
-    The DB connection is opened INSIDE the generator (worker thread) to avoid
-    cross-thread SQLite use.
+    If recall is enabled, a recall block is computed first, emitted as a `recall`
+    SSE event, and injected into the model context (recall -> window -> current).
+    The new user turn's parent is `user_parent_id`; the assistant turn descends
+    from it. The DB connection is opened INSIDE the generator (worker thread) to
+    avoid cross-thread SQLite use.
     """
     def event_generator():
+        # Recall first, so the block streams to the UI and feeds the model context.
+        recall_text = ""
+        if recall_enabled:
+            recall_text, recall_sources = _run_recall(db_path, message)
+            if recall_text:
+                yield f"data: {json.dumps({'type': 'recall', 'content': recall_text, 'sources': recall_sources})}\n\n"
+
         full_response = ""
         try:
-            for content in stream_llm_tokens(message, context_list, mode=mode):
+            for content in stream_llm_tokens(message, context_list, mode=mode, recall=recall_text):
                 full_response += content
                 yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
         except Exception as e:
@@ -223,6 +296,15 @@ def _stream_turn_response(
                     context_turns=context_turns, committed=commit,
                     parent_turn_id=user_turn["id"], paragraph_index=None,
                 )
+                # Embed both turns (best-effort) so they're searchable by recall.
+                if recall_enabled:
+                    for t in (user_turn, assistant_turn):
+                        try:
+                            vec = get_embedding(t["content"])
+                            if vec:
+                                set_turn_embedding(conn, t["id"], vec)
+                        except Exception:
+                            pass
             finally:
                 conn.close()
         except Exception as e:
@@ -295,6 +377,7 @@ async def send_message(
             mode=request.mode,
             user_parent_id=parent_id,
             paragraph_index=None,
+            recall_enabled=_recall_enabled(request.recall),
         )
         return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -351,6 +434,7 @@ async def create_branch(
             mode=request.mode,
             user_parent_id=parent_turn_id,
             paragraph_index=request.paragraph_index,
+            recall_enabled=_recall_enabled(request.recall),
         )
         return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -382,6 +466,78 @@ async def get_tree(
             # Default window size: how many recent turns feed the next message.
             "context_turns": _default_context_window(),
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/turns/{turn_id}/tags")
+async def patch_turn_tags(
+    turn_id: int,
+    request: TagsRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Add/remove free-form tags on a turn (used for recall boosts)."""
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        conn = sqlite3.connect(db_path)
+        try:
+            tags = update_turn_tags(conn, turn_id, add=request.add_tags, remove=request.remove_tags)
+        finally:
+            conn.close()
+        if tags is None:
+            raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
+        return {"turn_id": turn_id, "tags": tags}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/recall/current")
+async def get_recall_current(
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Return the current (ephemeral) recall block, or null if none."""
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        conn = sqlite3.connect(db_path)
+        try:
+            return {"recall": get_current_recall(conn)}
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/recall/reindex")
+async def reindex_embeddings(
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Backfill embeddings for committed turns that don't have one yet.
+
+    Run once after enabling recall so prior history becomes searchable.
+    """
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        conn = sqlite3.connect(db_path)
+        try:
+            pending = get_turns_missing_embeddings(conn, limit=1000)
+            indexed = 0
+            for turn in pending:
+                vec = get_embedding(turn["content"])
+                if vec:
+                    set_turn_embedding(conn, turn["id"], vec)
+                    indexed += 1
+        finally:
+            conn.close()
+        return {"indexed": indexed, "remaining": max(0, len(pending) - indexed)}
     except HTTPException:
         raise
     except Exception as e:

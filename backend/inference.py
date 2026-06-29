@@ -71,11 +71,13 @@ def _build_messages(
     message: str,
     context_turns: Optional[List[Dict]] = None,
     mode: Optional[str] = None,
+    recall: Optional[str] = None,
 ) -> List[Dict]:
     """Build the OpenAI-style messages array from system prompt, context, and input.
 
-    When mode == "voice", the system prompt is augmented with a spoken-style
-    instruction (configurable via system_prompt.voice_text, else a sensible default).
+    Context assembly order: system prompt, recall block (if any), recent window,
+    current message. When mode == "voice", the system prompt is augmented with a
+    spoken-style instruction (configurable via system_prompt.voice_text).
     """
     config = _get_config()
     system_prompt = config.get("system_prompt", {})
@@ -95,6 +97,14 @@ def _build_messages(
             "content": system_content,
         }
     ]
+
+    # Recall block (memory) enters as a system message right after the main prompt,
+    # before the recent window — this is "your memory speaking" per INTENTS.md.
+    if recall and recall.strip():
+        messages.append({
+            "role": "system",
+            "content": "Relevant memory from earlier conversations (your recall):\n\n" + recall.strip(),
+        })
 
     # Add context from previous turns
     if context_turns and len(context_turns) > 0:
@@ -128,6 +138,7 @@ def stream_llm_tokens(
     message: str,
     context_turns: Optional[List[Dict]] = None,
     mode: Optional[str] = None,
+    recall: Optional[str] = None,
 ):
     """Yield tokens from the local LLM endpoint as they arrive (true streaming).
 
@@ -135,6 +146,7 @@ def stream_llm_tokens(
         message: The user's input message
         context_turns: List of previous turns to include in context
         mode: Turn mode ("voice" augments the system prompt for spoken style)
+        recall: Optional synthesized recall block injected as memory context
 
     Yields:
         Content fragments (tokens) as they are produced by the model.
@@ -145,7 +157,7 @@ def stream_llm_tokens(
     """
     import json
 
-    messages = _build_messages(message, context_turns, mode=mode)
+    messages = _build_messages(message, context_turns, mode=mode, recall=recall)
     payload = _build_payload(messages, stream=True)
 
     try:
@@ -372,4 +384,91 @@ def chat_with_retry(
         except RuntimeError as e:
             # Don't retry on runtime errors
             raise
+
+
+# --- Recall: embeddings + synthesis (both via the LM Studio endpoint) ---------
+
+def _recall_config() -> Dict:
+    return _get_config().get("recall", {}) or {}
+
+
+def get_embedding(text: str) -> Optional[List[float]]:
+    """Embed text via the LM Studio /v1/embeddings endpoint.
+
+    Returns the embedding vector, or None on failure (recall is best-effort and
+    must never break a turn).
+    """
+    if not text or not text.strip():
+        return None
+    rc = _recall_config()
+    model = rc.get("embedding_model", "text-embedding-nomic-embed-text-v1.5")
+    try:
+        response = requests.post(
+            f"{_get_endpoint_url()}/embeddings",
+            json={"model": model, "input": text},
+            timeout=rc.get("embedding_timeout", 20),
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["data"][0]["embedding"]
+    except Exception as e:
+        print(f"Warning: embedding request failed: {e}")
+        return None
+
+
+def synthesize_recall(query: str, matches: List[Dict]) -> str:
+    """Synthesize matched memories into a first-person recall block via the LLM.
+
+    `matches` is a list of dicts with at least text/tags/score/branch_root_id.
+    Uses a small max_tokens budget (configurable) to keep recall snappy.
+    Returns "" if there is nothing to synthesize or on failure.
+    """
+    if not matches:
+        return ""
+    rc = _recall_config()
+    inference_config = _get_config()["inference"]
+
+    system_prompt = rc.get(
+        "synthesis_system",
+        "You are a memory synthesizer. Combine the related past turns into a concise, "
+        "first-person memory block that reads like something the user would remember "
+        "about earlier conversations. Be natural and conversational. Do not invent facts.",
+    )
+
+    lines = []
+    for m in matches:
+        tags = ", ".join(m.get("tags") or []) or "none"
+        lines.append(
+            f"- (relevance {m.get('score', 0):.2f}, tags: {tags}) {m.get('text', '')}"
+        )
+    user_prompt = (
+        f"Current message: {query}\n\n"
+        "Relevant memories from past conversations:\n"
+        + "\n".join(lines)
+        + "\n\nSynthesize these into a concise first-person memory block."
+    )
+
+    payload = {
+        "model": inference_config["model_id"],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": rc.get("synthesis_temperature", 0.3),
+        "max_tokens": rc.get("synthesis_max_tokens", 256),
+        "stream": False,
+    }
+
+    try:
+        response = requests.post(
+            f"{_get_endpoint_url()}/chat/completions",
+            json=payload,
+            timeout=rc.get("synthesis_timeout", 60),
+        )
+        response.raise_for_status()
+        data = response.json()
+        return (data["choices"][0]["message"]["content"] or "").strip()
+    except Exception as e:
+        print(f"Warning: recall synthesis failed: {e}")
+        return ""
 

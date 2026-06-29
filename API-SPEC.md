@@ -94,6 +94,17 @@ X-Passkey: <your-passkey>
   `"text"` = normal chat. On `"voice"` turns the backend augments the system prompt
   with a spoken-style instruction (no markdown/symbols, short sentences) so the reply
   reads well via TTS. Configurable via `system_prompt.voice_text`.
+- `recall` (optional): Run recall (memory) for this turn. `true`/`false` overrides the
+  server default (`recall.enabled`). When recall produces a block, it is streamed as a
+  `recall` SSE event and injected into context. (Also accepted on `POST /api/branches/{id}`.)
+
+**Recall SSE event** (emitted before tokens, when recall is on and finds matches):
+```
+data: {"type":"recall","content":"<first-person memory block>","sources":[
+  {"turn_id":15,"role":"assistant","tags":["decision"],"branch_root_id":1,
+   "similarity":0.87,"score":1.305,"preview":"we chose SQLite ..."}
+]}
+```
 
 > Branch model: every continuation should send `parent_turn_id` = the active branch's
 > leaf turn. To fork from a mid-conversation turn or a specific paragraph, use
@@ -335,6 +346,43 @@ captured (any frame size). This is fed straight to Whisper (no transcode).
 ```
 The server emits a `partial` roughly every ~2s of received audio (re-transcribing the
 buffer), sends `final` on `end`, then closes. Segmenting is internal and may change.
+
+---
+
+### 8. Recall (Memory)
+
+Recall runs **inside the send** when enabled: the message is embedded (via LM Studio
+`/v1/embeddings`), the whole turns DB is cosine-searched with per-tag boosts, the top
+matches are synthesized into a first-person memory block (LM Studio chat, small token
+budget), streamed as a `recall` event, and injected into context (recall → window →
+current). The block is **ephemeral** — stored as the single "current" recall,
+overwritten each run.
+
+**`GET /api/recall/current`** → the current block (or null):
+```json
+{ "recall": { "content": "...", "sources": [ ... ], "query": "...", "created_at": "..." } }
+```
+
+**`POST /api/recall/reindex`** → backfill embeddings for committed turns missing them
+(run once after enabling recall so prior history is searchable):
+```json
+{ "indexed": 42, "remaining": 0 }
+```
+
+**`PATCH /api/turns/{turn_id}/tags`** → add/remove free-form tags (used for recall
+boosts):
+```json
+// request
+{ "add_tags": ["decision", "concept"], "remove_tags": ["emotion"] }
+// response
+{ "turn_id": 15, "tags": ["concept", "decision"] }
+```
+`404` if the turn doesn't exist.
+
+> Setup: load an embedding model in LM Studio and set `recall.embedding_model`; enable
+> via `recall.enabled` or the per-request `recall` flag. Embeddings/synthesis both run
+> through LM Studio (no extra ML deps). Recall is best-effort — if embedding/synthesis
+> fails, the turn proceeds normally without a recall block.
 
 ---
 
