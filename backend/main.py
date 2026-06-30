@@ -17,7 +17,8 @@ from db import (
     init_db, create_turn, get_recent_turns, get_turn_by_id, delete_turn,
     get_ancestor_chain, get_turn_tree,
     search_similar_turns, set_turn_embedding, update_turn_tags,
-    set_current_recall, get_current_recall, get_turns_missing_embeddings,
+    set_current_recall, get_current_recall, set_turn_recall,
+    get_turns_missing_embeddings,
 )
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
@@ -273,6 +274,7 @@ def _stream_turn_response(
     def event_generator():
         # Recall first, so the block streams to the UI and feeds the model context.
         recall_text = ""
+        recall_sources = []
         if recall_enabled:
             recall_text, recall_sources = _run_recall(db_path, message)
             if recall_text:
@@ -301,6 +303,9 @@ def _stream_turn_response(
                     context_turns=context_turns, committed=commit,
                     parent_turn_id=user_turn["id"], paragraph_index=None,
                 )
+                # Persist this turn's recall block on the user turn (per-branch recall).
+                if recall_text:
+                    set_turn_recall(conn, user_turn["id"], recall_text, recall_sources)
                 # Embed both turns (best-effort) so they're searchable by recall.
                 if recall_enabled:
                     for t in (user_turn, assistant_turn):

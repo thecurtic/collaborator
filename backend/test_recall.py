@@ -86,6 +86,38 @@ def test_recall_flow_emits_event_and_feeds_context():
     print("✓ recall flow: event + context + current block; off by default")
 
 
+def test_recall_persisted_per_turn_in_tree():
+    """The recall block is stored on the triggering user turn and shows in the tree."""
+    import json as _json
+    main.get_embedding = lambda text: [1.0, 0.0]
+    main.synthesize_recall = lambda q, m: "MEMORY: per-branch block"
+    def fake_stream(message, context_turns=None, mode=None, recall=None):
+        yield "ok"
+    main.stream_llm_tokens = fake_stream
+
+    c = TestClient(main.app)
+    r = c.post("/api/messages", json={"message": "what did we decide?", "recall": True})
+    done = [_json.loads(l[6:]) for l in r.text.splitlines()
+            if l.startswith("data: ") and '"done"' in l][0]
+    user_turn_id = done["user_turn_id"]
+
+    found = {}
+    def walk(n):
+        found[n["id"]] = n
+        for ch in n["children"]:
+            walk(ch)
+    for root in c.get("/api/tree").json()["roots"]:
+        walk(root)
+
+    node = found[user_turn_id]
+    assert node["recall"]["content"] == "MEMORY: per-branch block"
+    assert isinstance(node["recall"]["sources"], list)
+    # A turn with no recall has no recall key.
+    other = next(n for n in found.values() if n["role"] == "assistant")
+    assert "recall" not in other
+    print("✓ recall persisted on triggering turn, visible per-node in tree")
+
+
 def test_embed_texts_backend_dispatch():
     """embed_texts uses local fastembed by default, or LM Studio when configured."""
     import inference
@@ -136,6 +168,7 @@ if __name__ == "__main__":
     test_search_ranking_and_tag_boosts()
     test_tags_endpoint()
     test_recall_flow_emits_event_and_feeds_context()
+    test_recall_persisted_per_turn_in_tree()
     test_embed_texts_backend_dispatch()
     test_synthesis_prompt_loads_from_file()
     print("\n✓ All recall tests passed!")

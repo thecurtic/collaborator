@@ -100,6 +100,8 @@ def ensure_conversation_schema(conn) -> None:
             parent_turn_id INTEGER,
             paragraph_index INTEGER,
             branched INTEGER NOT NULL DEFAULT 0,
+            recall_content TEXT,
+            recall_sources TEXT,
             embedding BLOB,
             FOREIGN KEY (parent_turn_id) REFERENCES turns(id)
         )
@@ -146,6 +148,10 @@ def _migrate_turns_branching(conn) -> None:
         cursor.execute("ALTER TABLE turns ADD COLUMN paragraph_index INTEGER")
     if "branched" not in existing:
         cursor.execute("ALTER TABLE turns ADD COLUMN branched INTEGER NOT NULL DEFAULT 0")
+    if "recall_content" not in existing:
+        cursor.execute("ALTER TABLE turns ADD COLUMN recall_content TEXT")
+    if "recall_sources" not in existing:
+        cursor.execute("ALTER TABLE turns ADD COLUMN recall_sources TEXT")
     if "embedding" not in existing:
         cursor.execute("ALTER TABLE turns ADD COLUMN embedding BLOB")
     conn.commit()
@@ -327,6 +333,18 @@ def get_turn_tree(db, committed_only: bool = True) -> List[dict]:
         node = _row_to_turn(row)
         node["children"] = []
         nodes[node["id"]] = node
+
+    # Attach each turn's own persisted recall block (per-branch recall), so the
+    # frontend can show a branch's recall on load independent of the latest one.
+    for (tid, content, sources) in cursor.execute(
+        "SELECT id, recall_content, recall_sources FROM turns WHERE recall_content IS NOT NULL"
+    ).fetchall():
+        if tid in nodes:
+            try:
+                parsed = _json.loads(sources) if sources else []
+            except Exception:
+                parsed = []
+            nodes[tid]["recall"] = {"content": content, "sources": parsed}
 
     roots: List[dict] = []
     for node in nodes.values():  # insertion order == ascending id
@@ -567,6 +585,16 @@ def update_turn_tags(db, turn_id: int, add: Optional[List[str]] = None,
     cursor.execute("UPDATE turns SET tags = ? WHERE id = ?", (_json.dumps(new_tags), turn_id))
     db.commit()
     return new_tags
+
+
+def set_turn_recall(db, turn_id: int, content: str, sources: List[dict]) -> None:
+    """Persist the recall block that was used for a turn (per-branch recall)."""
+    cursor = db.cursor()
+    cursor.execute(
+        "UPDATE turns SET recall_content = ?, recall_sources = ? WHERE id = ?",
+        (content, _json.dumps(sources or []), turn_id),
+    )
+    db.commit()
 
 
 def set_current_recall(db, content: str, sources: List[dict], query: str = "") -> None:

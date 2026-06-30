@@ -319,6 +319,12 @@ parent it branched from. `preview` is a single-line label.
   explicit fork), `false` for `POST /api/messages` continuations. Use it to render the
   fork switcher even when a with-context branch shares the parent of a continuation
   (otherwise the two are structurally identical).
+- `recall` (object, present only on turns that triggered recall): the recall block
+  used for that turn — `{ "content": "...", "sources": [...] }`. This is **per-turn /
+  per-branch**, so each branch shows its own recall on load, independent of the latest
+  global one. It's stored on the user turn that triggered recall (and removed with the
+  turn on delete). The live `recall` SSE event and `GET /api/recall/current` still
+  reflect the most recent run.
 
 ---
 
