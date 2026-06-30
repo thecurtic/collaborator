@@ -7,6 +7,7 @@ import {
   Trash2,
   Volume2,
 } from 'lucide-react';
+import { Markdown } from '@/components/Markdown';
 import { Button } from '@/components/ui/button';
 import { useSpeech } from '@/features/voice/SpeechContext';
 import { splitParagraphs } from '@/features/voice/speechUtils';
@@ -148,9 +149,13 @@ export function TreeBubble({
                       'bg-primary/10 px-2 py-1 ring-1 ring-primary/30',
                   )}
                 >
-                  <p className="flex-1 whitespace-pre-wrap break-words">
-                    {block}
-                  </p>
+                  {isUser ? (
+                    <p className="flex-1 whitespace-pre-wrap break-words">
+                      {block}
+                    </p>
+                  ) : (
+                    <Markdown className="min-w-0 flex-1">{block}</Markdown>
+                  )}
                   <button
                     type="button"
                     aria-label="Branch from here"

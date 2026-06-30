@@ -7,6 +7,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Markdown } from '@/components/Markdown';
 import type { RecallBlock } from '@/domain/models';
 import type { BranchTarget } from './branchTarget';
 import { Composer } from './Composer';
@@ -394,9 +395,7 @@ export function ChatView({
               <div className="flex w-full justify-start">
                 <div className="max-w-[85%] rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:max-w-[80%] sm:text-sm">
                   {streaming.reply ? (
-                    <p className="whitespace-pre-wrap break-words">
-                      {streaming.reply}
-                    </p>
+                    <Markdown>{streaming.reply}</Markdown>
                   ) : (
                     <span className="flex gap-1 py-1" aria-label="Responding">
                       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.3s]" />
