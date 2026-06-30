@@ -1,4 +1,11 @@
-import { Brain, ChevronLeft, ChevronRight, Loader2, Network } from 'lucide-react';
+import {
+  Brain,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  Network,
+  X,
+} from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { BranchTarget } from './branchTarget';
 import { Composer } from './Composer';
@@ -39,6 +46,7 @@ export function ChatView({
     contextWindow,
     streaming,
     recall,
+    dismissRecall,
     send,
     branch,
     switchSibling,
@@ -322,6 +330,14 @@ export function ChatView({
                     {recall.sources.length === 1 ? 'source' : 'sources'}
                   </span>
                 )}
+                <button
+                  type="button"
+                  aria-label="Dismiss recall"
+                  onClick={dismissRecall}
+                  className="ml-auto rounded p-0.5 text-muted-foreground hover:text-foreground active:scale-90"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               </div>
               <p className="whitespace-pre-wrap break-words text-card-foreground">
                 {recall.content}

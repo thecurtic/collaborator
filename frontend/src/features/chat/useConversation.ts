@@ -180,7 +180,8 @@ export function useConversation(reloadSignal: number) {
     ) => {
       setSending(true);
       setError(null);
-      setRecall(null);
+      // Keep the previous recall block visible until a new recall event replaces
+      // it (mirrors the backend keeping the "current" block until overwritten).
       setStreaming({ user: userText, reply: '' });
       try {
         const res = await stream(
@@ -195,11 +196,12 @@ export function useConversation(reloadSignal: number) {
       } finally {
         setSending(false);
         setStreaming(null);
-        setRecall(null);
       }
     },
     [load, selectPathTo],
   );
+
+  const dismissRecall = useCallback(() => setRecall(null), []);
 
   const send = useCallback(
     (message: string) => {
@@ -326,6 +328,7 @@ export function useConversation(reloadSignal: number) {
     contextWindow,
     streaming,
     recall,
+    dismissRecall,
     send,
     branch,
     switchSibling,
