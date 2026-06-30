@@ -121,7 +121,12 @@ export function useConversation(reloadSignal: number) {
   const [error, setError] = useState<string | null>(null);
   const [contextWindow, setContextWindow] = useState<number | null>(null);
   const [streaming, setStreaming] = useState<Streaming | null>(null);
-  const [recall, setRecall] = useState<RecallBlock | null>(null);
+  // The recall block, anchored to the assistant turn it informed (turnId set on
+  // `done`); turnId === null means it's the in-flight reply (show in the overlay).
+  const [recall, setRecall] = useState<{
+    block: RecallBlock;
+    turnId: number | null;
+  } | null>(null);
   // Index kept in a ref so it's fresh synchronously after a load (selectPathTo
   // runs right after) while still triggering re-render via the `version` bump.
   const indexRef = useRef<NodeIndex>(
@@ -186,8 +191,13 @@ export function useConversation(reloadSignal: number) {
       try {
         const res = await stream(
           (c) => setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
-          (block) => setRecall(block),
+          (block) => setRecall({ block, turnId: null }),
         );
+        // Anchor an in-flight recall to the new assistant turn so it renders
+        // inline (User → recall → response) instead of floating at the bottom.
+        if (res.id != null) {
+          setRecall((r) => (r && r.turnId === null ? { ...r, turnId: res.id } : r));
+        }
         await load();
         if (res.id != null) selectPathTo(res.id);
         if (res.contextWindow != null) setContextWindow(res.contextWindow);

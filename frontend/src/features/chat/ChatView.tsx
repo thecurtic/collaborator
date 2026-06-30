@@ -7,6 +7,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { RecallBlock } from '@/domain/models';
 import type { BranchTarget } from './branchTarget';
 import { Composer } from './Composer';
 import { TreeBubble } from './TreeBubble';
@@ -27,6 +28,56 @@ interface BranchPoint {
   turnId: number;
   paragraphIndex?: number;
   label: string;
+}
+
+/** The recalled-memory block: rendered between a user message and its reply. */
+function RecallCard({
+  recall,
+  onDismiss,
+}: {
+  recall: RecallBlock;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-primary/30 bg-primary/5 px-3.5 py-2.5 text-sm">
+      <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-primary">
+        <Brain className="h-3.5 w-3.5" />
+        Recalled memory
+        {recall.sources.length > 0 && (
+          <span className="text-muted-foreground">
+            · {recall.sources.length}{' '}
+            {recall.sources.length === 1 ? 'source' : 'sources'}
+          </span>
+        )}
+        <button
+          type="button"
+          aria-label="Dismiss recall"
+          onClick={onDismiss}
+          className="ml-auto rounded p-0.5 text-muted-foreground hover:text-foreground active:scale-90"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <p className="whitespace-pre-wrap break-words text-card-foreground">
+        {recall.content}
+      </p>
+      {recall.sources.length > 0 && (
+        <details className="mt-2 text-xs text-muted-foreground">
+          <summary className="cursor-pointer select-none">Sources</summary>
+          <ul className="mt-1 space-y-1">
+            {recall.sources.map((s) => (
+              <li key={s.turnId} className="truncate">
+                <span className="opacity-70">#{s.turnId}</span> {s.preview}
+                {s.tags.length > 0 && (
+                  <span className="text-primary"> · {s.tags.join(', ')}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
 }
 
 export function ChatView({
@@ -304,7 +355,15 @@ export function ChatView({
                     }
                   : undefined;
                 return (
-                  <div key={entry.node.id} data-tid={entry.node.id}>
+                  <div
+                    key={entry.node.id}
+                    data-tid={entry.node.id}
+                    className="flex flex-col gap-3 sm:gap-4"
+                  >
+                    {/* Recall block sits between its user message and the reply. */}
+                    {recall?.turnId === entry.node.id && (
+                      <RecallCard recall={recall.block} onDismiss={dismissRecall} />
+                    )}
                     <TreeBubble
                       node={entry.node}
                       onBranch={handleBranch}
@@ -318,48 +377,6 @@ export function ChatView({
             </>
           )}
 
-          {/* Recalled memory block (ephemeral) shown above the in-flight reply. */}
-          {recall && (
-            <div className="rounded-xl border border-primary/30 bg-primary/5 px-3.5 py-2.5 text-sm">
-              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-primary">
-                <Brain className="h-3.5 w-3.5" />
-                Recalled memory
-                {recall.sources.length > 0 && (
-                  <span className="text-muted-foreground">
-                    · {recall.sources.length}{' '}
-                    {recall.sources.length === 1 ? 'source' : 'sources'}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  aria-label="Dismiss recall"
-                  onClick={dismissRecall}
-                  className="ml-auto rounded p-0.5 text-muted-foreground hover:text-foreground active:scale-90"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <p className="whitespace-pre-wrap break-words text-card-foreground">
-                {recall.content}
-              </p>
-              {recall.sources.length > 0 && (
-                <details className="mt-2 text-xs text-muted-foreground">
-                  <summary className="cursor-pointer select-none">Sources</summary>
-                  <ul className="mt-1 space-y-1">
-                    {recall.sources.map((s) => (
-                      <li key={s.turnId} className="truncate">
-                        <span className="opacity-70">#{s.turnId}</span> {s.preview}
-                        {s.tags.length > 0 && (
-                          <span className="text-primary"> · {s.tags.join(', ')}</span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          )}
-
           {/* Optimistic streaming overlay while a send/branch is in flight. */}
           {streaming && (
             <>
@@ -370,6 +387,10 @@ export function ChatView({
                   </p>
                 </div>
               </div>
+              {/* In-flight recall: between the user message and the reply. */}
+              {recall?.turnId === null && (
+                <RecallCard recall={recall.block} onDismiss={dismissRecall} />
+              )}
               <div className="flex w-full justify-start">
                 <div className="max-w-[85%] rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:max-w-[80%] sm:text-sm">
                   {streaming.reply ? (
