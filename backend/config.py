@@ -69,7 +69,11 @@ def load_config() -> dict:
         },
         "system_prompt": {
             "text": "You are Collaborator, a helpful assistant.",
-            "file_path": None
+            "file_path": None,
+            # Auditable prompt layers appended to the base prompt (markdown files,
+            # read fresh each turn). paragraph_file always; voice_file in voice mode.
+            "paragraph_file": "paragraph-style.md",
+            "voice_file": "voice-style.md",
         },
         "recall": {
             "enabled": False,

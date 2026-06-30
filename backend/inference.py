@@ -50,9 +50,13 @@ class StreamingResponse:
 # Appended to every system prompt so distinct ideas land in separate paragraphs.
 # This makes paragraph-level branching meaningful (each paragraph is a fork point).
 DEFAULT_PARAGRAPH_STYLE = (
-    "When your response covers more than one distinct idea, put each idea in its "
-    "own paragraph separated by a blank line, so individual points can be "
-    "referenced and branched from separately."
+    "Structure every response as a sequence of discrete blocks separated by a blank "
+    "line. Each block must contain exactly one distinct idea, point, step, or item — "
+    "never more than one point per block. For lists especially: do not write bullet "
+    "or numbered items one-per-line inside a single block; write each point as its "
+    "own blank-line-separated block (with or without a list marker). Keep "
+    "tightly-coupled content (a heading with its line, a fenced code block) together. "
+    "Prefer more, smaller blocks — each is independently referenceable and branchable."
 )
 
 
@@ -67,6 +71,24 @@ DEFAULT_VOICE_STYLE = (
 )
 
 
+def _load_prompt_layer(cfg: Dict, file_key: str, text_key: str, default: str) -> str:
+    """Resolve a system-prompt layer: markdown file -> inline config string -> default.
+
+    Read fresh each call so edits to the layer files take effect without a restart
+    (unlike system-prompt.md, which config caches at startup).
+    """
+    file_path = cfg.get(file_key)
+    if file_path:
+        try:
+            with open(resolve_path(file_path), "r", encoding="utf-8") as f:
+                text = f.read().strip()
+                if text:
+                    return text
+        except IOError:
+            pass
+    return cfg.get(text_key) or default
+
+
 def _build_messages(
     message: str,
     context_turns: Optional[List[Dict]] = None,
@@ -76,19 +98,23 @@ def _build_messages(
     """Build the OpenAI-style messages array from system prompt, context, and input.
 
     Context assembly order: system prompt, recall block (if any), recent window,
-    current message. When mode == "voice", the system prompt is augmented with a
-    spoken-style instruction (configurable via system_prompt.voice_text).
+    current message. The system prompt is layered: the base prompt + an auditable
+    paragraph-style layer (always), + a voice-style layer (mode == "voice"). Each
+    layer is a markdown file (system_prompt.paragraph_file / voice_file), falling
+    back to an inline config string then a built-in default.
     """
     config = _get_config()
     system_prompt = config.get("system_prompt", {})
     system_content = system_prompt.get("text", "You are Collaborator, a helpful assistant.")
 
     # Encourage one-idea-per-paragraph so paragraph-level branching is meaningful.
-    paragraph_style = system_prompt.get("paragraph_text") or DEFAULT_PARAGRAPH_STYLE
+    paragraph_style = _load_prompt_layer(
+        system_prompt, "paragraph_file", "paragraph_text", DEFAULT_PARAGRAPH_STYLE)
     system_content = f"{system_content}\n\n{paragraph_style}"
 
     if mode == "voice":
-        voice_style = system_prompt.get("voice_text") or DEFAULT_VOICE_STYLE
+        voice_style = _load_prompt_layer(
+            system_prompt, "voice_file", "voice_text", DEFAULT_VOICE_STYLE)
         system_content = f"{system_content}\n\n{voice_style}"
 
     messages = [

@@ -95,6 +95,32 @@ def test_call_llm_utf8_streaming():
         assert "â" not in response.text  # no latin-1 'â' leakage
 
 
+def test_system_prompt_layers_from_files():
+    """The paragraph layer is appended every turn; voice layer only in voice mode."""
+    import inference
+
+    base = inference._build_messages("hi")[0]["content"]
+    assert "blank line" in base.lower()                 # paragraph layer present
+    assert "voice mode" not in base.lower()             # voice layer absent
+
+    voiced = inference._build_messages("hi", mode="voice")[0]["content"]
+    assert "voice mode" in voiced.lower()               # voice layer present
+    assert "blank line" in voiced.lower()               # paragraph layer still present
+
+    # Layers resolve from files (precedence: file > inline string > default).
+    import tempfile, os
+    p = os.path.join(tempfile.mkdtemp(), "para.md")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("CUSTOM PARAGRAPH LAYER")
+    assert inference._load_prompt_layer(
+        {"paragraph_file": p}, "paragraph_file", "paragraph_text",
+        inference.DEFAULT_PARAGRAPH_STYLE) == "CUSTOM PARAGRAPH LAYER"
+    assert inference._load_prompt_layer(
+        {"paragraph_text": "INLINE"}, "paragraph_file", "paragraph_text",
+        inference.DEFAULT_PARAGRAPH_STYLE) == "INLINE"
+    print("✓ system prompt layers load from files (paragraph always, voice in voice mode)")
+
+
 def test_available_models():
     """Test getting available models."""
     mock_response = {
@@ -148,6 +174,8 @@ if __name__ == "__main__":
 
     test_call_llm_utf8_streaming()
     print("✓ utf-8 streaming test passed")
+
+    test_system_prompt_layers_from_files()
 
     test_available_models()
     print("✓ available models test passed")

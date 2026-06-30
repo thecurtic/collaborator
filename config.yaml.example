@@ -29,12 +29,13 @@ server:
 system_prompt:
   text: "You are Collaborator, a helpful assistant."
   file_path: null  # Alternative to text - path to prompt template file
-  # Appended to the system prompt on voice (call-mode) turns. If unset, a sensible
-  # spoken-style default is used (plain prose, no markdown/symbols, short sentences).
+  # Auditable prompt layers appended to the base prompt, each its own markdown file
+  # (read fresh each turn, so edits apply without a restart). Defaults shown.
+  paragraph_file: "paragraph-style.md"   # always appended: one-idea-per-block for branching
+  voice_file: "voice-style.md"           # appended only on voice (call-mode) turns
+  # Inline string fallbacks if you prefer not to use files (file takes precedence):
+  # paragraph_text: "Put each distinct idea in its own blank-line-separated block."
   # voice_text: "Speak in plain conversational prose with no markdown or symbols."
-  # Appended to EVERY system prompt: tells the model to put distinct ideas in their
-  # own paragraphs so paragraph-level branching is meaningful. Override if desired.
-  # paragraph_text: "Put each distinct idea in its own paragraph separated by a blank line."
 
 # Speech-to-text (faster-whisper / CTranslate2). Defaults: CPU, int8, 'base' model.
 # For a GPU box use device: cuda and compute_type: float16.
