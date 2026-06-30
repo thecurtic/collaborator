@@ -1,5 +1,6 @@
 import type {
   ApiHealth,
+  ApiRecall,
   ApiSendMessageResponse,
   ApiTree,
   ApiTreeNode,
@@ -9,11 +10,28 @@ import type {
 import type {
   ConversationTree,
   HealthStatus,
+  RecallBlock,
   SendMessageResult,
   TreeNode,
   Turn,
   TurnsPage,
 } from './models';
+
+/** Map a tree node's stored recall (or the recall SSE event) to a RecallBlock. */
+export function toRecallBlock(api: ApiRecall): RecallBlock {
+  return {
+    content: typeof api.content === 'string' ? api.content : '',
+    sources: (api.sources ?? []).map((s) => ({
+      turnId: s.turn_id,
+      role: s.role ?? '',
+      tags: s.tags ?? [],
+      branchRootId: s.branch_root_id ?? null,
+      similarity: s.similarity ?? 0,
+      score: s.score ?? 0,
+      preview: s.preview ?? '',
+    })),
+  };
+}
 
 /** Normalize the API's `tags: string | null` into a clean string[]. */
 function parseTags(tags: string | null): string[] {
@@ -60,6 +78,7 @@ export function toTreeNode(api: ApiTreeNode): TreeNode {
     paragraphIndex: api.paragraph_index ?? null,
     contextBoundary: api.context_boundary === true,
     branched: api.branched === true,
+    recall: api.recall ? toRecallBlock(api.recall) : null,
     children: (api.children ?? []).map(toTreeNode),
   };
 }

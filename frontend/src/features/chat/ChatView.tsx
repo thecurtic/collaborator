@@ -1,11 +1,4 @@
-import {
-  Brain,
-  ChevronLeft,
-  ChevronRight,
-  Loader2,
-  Network,
-  X,
-} from 'lucide-react';
+import { Brain, ChevronLeft, ChevronRight, Loader2, Network } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/Markdown';
 import type { RecallBlock } from '@/domain/models';
@@ -32,13 +25,7 @@ interface BranchPoint {
 }
 
 /** The recalled-memory block: rendered between a user message and its reply. */
-function RecallCard({
-  recall,
-  onDismiss,
-}: {
-  recall: RecallBlock;
-  onDismiss: () => void;
-}) {
+function RecallCard({ recall }: { recall: RecallBlock }) {
   return (
     <div className="rounded-xl border border-primary/30 bg-primary/5 px-3.5 py-2.5 text-sm">
       <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-primary">
@@ -50,14 +37,6 @@ function RecallCard({
             {recall.sources.length === 1 ? 'source' : 'sources'}
           </span>
         )}
-        <button
-          type="button"
-          aria-label="Dismiss recall"
-          onClick={onDismiss}
-          className="ml-auto rounded p-0.5 text-muted-foreground hover:text-foreground active:scale-90"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
       </div>
       <p className="whitespace-pre-wrap break-words text-card-foreground">
         {recall.content}
@@ -98,7 +77,6 @@ export function ChatView({
     contextWindow,
     streaming,
     recall,
-    dismissRecall,
     send,
     branch,
     switchSibling,
@@ -361,10 +339,6 @@ export function ChatView({
                     data-tid={entry.node.id}
                     className="flex flex-col gap-3 sm:gap-4"
                   >
-                    {/* Recall block sits between its user message and the reply. */}
-                    {recall?.turnId === entry.node.id && (
-                      <RecallCard recall={recall.block} onDismiss={dismissRecall} />
-                    )}
                     <TreeBubble
                       node={entry.node}
                       onBranch={handleBranch}
@@ -372,6 +346,10 @@ export function ChatView({
                       fork={fork}
                       inContext={i >= inCtxStart}
                     />
+                    {/* This turn's stored recall (between the message and reply). */}
+                    {entry.node.recall && (
+                      <RecallCard recall={entry.node.recall} />
+                    )}
                   </div>
                 );
               })}
@@ -389,9 +367,7 @@ export function ChatView({
                 </div>
               </div>
               {/* In-flight recall: between the user message and the reply. */}
-              {recall?.turnId === null && (
-                <RecallCard recall={recall.block} onDismiss={dismissRecall} />
-              )}
+              {recall && <RecallCard recall={recall} />}
               <div className="flex w-full justify-start">
                 <div className="max-w-[85%] rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:max-w-[80%] sm:text-sm">
                   {streaming.reply ? (

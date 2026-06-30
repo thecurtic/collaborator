@@ -121,12 +121,9 @@ export function useConversation(reloadSignal: number) {
   const [error, setError] = useState<string | null>(null);
   const [contextWindow, setContextWindow] = useState<number | null>(null);
   const [streaming, setStreaming] = useState<Streaming | null>(null);
-  // The recall block, anchored to the assistant turn it informed (turnId set on
-  // `done`); turnId === null means it's the in-flight reply (show in the overlay).
-  const [recall, setRecall] = useState<{
-    block: RecallBlock;
-    turnId: number | null;
-  } | null>(null);
+  // The LIVE recall block during a send (shown in the streaming overlay). Once the
+  // turn commits, the persisted block comes back from the tree (node.recall).
+  const [recall, setRecall] = useState<RecallBlock | null>(null);
   // Index kept in a ref so it's fresh synchronously after a load (selectPathTo
   // runs right after) while still triggering re-render via the `version` bump.
   const indexRef = useRef<NodeIndex>(
@@ -185,19 +182,13 @@ export function useConversation(reloadSignal: number) {
     ) => {
       setSending(true);
       setError(null);
-      // Keep the previous recall block visible until a new recall event replaces
-      // it (mirrors the backend keeping the "current" block until overwritten).
+      setRecall(null);
       setStreaming({ user: userText, reply: '' });
       try {
         const res = await stream(
           (c) => setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
-          (block) => setRecall({ block, turnId: null }),
+          (block) => setRecall(block),
         );
-        // Anchor an in-flight recall to the new assistant turn so it renders
-        // inline (User → recall → response) instead of floating at the bottom.
-        if (res.id != null) {
-          setRecall((r) => (r && r.turnId === null ? { ...r, turnId: res.id } : r));
-        }
         await load();
         if (res.id != null) selectPathTo(res.id);
         if (res.contextWindow != null) setContextWindow(res.contextWindow);
@@ -206,12 +197,12 @@ export function useConversation(reloadSignal: number) {
       } finally {
         setSending(false);
         setStreaming(null);
+        // Persisted recall now comes from the tree (node.recall) on reload.
+        setRecall(null);
       }
     },
     [load, selectPathTo],
   );
-
-  const dismissRecall = useCallback(() => setRecall(null), []);
 
   const send = useCallback(
     (message: string) => {
@@ -338,7 +329,6 @@ export function useConversation(reloadSignal: number) {
     contextWindow,
     streaming,
     recall,
-    dismissRecall,
     send,
     branch,
     switchSibling,

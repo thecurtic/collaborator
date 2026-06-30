@@ -42,12 +42,29 @@ export interface ApiTurn {
 }
 
 /** A node in GET /api/tree (nested). */
+export interface ApiRecallSource {
+  turn_id: number;
+  role?: string;
+  tags?: string[];
+  branch_root_id?: number | null;
+  similarity?: number;
+  score?: number;
+  preview?: string;
+}
+
+export interface ApiRecall {
+  content: string;
+  sources?: ApiRecallSource[];
+}
+
 export interface ApiTreeNode {
   id: number;
   role: ApiRole;
   content: string;
   preview: string;
   paragraphs?: string[];
+  /** Present only on user turns that triggered recall. */
+  recall?: ApiRecall;
   parent_turn_id: number | null;
   paragraph_index: number | null;
   created_at?: string;
