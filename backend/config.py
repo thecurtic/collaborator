@@ -78,6 +78,9 @@ def load_config() -> dict:
             "embedding_model": "text-embedding-nomic-embed-text-v1.5",  # used when backend=lmstudio
             "search_limit": 10,
             "synthesis_max_tokens": 256,
+            # Editable/auditable synthesis system prompt (markdown file, like
+            # system-prompt.md). Falls back to a built-in default if missing.
+            "synthesis_prompt_file": "recall-synthesis-prompt.md",
             "tag_boosts": {
                 "decision": 1.5,
                 "open_question": 1.2,

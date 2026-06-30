@@ -117,9 +117,25 @@ def test_embed_texts_backend_dispatch():
     print("✓ embed_texts dispatch (local default + lmstudio, ordered)")
 
 
+def test_synthesis_prompt_loads_from_file():
+    """Synthesis prompt comes from a markdown file (file > inline string > default)."""
+    import inference
+    p = os.path.join(tempfile.mkdtemp(), "rp.md")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("CUSTOM SYNTH PROMPT")
+    assert inference._load_recall_synthesis_prompt({"synthesis_prompt_file": p}) == "CUSTOM SYNTH PROMPT"
+    # missing file -> built-in default
+    assert inference._load_recall_synthesis_prompt(
+        {"synthesis_prompt_file": "/nope/missing.md"}) == inference.DEFAULT_RECALL_SYNTHESIS_PROMPT
+    # inline string still works as a fallback
+    assert inference._load_recall_synthesis_prompt({"synthesis_system": "INLINE"}) == "INLINE"
+    print("✓ synthesis prompt loads from file (file > string > default)")
+
+
 if __name__ == "__main__":
     test_search_ranking_and_tag_boosts()
     test_tags_endpoint()
     test_recall_flow_emits_event_and_feeds_context()
     test_embed_texts_backend_dispatch()
+    test_synthesis_prompt_loads_from_file()
     print("\n✓ All recall tests passed!")

@@ -9,7 +9,7 @@ import requests
 from typing import List, Dict, Optional, AsyncGenerator, Tuple
 from functools import lru_cache
 
-from config import get_config
+from config import get_config, resolve_path
 
 
 # Initialize from config (cached)
@@ -392,6 +392,33 @@ def _recall_config() -> Dict:
     return _get_config().get("recall", {}) or {}
 
 
+# Fallback used only if no synthesis prompt file/string is configured.
+DEFAULT_RECALL_SYNTHESIS_PROMPT = (
+    "You are a memory synthesizer. Combine the related past turns into a concise, "
+    "first-person memory block that reads like something the user would remember "
+    "about earlier conversations. Be natural and conversational. Do not invent facts."
+)
+
+
+def _load_recall_synthesis_prompt(rc: Dict) -> str:
+    """Load the recall synthesis system prompt.
+
+    Precedence (mirrors the chat system prompt): a markdown file
+    (recall.synthesis_prompt_file, editable/auditable) -> an inline config string
+    (recall.synthesis_system) -> the built-in default.
+    """
+    file_path = rc.get("synthesis_prompt_file")
+    if file_path:
+        try:
+            with open(resolve_path(file_path), "r", encoding="utf-8") as f:
+                text = f.read().strip()
+                if text:
+                    return text
+        except IOError:
+            pass
+    return rc.get("synthesis_system") or DEFAULT_RECALL_SYNTHESIS_PROMPT
+
+
 _local_embedder = None
 
 
@@ -465,12 +492,7 @@ def synthesize_recall(query: str, matches: List[Dict]) -> str:
     rc = _recall_config()
     inference_config = _get_config()["inference"]
 
-    system_prompt = rc.get(
-        "synthesis_system",
-        "You are a memory synthesizer. Combine the related past turns into a concise, "
-        "first-person memory block that reads like something the user would remember "
-        "about earlier conversations. Be natural and conversational. Do not invent facts.",
-    )
+    system_prompt = _load_recall_synthesis_prompt(rc)
 
     lines = []
     for m in matches:

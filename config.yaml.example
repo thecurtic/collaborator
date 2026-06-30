@@ -53,6 +53,7 @@ recall:
   # embedding_model: "text-embedding-nomic-embed-text-v1.5"  # only if backend: lmstudio
   search_limit: 10            # max similar turns to feed synthesis
   synthesis_max_tokens: 256   # output budget to keep the recall block snappy
+  synthesis_prompt_file: "recall-synthesis-prompt.md"  # editable/auditable prompt (like system-prompt.md)
   tag_boosts:                 # multiplicative score boosts per tag
     decision: 1.5
     open_question: 1.2
