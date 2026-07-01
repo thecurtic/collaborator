@@ -35,7 +35,6 @@ export interface CallTurn {
   text: string;
 }
 
-const MAX_UTTERANCE_MS = 60000; // safety cap on a single turn
 // Detection confidence. "stop" listens while the agent (and room noise) is
 // audible, so it must be strict to avoid false interrupts that cut speech short.
 const END_WORD_THRESHOLD = 0.85;
@@ -119,7 +118,6 @@ export function useCall(
     let endWord = getEndWord();
     let stopWord = getStopWord();
     let queue: SpeechSession | null = null;
-    let maxTimer: number | undefined;
     let finalizing = false;
     let streamAbort: AbortController | null = null;
 
@@ -168,8 +166,6 @@ export function useCall(
 
     const cleanup = () => {
       active = false;
-      if (maxTimer) window.clearTimeout(maxTimer);
-      maxTimer = undefined;
       stopKws();
       streamAbort?.abort();
       stopCapture();
@@ -216,10 +212,7 @@ export function useCall(
       }
       setPhase('listening');
       chimeListenStart(); // audible: mic now listening
-      maxTimer = window.setTimeout(() => {
-        log('max duration → finish');
-        void finalize();
-      }, MAX_UTTERANCE_MS);
+      // No auto-timeout — the turn ends only on the end word or the Done button.
       startKws(
         [endWord],
         () => {
@@ -235,8 +228,6 @@ export function useCall(
       finalizing = true;
       chimeListenStop(); // audible: mic stopped listening
       setPhase('processing'); // brief — final is usually ready immediately
-      if (maxTimer) window.clearTimeout(maxTimer);
-      maxTimer = undefined;
       stopKws();
       stopCapture(); // stop sending audio before asking for the final
       let text = '';
@@ -363,8 +354,6 @@ export function useCall(
       if (!slice) return;
       log(`skip → ¶${fromParagraph}`);
       stopKws();
-      if (maxTimer) window.clearTimeout(maxTimer);
-      maxTimer = undefined;
       stopCapture();
       transcriber?.close();
       transcriber = null;

@@ -45,7 +45,7 @@ function Turn({
   /** Attached to the paragraph currently being read (for follow-scroll). */
   currentRef?: Ref<HTMLParagraphElement>;
 }) {
-  const label = role === 'user' ? 'You' : 'Assistant';
+  const label = role === 'user' ? 'You' : 'Collaborator';
 
   let body;
   if (role === 'assistant' && onSkip) {
