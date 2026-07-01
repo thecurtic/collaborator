@@ -61,7 +61,19 @@ function indexNodes(tree: ConversationTree): NodeIndex {
   return { byId, childrenOf, parentOf };
 }
 
-/** Walk root→leaf, picking the selected child at each fork (default: newest). */
+/** The main line at a fork = the newest non-branched (continuation) child. */
+function mainChild(siblings: TreeNode[]): TreeNode | undefined {
+  for (let i = siblings.length - 1; i >= 0; i--) {
+    if (!siblings[i].branched) return siblings[i];
+  }
+  return undefined;
+}
+
+/**
+ * Walk root→leaf following the MAIN line (`0/n`) by default — the non-branched
+ * continuation. Branches are opt-in: only followed when explicitly selected. If a
+ * node has no continuation (all children are branches), the main line ends there.
+ */
 function computePath(
   childrenOf: Map<number, TreeNode[]>,
   selection: Map<number, number>,
@@ -71,9 +83,11 @@ function computePath(
   let siblings = childrenOf.get(VIRTUAL_ROOT) ?? [];
   while (siblings.length > 0) {
     const selId = selection.get(parentId);
-    if (selId === CONTINUE) break; // empty slot chosen → stop at this turn
-    const fallback = siblings[siblings.length - 1];
-    const chosen = siblings.find((s) => s.id === selId) ?? fallback;
+    if (selId === CONTINUE) break; // "0" with no continuation → stop here
+    let chosen =
+      selId !== undefined ? siblings.find((s) => s.id === selId) : undefined;
+    if (!chosen) chosen = mainChild(siblings); // default: the main line
+    if (!chosen) break; // only branches, none selected → main line ends
     path.push({ node: chosen, siblings, parentId });
     parentId = chosen.id;
     siblings = childrenOf.get(chosen.id) ?? [];
@@ -81,28 +95,26 @@ function computePath(
   return path;
 }
 
-/** Branch-fork analysis for a node's children. */
+/**
+ * Branch switcher for a node's children: position 0 = the main line, 1..n = the
+ * branches (branched children). null if there are no branches (linear turn).
+ */
 function forkOf(
   children: TreeNode[],
   selId: number | undefined,
-): {
-  hasEmpty: boolean;
-  options: (TreeNode | null)[]; // null = the empty "continue here" slot
-  activeIndex: number;
-} | null {
-  if (children.length === 0) return null;
-  const hasEmpty = children.every((c) => c.branched); // only explicit branches
-  if (!hasEmpty && children.length <= 1) return null; // a lone continuation
-  const options: (TreeNode | null)[] = hasEmpty ? [null, ...children] : children;
-  let activeIndex: number;
-  if (hasEmpty && selId === CONTINUE) {
-    activeIndex = 0;
-  } else {
-    const ci = children.findIndex((c) => c.id === selId);
-    const resolved = ci >= 0 ? ci : children.length - 1; // default: newest
-    activeIndex = hasEmpty ? resolved + 1 : resolved;
+): { current: number; total: number; paragraphIndex: number | null } | null {
+  const branches = children.filter((c) => c.branched);
+  if (branches.length === 0) return null;
+  let current = 0; // 0 = main line
+  let paragraphIndex: number | null = null;
+  if (selId !== undefined && selId !== CONTINUE) {
+    const bi = branches.findIndex((b) => b.id === selId);
+    if (bi >= 0) {
+      current = bi + 1;
+      paragraphIndex = branches[bi].paragraphIndex;
+    }
   }
-  return { hasEmpty, options, activeIndex };
+  return { current, total: branches.length, paragraphIndex };
 }
 
 function errMessage(err: unknown): string {
@@ -304,16 +316,22 @@ export function useConversation(reloadSignal: number) {
     [load],
   );
 
-  // Cycle a node's branch switcher (incl. the empty "continue here" slot).
+  // Cycle a node's branch switcher: 0 = main line, 1..n = branches.
   const cycleFork = useCallback((parentId: number, dir: 1 | -1) => {
     setSelection((prev) => {
       const children = indexRef.current.childrenOf.get(parentId) ?? [];
+      const branches = children.filter((c) => c.branched);
+      if (branches.length === 0) return prev;
       const f = forkOf(children, prev.get(parentId));
-      if (!f) return prev;
-      const nextIdx = (f.activeIndex + dir + f.options.length) % f.options.length;
-      const opt = f.options[nextIdx];
+      const positions = branches.length + 1; // 0 (main) + each branch
+      const nextPos = ((f?.current ?? 0) + dir + positions) % positions;
       const next = new Map(prev);
-      next.set(parentId, opt === null ? CONTINUE : opt.id);
+      if (nextPos === 0) {
+        const cont = mainChild(children);
+        next.set(parentId, cont ? cont.id : CONTINUE); // main line (or stop)
+      } else {
+        next.set(parentId, branches[nextPos - 1].id);
+      }
       return next;
     });
   }, []);
@@ -327,9 +345,9 @@ export function useConversation(reloadSignal: number) {
     const fork: ForkInfo | null = f
       ? {
           parentId: s.node.id,
-          current: f.hasEmpty ? f.activeIndex : f.activeIndex + 1,
-          total: children.length,
-          paragraphIndex: f.options[f.activeIndex]?.paragraphIndex ?? null,
+          current: f.current,
+          total: f.total,
+          paragraphIndex: f.paragraphIndex,
         }
       : null;
     return { ...s, fork };

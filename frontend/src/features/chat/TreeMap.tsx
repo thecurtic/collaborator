@@ -114,16 +114,20 @@ function buildSeg(node: TreeNode, activeIds: Set<number>, detached: Detach[]): S
   }
 }
 
-function measure(seg: Seg) {
+function measure(seg: Seg, state: { toggle: number }) {
   if (seg.children.length === 0) return;
-  seg.children.forEach(measure);
-  const c0 = seg.children[0];
+  seg.children.forEach((c) => measure(c, state));
+  const c0 = seg.children[0]; // first child continues the trunk
   c0.offset = 0;
   let leftEdge = -c0.left;
   let rightEdge = c0.right;
   for (let i = 1; i < seg.children.length; i++) {
     const c = seg.children[i];
-    if (i % 2 === 1) {
+    // Alternate the side each branch goes so single-branch forks don't all pile
+    // up on the right; the subtree extents keep everything non-overlapping.
+    const goRight = state.toggle > 0;
+    state.toggle = -state.toggle;
+    if (goRight) {
       c.offset = rightEdge + 1 + c.left;
       rightEdge = c.offset + c.right;
     } else {
@@ -163,12 +167,13 @@ function buildForest(tree: ConversationTree, activeIds: Set<number>) {
   const queue: { node: TreeNode; originId: number | null; side: number }[] =
     tree.roots.map((r) => ({ node: r, originId: null, side: 0 }));
   const trees: TreeLayout[] = [];
+  const measureState = { toggle: 1 }; // shared so branch sides alternate globally
 
   while (queue.length) {
     const { node, originId, side } = queue.shift()!;
     const detached: Detach[] = [];
     const rootSeg = buildSeg(node, activeIds, detached);
-    measure(rootSeg);
+    measure(rootSeg, measureState);
     const segments: Segment[] = [];
     assign(rootSeg, 0, 0, null, null, segments);
     const cols = segments.map((s) => s.column);
