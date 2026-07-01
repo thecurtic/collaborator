@@ -16,13 +16,14 @@ from data.agents_md import load_agents_md
 from db import (
     init_db, create_turn, get_recent_turns, get_turn_by_id, delete_turn,
     get_ancestor_chain, get_turn_tree,
-    search_similar_turns, set_turn_embedding, update_turn_tags,
+    search_similar_turns, search_keyword_turns, set_turn_embedding, update_turn_tags,
     set_current_recall, get_current_recall, set_turn_recall,
     get_turns_missing_embeddings,
 )
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
     get_embedding, embed_texts, synthesize_recall,
+    generate_with_tools, synthesize,
 )
 from auth import validate_passkey, create_user_db
 
@@ -148,6 +149,111 @@ def _recall_enabled(value: Optional[bool]) -> bool:
     return bool(_recall_config().get("enabled", False))
 
 
+def _tools_settings() -> dict:
+    return config.get("tools", {}) or {}
+
+
+def _tools_enabled(value: Optional[bool]) -> bool:
+    """Whether to offer tools to the model: request flag overrides config default."""
+    if value is not None:
+        return value
+    return bool(_tools_settings().get("enabled", False))
+
+
+def _synthesis_kinds() -> List[str]:
+    prompts = (_tools_settings().get("synthesis") or {}).get("prompts") or {"memory": None}
+    return list(prompts.keys()) or ["memory"]
+
+
+def _tool_matches_payload(matches: List[dict]) -> List[dict]:
+    """Compact match list handed to the model (keep text, trim length)."""
+    return [{
+        "turn_id": m["turn_id"],
+        "role": m["role"],
+        "text": (m.get("text") or "")[:600],
+        "tags": m.get("tags") or [],
+        "branch_root_id": m.get("branch_root_id"),
+        "score": round(m.get("score", 0), 4),
+    } for m in matches]
+
+
+def _recall_sources(matches: List[dict]) -> List[dict]:
+    """Source metadata persisted with a synthesized recall block (for display)."""
+    return [{
+        "turn_id": m["turn_id"],
+        "role": m["role"],
+        "tags": m.get("tags") or [],
+        "branch_root_id": m.get("branch_root_id"),
+        "score": round(m.get("score", 0), 4),
+        "preview": (m.get("text") or "")[:160],
+    } for m in matches]
+
+
+def _build_tools(db_path: str):
+    """Assemble enabled tool schemas + an executor + shared state for one turn."""
+    tcfg = _tools_settings()
+    avail = tcfg.get("available", {}) or {}
+    rc = _recall_config()
+    state = {"last_matches": [], "synthesis": None, "synthesis_kind": None}
+
+    def _search_schema(name, desc):
+        return {"type": "function", "function": {
+            "name": name, "description": desc,
+            "parameters": {"type": "object", "properties": {
+                "query": {"type": "string", "description": "what to search for"}},
+                "required": ["query"]}}}
+
+    schemas = []
+    if avail.get("recall_semantic", True):
+        schemas.append(_search_schema(
+            "recall_semantic",
+            "Search the user's past conversation turns by meaning (semantic similarity). "
+            "Use when the user refers to earlier discussion or ideas."))
+    if avail.get("recall_keyword", True):
+        schemas.append(_search_schema(
+            "recall_keyword",
+            "Search the user's past conversation turns by exact keywords/terms. Use for "
+            "names, specific words, or when semantic search might miss a literal match."))
+    if avail.get("synthesize", True):
+        schemas.append({"type": "function", "function": {
+            "name": "synthesize",
+            "description": "Synthesize retrieved items into a concise block. Call after a "
+                           "search tool to produce a memory block for the user.",
+            "parameters": {"type": "object", "properties": {
+                "kind": {"type": "string", "enum": _synthesis_kinds(),
+                         "description": "kind of synthesis / source type"},
+                "items": {"type": "array", "items": {"type": "string"},
+                          "description": "the text snippets to synthesize"}},
+                "required": ["kind", "items"]}}})
+
+    def execute(name, args):
+        if name in ("recall_semantic", "recall_keyword"):
+            query = args.get("query", "")
+            conn = sqlite3.connect(db_path)
+            try:
+                if name == "recall_semantic":
+                    vec = get_embedding(query)
+                    matches = search_similar_turns(
+                        conn, vec, limit=rc.get("search_limit", 10),
+                        tag_boosts=rc.get("tag_boosts", {})) if vec else []
+                else:
+                    matches = search_keyword_turns(
+                        conn, query, limit=rc.get("search_limit", 10),
+                        tag_boosts=rc.get("tag_boosts", {}))
+            finally:
+                conn.close()
+            state["last_matches"] = matches
+            return json.dumps(_tool_matches_payload(matches))
+        if name == "synthesize":
+            block = synthesize(args.get("kind", "memory"), args.get("items", []), args.get("query", ""))
+            state["synthesis"] = block
+            state["synthesis_kind"] = args.get("kind", "memory")
+            return block or "(no synthesis produced)"
+        return json.dumps({"error": f"unknown tool {name}"})
+
+    return schemas, execute, state
+
+
 def _resolve_db_path(passkey: Optional[str]) -> str:
     """Resolve the conversation DB path (per-user when auth is enabled)."""
     if auth_enabled:
@@ -260,34 +366,52 @@ def _stream_turn_response(
     mode: Optional[str],
     user_parent_id: Optional[int],
     paragraph_index: Optional[int],
-    recall_enabled: bool = False,
+    tools_enabled: bool = False,
     branched: bool = False,
 ):
     """Build the SSE generator that streams the reply and persists both turns.
 
-    If recall is enabled, a recall block is computed first, emitted as a `recall`
-    SSE event, and injected into the model context (recall -> window -> current).
-    The new user turn's parent is `user_parent_id`; the assistant turn descends
-    from it. The DB connection is opened INSIDE the generator (worker thread) to
-    avoid cross-thread SQLite use.
+    When tools are enabled, the model drives retrieval/synthesis via the tool loop
+    (emitting `status` / `tool_result` / `token` events); a `synthesize` result is
+    persisted as the turn's recall block. Otherwise a plain streamed reply. The DB
+    connection is opened INSIDE the generator (worker thread) to avoid cross-thread
+    SQLite use.
     """
     def event_generator():
-        # Recall first, so the block streams to the UI and feeds the model context.
-        recall_text = ""
-        recall_sources = []
-        if recall_enabled:
-            recall_text, recall_sources = _run_recall(db_path, message)
-            if recall_text:
-                yield f"data: {json.dumps({'type': 'recall', 'content': recall_text, 'sources': recall_sources})}\n\n"
-
         full_response = ""
-        try:
-            for content in stream_llm_tokens(message, context_list, mode=mode, recall=recall_text):
-                full_response += content
-                yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
-            return
+        synthesis_block = None
+        synthesis_sources = []
+
+        if tools_enabled:
+            schemas, execute, state = _build_tools(db_path)
+            tcfg = _tools_settings()
+            try:
+                for ev in generate_with_tools(
+                    message, context_list, mode,
+                    tool_schemas=schemas, execute_tool=execute,
+                    max_rounds=tcfg.get("max_rounds", 5),
+                    emit_status=tcfg.get("status_notes", True),
+                    emit_results=tcfg.get("show_step_results", False),
+                ):
+                    if ev.get("type") == "token":
+                        full_response += ev["content"]
+                    yield f"data: {json.dumps(ev)}\n\n"
+                    if ev.get("type") == "error":
+                        return
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+                return
+            synthesis_block = state.get("synthesis") or None
+            if synthesis_block:
+                synthesis_sources = _recall_sources(state.get("last_matches") or [])
+        else:
+            try:
+                for content in stream_llm_tokens(message, context_list, mode=mode):
+                    full_response += content
+                    yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+                return
 
         try:
             conn = sqlite3.connect(db_path)
@@ -303,11 +427,11 @@ def _stream_turn_response(
                     context_turns=context_turns, committed=commit,
                     parent_turn_id=user_turn["id"], paragraph_index=None,
                 )
-                # Persist this turn's recall block on the user turn (per-branch recall).
-                if recall_text:
-                    set_turn_recall(conn, user_turn["id"], recall_text, recall_sources)
-                # Embed both turns (best-effort) so they're searchable by recall.
-                if recall_enabled:
+                # Persist a synthesized recall block on the user turn (per-branch).
+                if synthesis_block:
+                    set_turn_recall(conn, user_turn["id"], synthesis_block, synthesis_sources)
+                # Embed both turns (best-effort) so they're searchable by recall tools.
+                if tools_enabled:
                     for t in (user_turn, assistant_turn):
                         try:
                             vec = get_embedding(t["content"])
@@ -387,7 +511,7 @@ async def send_message(
             mode=request.mode,
             user_parent_id=parent_id,
             paragraph_index=None,
-            recall_enabled=_recall_enabled(request.recall),
+            tools_enabled=_tools_enabled(request.recall),
         )
         return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -444,7 +568,7 @@ async def create_branch(
             mode=request.mode,
             user_parent_id=parent_turn_id,
             paragraph_index=request.paragraph_index,
-            recall_enabled=_recall_enabled(request.recall),
+            tools_enabled=_tools_enabled(request.recall),
             branched=True,
         )
         return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)

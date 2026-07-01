@@ -60,6 +60,22 @@ DEFAULT_PARAGRAPH_STYLE = (
 )
 
 
+# Appended to the system prompt only when tools are active, so the model knows it
+# must retrieve via tools rather than claim it lacks access to history.
+DEFAULT_TOOLS_GUIDANCE = (
+    "You have tools to search the user's past conversations and synthesize what you "
+    "find:\n"
+    "- recall_semantic / recall_keyword: retrieve relevant earlier turns (by meaning "
+    "or by exact keyword).\n"
+    "- synthesize: turn retrieved snippets into a concise first-person memory block.\n\n"
+    "When the user refers to earlier discussion, past decisions, or asks what was said "
+    "or decided before, FIRST call a recall tool to retrieve it (then optionally "
+    "synthesize) before answering. Do not claim you lack access to history — use the "
+    "tools. Pick the retrieval method that fits, and if a search returns nothing "
+    "relevant, say so plainly."
+)
+
+
 # Appended to the system prompt for call-mode (spoken) turns. The reply is read
 # aloud by TTS, so markdown/symbols read badly and should be avoided.
 DEFAULT_VOICE_STYLE = (
@@ -94,6 +110,7 @@ def _build_messages(
     context_turns: Optional[List[Dict]] = None,
     mode: Optional[str] = None,
     recall: Optional[str] = None,
+    include_tools_guidance: bool = False,
 ) -> List[Dict]:
     """Build the OpenAI-style messages array from system prompt, context, and input.
 
@@ -106,6 +123,13 @@ def _build_messages(
     config = _get_config()
     system_prompt = config.get("system_prompt", {})
     system_content = system_prompt.get("text", "You are Collaborator, a helpful assistant.")
+
+    # Tell the model how to use its tools (only when tools are active this turn).
+    if include_tools_guidance:
+        tools_cfg = config.get("tools", {}) or {}
+        guidance = _load_prompt_layer(
+            tools_cfg, "guidance_file", "guidance_text", DEFAULT_TOOLS_GUIDANCE)
+        system_content = f"{system_content}\n\n{guidance}"
 
     # Encourage one-idea-per-paragraph so paragraph-level branching is meaningful.
     paragraph_style = _load_prompt_layer(
@@ -556,4 +580,190 @@ def synthesize_recall(query: str, matches: List[Dict]) -> str:
     except Exception as e:
         print(f"Warning: recall synthesis failed: {e}")
         return ""
+
+
+# --- Tool-calling loop -------------------------------------------------------
+
+def _tools_config() -> Dict:
+    return _get_config().get("tools", {}) or {}
+
+
+def _load_synthesis_prompt(kind: str) -> str:
+    """Load the synthesis system prompt for a given kind (markdown file per kind)."""
+    prompts = (_tools_config().get("synthesis") or {}).get("prompts", {}) or {}
+    file_path = prompts.get(kind)
+    if file_path:
+        try:
+            with open(resolve_path(file_path), "r", encoding="utf-8") as f:
+                text = f.read().strip()
+                if text:
+                    return text
+        except IOError:
+            pass
+    if kind == "memory":
+        return DEFAULT_RECALL_SYNTHESIS_PROMPT
+    return (f"You synthesize {kind} results into a concise, well-organized block. "
+            "Use only the provided items; do not invent facts.")
+
+
+def synthesize(kind: str, items: List, query: str = "") -> str:
+    """Synthesize a list of items into a block using the prompt for `kind`.
+
+    A single tool parameterized by kind (memory/web/notes/...), each backed by its
+    own editable prompt file. Runs one non-streaming LLM call with a token budget.
+    """
+    system_prompt = _load_synthesis_prompt(kind)
+    tcfg = _tools_config().get("synthesis", {}) or {}
+    inference_config = _get_config()["inference"]
+
+    body = "\n".join(f"- {it}" for it in (items or []))
+    user_prompt = (
+        (f"Current message: {query}\n\n" if query else "")
+        + f"Items to synthesize:\n{body}\n\nSynthesize these into a concise block."
+    )
+    payload = {
+        "model": inference_config["model_id"],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": tcfg.get("temperature", 0.3),
+        "max_tokens": tcfg.get("max_tokens", 256),
+        "stream": False,
+    }
+    try:
+        response = requests.post(
+            f"{_get_endpoint_url()}/chat/completions",
+            json=payload, timeout=tcfg.get("timeout", 60),
+        )
+        response.raise_for_status()
+        return (response.json()["choices"][0]["message"]["content"] or "").strip()
+    except Exception as e:
+        print(f"Warning: synthesize({kind}) failed: {e}")
+        return ""
+
+
+def _tool_status_label(name: str, args: Dict) -> str:
+    q = (args.get("query") or "").strip()
+    if name == "recall_semantic":
+        return f"Searching memory (semantic){f' for “{q[:40]}”' if q else ''}…"
+    if name == "recall_keyword":
+        return f"Searching memory (keyword){f' for “{q[:40]}”' if q else ''}…"
+    if name == "synthesize":
+        return f"Synthesizing {args.get('kind', 'results')}…"
+    if name == "web_search":
+        return f"Searching the web{f' for “{q[:40]}”' if q else ''}…"
+    return f"Running {name}…"
+
+
+def _iter_stream_events(payload: Dict):
+    """Yield (choice, delta) pairs from a streaming chat completion (byte-safe)."""
+    import json
+    response = requests.post(
+        f"{_get_endpoint_url()}/chat/completions", json=payload, timeout=120, stream=True)
+    response.raise_for_status()
+    for raw in response.iter_lines():  # bytes; json.loads decodes UTF-8 correctly
+        if not raw or not raw.startswith(b"data:"):
+            continue
+        data_bytes = raw[5:].strip()
+        if data_bytes == b"[DONE]":
+            break
+        try:
+            obj = json.loads(data_bytes)
+        except Exception:
+            continue
+        if obj.get("choices"):
+            choice = obj["choices"][0]
+            yield choice, (choice.get("delta") or {})
+
+
+def generate_with_tools(
+    message: str,
+    context_turns: Optional[List[Dict]],
+    mode: Optional[str],
+    tool_schemas: List[Dict],
+    execute_tool,
+    max_rounds: int = 5,
+    emit_status: bool = True,
+    emit_results: bool = False,
+):
+    """Run the tool-calling loop and yield event dicts.
+
+    Yields {"type": "token"|"status"|"tool_result"|"error", ...}. The model may
+    call tools (executed via execute_tool(name, args) -> str, fed back, repeat);
+    the final answer streams as token events. Capped at max_rounds, after which a
+    tools-off round forces an answer.
+    """
+    import json
+    messages = _build_messages(message, context_turns, mode=mode,
+                               include_tools_guidance=bool(tool_schemas))
+
+    # Tool-calling is more reliable at a lower temperature than the conversational
+    # default, so run the loop at a configurable tools temperature.
+    tools_temp = _tools_config().get("temperature", 0.3)
+
+    for round_index in range(max_rounds + 1):
+        # Last iteration: drop tools so the model must produce a final answer.
+        use_tools = tool_schemas and round_index < max_rounds
+        payload = _build_payload(messages, stream=True)
+        payload["temperature"] = tools_temp
+        if use_tools:
+            payload["tools"] = tool_schemas
+            payload["tool_choice"] = "auto"
+
+        content_parts: List[str] = []
+        tool_calls: Dict[int, Dict] = {}
+        try:
+            for choice, delta in _iter_stream_events(payload):
+                content = delta.get("content")
+                if content:
+                    content_parts.append(content)
+                    yield {"type": "token", "content": content}
+                for tc in (delta.get("tool_calls") or []):
+                    slot = tool_calls.setdefault(tc.get("index", 0), {"id": None, "name": "", "args": ""})
+                    if tc.get("id"):
+                        slot["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        slot["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        slot["args"] += fn["arguments"]
+        except requests.exceptions.RequestException as e:
+            yield {"type": "error", "detail": f"LLM request failed: {e}"}
+            return
+        except Exception as e:
+            yield {"type": "error", "detail": f"Error during generation: {e}"}
+            return
+
+        if not tool_calls:
+            return  # final answer already streamed as token events
+
+        # Record the assistant's tool-call message, then execute each call.
+        ordered = [tool_calls[i] for i in sorted(tool_calls)]
+        messages.append({
+            "role": "assistant",
+            "content": "".join(content_parts) or None,
+            "tool_calls": [{
+                "id": s["id"] or str(i), "type": "function",
+                "function": {"name": s["name"], "arguments": s["args"]},
+            } for i, s in enumerate(ordered)],
+        })
+        for i, s in enumerate(ordered):
+            try:
+                args = json.loads(s["args"]) if s["args"].strip() else {}
+            except Exception:
+                args = {}
+            if emit_status:
+                yield {"type": "status", "tool": s["name"], "label": _tool_status_label(s["name"], args)}
+            try:
+                result = execute_tool(s["name"], args)
+            except Exception as e:
+                result = json.dumps({"error": str(e)})
+            if not isinstance(result, str):
+                result = json.dumps(result)
+            if emit_results:
+                yield {"type": "tool_result", "tool": s["name"], "result": result}
+            messages.append({
+                "role": "tool", "tool_call_id": s["id"] or str(i), "content": result,
+            })
 

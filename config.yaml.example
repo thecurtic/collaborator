@@ -61,3 +61,26 @@ recall:
     concept: 1.3
     reference: 1.4
     emotion: 1.1
+
+# Tool-calling. When enabled, the model drives retrieval/synthesis by calling tools
+# (recall is a set of tools) and streams status notes for what it's doing. Requires a
+# tool-capable chat model in LM Studio (qwen3-coder-next works). Off by default.
+tools:
+  enabled: false
+  status_notes: true          # stream a short "what it's doing" note per tool step
+  show_step_results: false    # also stream each tool's raw results
+  max_rounds: 5               # max tool rounds before forcing an answer
+  temperature: 0.3            # tool-loop temperature (lower = more reliable tool calls)
+  guidance_file: "tools-guidance.md"  # editable instruction telling the model how/when to use tools
+  auto_recall_fallback: false # reserved for later
+  available:                  # enable/disable individual tools
+    recall_semantic: true     # semantic (embedding) search over turns
+    recall_keyword: true      # lexical keyword search over turns
+    synthesize: true          # synthesize retrieved items into a block
+    web_search: false         # (later)
+  synthesis:
+    max_tokens: 256
+    prompts:                  # per-kind synthesis prompt files (editable/auditable)
+      memory: "recall-synthesis-prompt.md"
+      # web: "synthesis-web.md"
+      # notes: "synthesis-notes.md"

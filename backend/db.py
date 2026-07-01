@@ -564,6 +564,48 @@ def search_similar_turns(db, query_vector: List[float], limit: int = 10,
     return scored[:limit]
 
 
+def search_keyword_turns(db, query: str, limit: int = 10,
+                         tag_boosts: Optional[Dict[str, float]] = None) -> List[dict]:
+    """Lexical search over committed turns by term overlap (no embeddings needed).
+
+    Scores each turn by how many query terms it contains (case-insensitive), times
+    any per-tag boost. Returns the top matches with the same shape as the semantic
+    search (incl. branch_root_id).
+    """
+    if not query or not query.strip():
+        return []
+    import re
+    terms = [t.lower() for t in re.split(r"\W+", query) if len(t) >= 2]
+    if not terms:
+        return []
+    tag_boosts = {k.lower(): v for k, v in (tag_boosts or {}).items()}
+
+    cursor = db.cursor()
+    rows = cursor.execute(
+        "SELECT id, role, content, tags, created_at, parent_turn_id "
+        "FROM turns WHERE committed = 1"
+    ).fetchall()
+
+    scored = []
+    for (tid, role, content, tags_raw, created_at, parent_id) in rows:
+        low = (content or "").lower()
+        hits = sum(1 for t in set(terms) if t in low)
+        if hits == 0:
+            continue
+        tags = _parse_tags(tags_raw)
+        boost = 1.0
+        for t in tags:
+            boost *= tag_boosts.get(t.lower(), 1.0)
+        scored.append({
+            "turn_id": tid, "role": role, "text": content, "tags": tags,
+            "created_at": created_at, "parent_turn_id": parent_id,
+            "branch_root_id": get_root_id(db, tid),
+            "matches": hits, "score": hits * boost,
+        })
+    scored.sort(key=lambda m: m["score"], reverse=True)
+    return scored[:limit]
+
+
 def update_turn_tags(db, turn_id: int, add: Optional[List[str]] = None,
                      remove: Optional[List[str]] = None) -> Optional[List[str]]:
     """Add/remove free-form tags on a turn (case-insensitive). Returns new tags."""

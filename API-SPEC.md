@@ -94,17 +94,24 @@ X-Passkey: <your-passkey>
   `"text"` = normal chat. On `"voice"` turns the backend augments the system prompt
   with a spoken-style instruction (no markdown/symbols, short sentences) so the reply
   reads well via TTS. Configurable via `system_prompt.voice_text`.
-- `recall` (optional): Run recall (memory) for this turn. `true`/`false` overrides the
-  server default (`recall.enabled`). When recall produces a block, it is streamed as a
-  `recall` SSE event and injected into context. (Also accepted on `POST /api/branches/{id}`.)
+- `recall` (optional): Offer **tools** to the model for this turn (recall is a set of
+  tools). `true`/`false` overrides the server default (`tools.enabled`). When on, the
+  model may call retrieval/synthesis tools mid-turn (see the tool events below). (Also
+  accepted on `POST /api/branches/{id}`.)
 
-**Recall SSE event** (emitted before tokens, when recall is on and finds matches):
+**Tool SSE events** (when tools are on and the model uses them; interleaved before the
+final answer tokens):
 ```
-data: {"type":"recall","content":"<first-person memory block>","sources":[
-  {"turn_id":15,"role":"assistant","tags":["decision"],"branch_root_id":1,
-   "similarity":0.87,"score":1.305,"preview":"we chose SQLite ..."}
-]}
+data: {"type":"status","tool":"recall_semantic","label":"Searching memory (semantic)…"}
+data: {"type":"tool_result","tool":"recall_semantic","result":"[{...matches...}]"}   // only if tools.show_step_results
+data: {"type":"token","content":"We chose "}                                          // final answer
+data: {"type":"done", ...}
 ```
+- `status` — a short "what it's doing" note per tool call (`tools.status_notes`).
+- `tool_result` — the raw tool output, only when `tools.show_step_results` is on.
+- If the model calls the `synthesize` tool, its output is persisted as the turn's
+  recall block (see `node.recall` in `GET /api/tree`).
+- The old single `recall` event is **removed** — recall is now tool-driven.
 
 > Branch model: every continuation should send `parent_turn_id` = the active branch's
 > leaf turn. To fork from a mid-conversation turn or a specific paragraph, use

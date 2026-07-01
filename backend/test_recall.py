@@ -53,69 +53,89 @@ def test_tags_endpoint():
     print("✓ tags endpoint add/remove + 404")
 
 
-def test_recall_flow_emits_event_and_feeds_context():
-    path = os.environ["DB_PATH"]
-    # Seed an embedded memory.
-    conn = sqlite3.connect(path)
-    mem = db.create_turn(conn, None, "assistant", "we chose SQLite for persistence")
+def test_keyword_search():
+    """Lexical search ranks by term overlap and returns branch metadata."""
+    main2, db2 = None, db
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    a = db.create_turn(conn, None, "user", "the database migration plan")
+    b = db.create_turn(conn, None, "assistant", "unrelated content about weather")
+    res = db.search_keyword_turns(conn, "database migration", limit=10)
+    conn.close()
+    assert res and res[0]["turn_id"] == a["id"]
+    assert all(r["turn_id"] != b["id"] for r in res)   # no term overlap -> excluded
+    assert res[0]["branch_root_id"] == a["id"]
+    print("✓ keyword search ranks by term overlap")
+
+
+def _scripted_stream(rounds):
+    """Return a fake inference._iter_stream_events driven by a list of per-round
+    delta lists. Each delta is a dict yielded as (choice, delta)."""
+    calls = {"i": 0}
+    def fake(payload):
+        idx = calls["i"]
+        calls["i"] += 1
+        deltas = rounds[idx] if idx < len(rounds) else []
+        for d in deltas:
+            yield ({}, d)
+    return fake
+
+
+def test_tool_loop_end_to_end():
+    """Model calls recall_semantic -> synthesize -> answers; block persists per-turn."""
+    import inference, json as _json
+    # Seed an embedded memory to retrieve.
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    mem = db.create_turn(conn, None, "assistant", "we chose SQLite for local persistence")
     db.set_turn_embedding(conn, mem["id"], [1.0, 0.0])
     conn.close()
 
-    # Mock LM Studio: embeddings, synthesis, and token stream.
     main.get_embedding = lambda text: [1.0, 0.0]
-    main.synthesize_recall = lambda query, matches: "MEMORY: " + matches[0]["text"]
-    captured = {}
-    def fake_stream(message, context_turns=None, mode=None, recall=None):
-        captured["recall"] = recall
-        yield "ok"
-    main.stream_llm_tokens = fake_stream
+    main.synthesize = lambda kind, items, query="": "MEMORY: chose SQLite"
 
-    c = TestClient(main.app)
-    r = c.post("/api/messages", json={"message": "what db did we pick?", "recall": True})
-    assert '"type": "recall"' in r.text                       # recall streamed to UI
-    assert captured["recall"].startswith("MEMORY:")           # recall fed into context
+    # Round 1: call recall_semantic. Round 2: call synthesize. Round 3: final answer.
+    rounds = [
+        [{"tool_calls": [{"index": 0, "id": "1", "type": "function",
+                          "function": {"name": "recall_semantic", "arguments": ""}}]},
+         {"tool_calls": [{"index": 0, "function": {"arguments": "{\"query\":\"database\"}"}}]}],
+        [{"tool_calls": [{"index": 0, "id": "2", "type": "function",
+                          "function": {"name": "synthesize", "arguments": ""}}]},
+         {"tool_calls": [{"index": 0, "function": {"arguments": "{\"kind\":\"memory\",\"items\":[\"x\"]}"}}]}],
+        [{"content": "We chose "}, {"content": "SQLite."}],
+    ]
+    orig = inference._iter_stream_events
+    inference._iter_stream_events = _scripted_stream(rounds)
+    try:
+        c = TestClient(main.app)
+        # Tools on via per-request flag (config default is off).
+        r = c.post("/api/messages", json={"message": "what db did we pick?", "recall": True})
+        text = r.text
+        assert '"type": "status"' in text                       # transparency note streamed
+        assert '"type": "token"' in text and "SQLite." in text   # final answer streamed
+        assert '"type": "recall"' not in text                    # old event is gone
 
-    cur = c.get("/api/recall/current").json()["recall"]
-    assert cur and cur["content"].startswith("MEMORY:")       # stored as current block
-    assert any(s["turn_id"] == mem["id"] for s in cur["sources"])  # found our memory
+        done = [_json.loads(l[6:]) for l in text.splitlines()
+                if l.startswith("data: ") and '"done"' in l][0]
 
-    # Disabled by default (no recall flag, config off) -> no recall event.
-    captured.clear()
-    r2 = c.post("/api/messages", json={"message": "hi"})
-    assert '"type": "recall"' not in r2.text
-    print("✓ recall flow: event + context + current block; off by default")
+        # Synthesized block persisted on the triggering user turn.
+        found = {}
+        def walk(n):
+            found[n["id"]] = n
+            for ch in n["children"]:
+                walk(ch)
+        for root in c.get("/api/tree").json()["roots"]:
+            walk(root)
+        assert found[done["user_turn_id"]]["recall"]["content"] == "MEMORY: chose SQLite"
+        assert any(s["turn_id"] == mem["id"] for s in found[done["user_turn_id"]]["recall"]["sources"])
 
-
-def test_recall_persisted_per_turn_in_tree():
-    """The recall block is stored on the triggering user turn and shows in the tree."""
-    import json as _json
-    main.get_embedding = lambda text: [1.0, 0.0]
-    main.synthesize_recall = lambda q, m: "MEMORY: per-branch block"
-    def fake_stream(message, context_turns=None, mode=None, recall=None):
-        yield "ok"
-    main.stream_llm_tokens = fake_stream
-
-    c = TestClient(main.app)
-    r = c.post("/api/messages", json={"message": "what did we decide?", "recall": True})
-    done = [_json.loads(l[6:]) for l in r.text.splitlines()
-            if l.startswith("data: ") and '"done"' in l][0]
-    user_turn_id = done["user_turn_id"]
-
-    found = {}
-    def walk(n):
-        found[n["id"]] = n
-        for ch in n["children"]:
-            walk(ch)
-    for root in c.get("/api/tree").json()["roots"]:
-        walk(root)
-
-    node = found[user_turn_id]
-    assert node["recall"]["content"] == "MEMORY: per-branch block"
-    assert isinstance(node["recall"]["sources"], list)
-    # A turn with no recall has no recall key.
-    other = next(n for n in found.values() if n["role"] == "assistant")
-    assert "recall" not in other
-    print("✓ recall persisted on triggering turn, visible per-node in tree")
+        # Tools off by default: plain streaming, no status/tool events.
+        inference._iter_stream_events = _scripted_stream([[{"content": "hi there"}]])
+        # (plain path uses stream_llm_tokens, which we stub to avoid network)
+        main.stream_llm_tokens = lambda *a, **k: iter(["plain"])
+        r2 = c.post("/api/messages", json={"message": "hello"})
+        assert '"type": "status"' not in r2.text and '"type": "token"' in r2.text
+    finally:
+        inference._iter_stream_events = orig
+    print("✓ tool loop: recall_semantic -> synthesize -> answer; block persisted; off by default")
 
 
 def test_embed_texts_backend_dispatch():
@@ -167,8 +187,8 @@ def test_synthesis_prompt_loads_from_file():
 if __name__ == "__main__":
     test_search_ranking_and_tag_boosts()
     test_tags_endpoint()
-    test_recall_flow_emits_event_and_feeds_context()
-    test_recall_persisted_per_turn_in_tree()
+    test_keyword_search()
+    test_tool_loop_end_to_end()
     test_embed_texts_backend_dispatch()
     test_synthesis_prompt_loads_from_file()
     print("\n✓ All recall tests passed!")

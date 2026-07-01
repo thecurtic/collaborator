@@ -92,6 +92,29 @@ def load_config() -> dict:
                 "reference": 1.4,
                 "emotion": 1.1,
             },
+        },
+        "tools": {
+            "enabled": False,          # master switch; false = plain chat, no tools
+            "status_notes": True,      # emit a short "what it's doing" per tool step
+            "show_step_results": False,  # also emit each tool's raw results
+            "max_rounds": 5,
+            "temperature": 0.3,        # lower temp -> more reliable tool calls
+            "guidance_file": "tools-guidance.md",  # editable tool-usage instruction
+            "auto_recall_fallback": False,  # reserved: auto-run recall if model calls nothing
+            "available": {
+                "recall_semantic": True,
+                "recall_keyword": True,
+                "synthesize": True,
+                "web_search": False,   # later
+            },
+            "synthesis": {
+                "max_tokens": 256,
+                "prompts": {
+                    "memory": "recall-synthesis-prompt.md",
+                    # "web": "synthesis-web.md",     # later
+                    # "notes": "synthesis-notes.md", # later
+                },
+            },
         }
     }
     
