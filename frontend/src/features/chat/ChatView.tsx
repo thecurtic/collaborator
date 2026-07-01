@@ -203,19 +203,21 @@ export function ChatView({
     }
   };
 
-  // In-context turns = the last `contextWindow` turns of the active path, but
-  // never reaching past the most recent context boundary (a without-context
-  // branch start resets history).
-  let boundaryIdx = 0;
+  // A without-context branch is a fresh chat: show only from its start (the most
+  // recent branched context-boundary on the path) down to the tip, hiding the
+  // prior thread that the model can't see anyway.
+  let freshStart = 0;
   for (let i = path.length - 1; i >= 0; i--) {
-    if (path[i].node.contextBoundary) {
-      boundaryIdx = i;
+    if (path[i].node.branched && path[i].node.contextBoundary) {
+      freshStart = i;
       break;
     }
   }
+  const displayPath = freshStart > 0 ? path.slice(freshStart) : path;
+  // In-context turns = the last `contextWindow` turns of the (fresh) shown path.
   const inCtxStart =
     contextWindow != null
-      ? Math.max(boundaryIdx, path.length - contextWindow)
+      ? Math.max(0, displayPath.length - contextWindow)
       : 0;
 
   return (
@@ -300,8 +302,9 @@ export function ChatView({
             </div>
           ) : (
             <>
-              {/* Root-level branches (multiple conversation roots). */}
-              {path[0] && path[0].siblings.length > 1 && (
+              {/* Root-level branches (multiple conversation roots). Hidden inside
+                  a fresh (without-context) chat. */}
+              {freshStart === 0 && path[0] && path[0].siblings.length > 1 && (
                 <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
                   <button
                     type="button"
@@ -326,7 +329,7 @@ export function ChatView({
                   </button>
                 </div>
               )}
-              {path.map((entry, i) => {
+              {displayPath.map((entry, i) => {
                 // The switcher (incl. the empty "continue here" slot) is computed
                 // per node in useConversation; highlight its source paragraph.
                 const fork = entry.fork

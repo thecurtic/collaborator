@@ -130,10 +130,12 @@ async function consumeStream(
         } else if (evt.type === 'recall') {
           onRecall?.(toRecallBlock(evt));
         } else if (evt.type === 'status') {
-          // Tool-calling: a live "what it's doing" line (best-effort shape).
-          onStatus?.(firstString(evt, ['content', 'message', 'status', 'text']));
+          // Tool-calling: a live "what it's doing" line, e.g.
+          // {"type":"status","tool":"recall_semantic","label":"Searching memory…"}
+          onStatus?.(firstString(evt, ['label', 'content', 'message', 'text']));
         } else if (evt.type === 'tool_result') {
-          // Reserved — full rendering once the tool-calling one-pager lands.
+          // Reserved — optional "show steps" view (tools.show_step_results); off
+          // by default. Not rendered yet.
         } else if (evt.type === 'done') {
           done = evt;
         } else if (evt.type === 'error') {
