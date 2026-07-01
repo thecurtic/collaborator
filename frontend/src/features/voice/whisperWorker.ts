@@ -40,9 +40,39 @@ function concat(): Float32Array {
   return out;
 }
 
-async function transcribe(): Promise<string> {
+// The last `maxSamples` of audio (for a fast live partial).
+function concatTail(maxSamples: number): Float32Array {
+  if (total <= maxSamples) return concat();
+  const out = new Float32Array(maxSamples);
+  let need = maxSamples;
+  let o = maxSamples;
+  for (let i = chunks.length - 1; i >= 0 && need > 0; i--) {
+    const c = chunks[i];
+    const take = Math.min(need, c.length);
+    o -= take;
+    out.set(c.subarray(c.length - take), o);
+    need -= take;
+  }
+  return out;
+}
+
+const TAIL_S = 30; // Whisper's window; partials only look at the last 30s.
+
+// Whisper only transcribes the first 30s unless chunked. For the FINAL we enable
+// long-form chunking so an utterance of any length is fully transcribed; partials
+// stay fast by only transcribing the recent tail.
+async function transcribe(full: boolean): Promise<string> {
   if (!asr || total === 0) return '';
-  const res = await asr(concat(), { language: 'en', task: 'transcribe' });
+  const audio = full ? concat() : concatTail(TAIL_S * 16000);
+  const opts = full
+    ? {
+        language: 'en',
+        task: 'transcribe',
+        chunk_length_s: 30,
+        stride_length_s: 5,
+      }
+    : { language: 'en', task: 'transcribe' };
+  const res = await asr(audio, opts);
   const text = Array.isArray(res) ? res[0]?.text : res.text;
   return (text ?? '').trim();
 }
@@ -77,7 +107,7 @@ async function maybePartial() {
   lastPartialAt = now;
   busy = true;
   try {
-    postMessage({ type: 'partial', text: await transcribe() });
+    postMessage({ type: 'partial', text: await transcribe(false) });
   } catch {
     /* ignore — try again next interval */
   } finally {
@@ -100,7 +130,7 @@ self.onmessage = async (e: MessageEvent) => {
     while (busy) await new Promise((r) => setTimeout(r, 40));
     let text = '';
     try {
-      text = await transcribe();
+      text = await transcribe(true); // full, long-form chunked
     } catch {
       /* ignore */
     }
