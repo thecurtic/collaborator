@@ -18,6 +18,7 @@ const ROW = 30; // px per turn
 const PAD = 32;
 const NAME_H = 34; // space above each tree for its name label
 const TREE_GAP = 90; // horizontal gap between separate trees
+const LABEL_HALF = 90; // half-width of a tree's name label (overhang per side)
 
 const COLORS = [
   '#3b82f6',
@@ -259,8 +260,17 @@ export function TreeMap({
   }, [open]);
 
   const layout = useMemo(() => {
-    const globalX = (t: TreeLayout, col: number) =>
-      PAD + t.xOffset + (col - t.minCol) * COL;
+    // A name label extends LABEL_HALF px on each side of its root column, so the
+    // canvas must include that overhang or the edge trees' labels get clipped.
+    const rawX = (t: TreeLayout, col: number) => t.xOffset + (col - t.minCol) * COL;
+    let minX = 0;
+    let maxX = 0;
+    for (const t of trees) {
+      minX = Math.min(minX, rawX(t, t.minCol), rawX(t, 0) - LABEL_HALF);
+      maxX = Math.max(maxX, rawX(t, t.maxCol), rawX(t, 0) + LABEL_HALF);
+    }
+    const shiftX = PAD - minX; // keep everything (incl. left overhang) >= PAD
+    const globalX = (t: TreeLayout, col: number) => rawX(t, col) + shiftX;
     const rowY = (row: number) => PAD + NAME_H + row * ROW;
     const pos = new Map<number, { x: number; y: number }>();
     for (const t of trees) {
@@ -270,9 +280,7 @@ export function TreeMap({
         });
       }
     }
-    const width = trees.length
-      ? Math.max(...trees.map((t) => globalX(t, t.maxCol))) + PAD
-      : 200;
+    const width = trees.length ? maxX - minX + PAD * 2 : 200;
     const height = trees.length
       ? Math.max(...trees.map((t) => rowY(t.rows))) + PAD
       : 200;
@@ -416,9 +424,9 @@ export function TreeMap({
               {trees.map((t) => (
                 <foreignObject
                   key={`name-${t.rootNodeId}`}
-                  x={globalX(t, 0) - 90}
+                  x={globalX(t, 0) - LABEL_HALF}
                   y={PAD - 6}
-                  width={180}
+                  width={LABEL_HALF * 2}
                   height={NAME_H}
                 >
                   <div className="flex h-full items-center justify-center">
