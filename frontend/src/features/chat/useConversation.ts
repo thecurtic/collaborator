@@ -124,6 +124,8 @@ export function useConversation(reloadSignal: number) {
   // The LIVE recall block during a send (shown in the streaming overlay). Once the
   // turn commits, the persisted block comes back from the tree (node.recall).
   const [recall, setRecall] = useState<RecallBlock | null>(null);
+  // Live tool-calling status line ("what it's doing"), cleared each turn.
+  const [status, setStatus] = useState('');
   // Index kept in a ref so it's fresh synchronously after a load (selectPathTo
   // runs right after) while still triggering re-render via the `version` bump.
   const indexRef = useRef<NodeIndex>(
@@ -175,6 +177,7 @@ export function useConversation(reloadSignal: number) {
       stream: (
         onToken: (c: string) => void,
         onRecall: (block: RecallBlock) => void,
+        onStatus: (t: string) => void,
       ) => Promise<{
         id: number | null;
         contextWindow: number | null;
@@ -183,11 +186,13 @@ export function useConversation(reloadSignal: number) {
       setSending(true);
       setError(null);
       setRecall(null);
+      setStatus('');
       setStreaming({ user: userText, reply: '' });
       try {
         const res = await stream(
           (c) => setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
           (block) => setRecall(block),
+          (t) => setStatus(t),
         );
         await load();
         if (res.id != null) selectPathTo(res.id);
@@ -197,6 +202,7 @@ export function useConversation(reloadSignal: number) {
       } finally {
         setSending(false);
         setStreaming(null);
+        setStatus('');
         // Persisted recall now comes from the tree (node.recall) on reload.
         setRecall(null);
       }
@@ -208,7 +214,7 @@ export function useConversation(reloadSignal: number) {
     (message: string) => {
       const trimmed = message.trim();
       if (!trimmed) return;
-      void runStream(trimmed, (onToken, onRecall) =>
+      void runStream(trimmed, (onToken, onRecall, onStatus) =>
         api.sendMessageStream(
           // Active leaf to continue from (omit for a brand-new conversation).
           {
@@ -219,6 +225,7 @@ export function useConversation(reloadSignal: number) {
           onToken,
           undefined,
           onRecall,
+          onStatus,
         ),
       );
     },
@@ -234,7 +241,7 @@ export function useConversation(reloadSignal: number) {
     ) => {
       const trimmed = message.trim();
       if (!trimmed) return;
-      void runStream(trimmed, (onToken, onRecall) =>
+      void runStream(trimmed, (onToken, onRecall, onStatus) =>
         api.branchMessage(
           {
             parentTurnId,
@@ -247,6 +254,7 @@ export function useConversation(reloadSignal: number) {
           onToken,
           undefined,
           onRecall,
+          onStatus,
         ),
       );
     },
@@ -329,6 +337,7 @@ export function useConversation(reloadSignal: number) {
     contextWindow,
     streaming,
     recall,
+    status,
     send,
     branch,
     switchSibling,

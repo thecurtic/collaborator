@@ -77,6 +77,7 @@ export function ChatView({
     contextWindow,
     streaming,
     recall,
+    status,
     send,
     branch,
     switchSibling,
@@ -376,6 +377,10 @@ export function ChatView({
                 <div className="max-w-[85%] rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:max-w-[80%] sm:text-sm">
                   {streaming.reply ? (
                     <Markdown>{streaming.reply}</Markdown>
+                  ) : status ? (
+                    <span className="text-sm italic text-muted-foreground">
+                      {status}
+                    </span>
                   ) : (
                     <span className="flex gap-1 py-1" aria-label="Responding">
                       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.3s]" />

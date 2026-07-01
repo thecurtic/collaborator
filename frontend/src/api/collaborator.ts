@@ -87,10 +87,18 @@ function toRecallBlock(evt: Record<string, unknown>): RecallBlock {
   };
 }
 
+function firstString(evt: Record<string, unknown>, keys: string[]): string {
+  for (const k of keys) {
+    if (typeof evt[k] === 'string') return evt[k] as string;
+  }
+  return '';
+}
+
 async function consumeStream(
   res: Response,
   onToken: (chunk: string) => void,
   onRecall?: (block: RecallBlock) => void,
+  onStatus?: (text: string) => void,
 ): Promise<{ text: string; done: Record<string, unknown> }> {
   const contentType = res.headers.get('content-type') ?? '';
   if (!contentType.includes('text/event-stream')) {
@@ -121,6 +129,11 @@ async function consumeStream(
           onToken(evt.content);
         } else if (evt.type === 'recall') {
           onRecall?.(toRecallBlock(evt));
+        } else if (evt.type === 'status') {
+          // Tool-calling: a live "what it's doing" line (best-effort shape).
+          onStatus?.(firstString(evt, ['content', 'message', 'status', 'text']));
+        } else if (evt.type === 'tool_result') {
+          // Reserved — full rendering once the tool-calling one-pager lands.
         } else if (evt.type === 'done') {
           done = evt;
         } else if (evt.type === 'error') {
@@ -169,6 +182,7 @@ export interface CollaboratorApi {
     onToken: (chunk: string) => void,
     signal?: AbortSignal,
     onRecall?: (block: RecallBlock) => void,
+    onStatus?: (text: string) => void,
   ): Promise<SendStreamResult>;
   /** Branch from a turn (or paragraph), streaming the reply like sendMessageStream. */
   branchMessage(
@@ -176,6 +190,7 @@ export interface CollaboratorApi {
     onToken: (chunk: string) => void,
     signal?: AbortSignal,
     onRecall?: (block: RecallBlock) => void,
+    onStatus?: (text: string) => void,
   ): Promise<BranchStreamResult>;
   /** Full conversation tree (for branch navigation / metro map). */
   getTree(): Promise<ConversationTree>;
@@ -235,6 +250,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
     onToken: (chunk: string) => void,
     signal?: AbortSignal,
     onRecall?: (block: RecallBlock) => void,
+    onStatus?: (text: string) => void,
   ): Promise<SendStreamResult> {
     const res = await requestStream('/api/messages', {
       method: 'POST',
@@ -250,7 +266,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
       }),
       signal,
     });
-    const { text, done } = await consumeStream(res, onToken, onRecall);
+    const { text, done } = await consumeStream(res, onToken, onRecall, onStatus);
     return {
       id: numOrNull(done.id),
       contextWindow: numOrNull(done.context_turns_used),
@@ -263,6 +279,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
     onToken: (chunk: string) => void,
     signal?: AbortSignal,
     onRecall?: (block: RecallBlock) => void,
+    onStatus?: (text: string) => void,
   ): Promise<BranchStreamResult> {
     const res = await requestStream(`/api/branches/${input.parentTurnId}`, {
       method: 'POST',
@@ -276,7 +293,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
       }),
       signal,
     });
-    const { text, done } = await consumeStream(res, onToken, onRecall);
+    const { text, done } = await consumeStream(res, onToken, onRecall, onStatus);
     return {
       id: numOrNull(done.id),
       userTurnId: numOrNull(done.user_turn_id),
