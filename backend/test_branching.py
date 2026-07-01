@@ -265,6 +265,33 @@ def test_turn_name_endpoint_and_tree():
     print("✓ turn name: set/trim/clear + tree node.name + 404")
 
 
+def test_no_context_branch_shares_internal_context():
+    """A without-context branch shares its OWN prior turns but not turns above the reset."""
+    main, db = _fresh_env()
+    import sqlite3
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    r = db.create_turn(conn, None, "user", "above")               # pre-boundary
+    ra = db.create_turn(conn, None, "assistant", "above-reply", parent_turn_id=r["id"])
+    # without-context branch: user turn with context_turns=0, assistant reply also 0
+    u1 = db.create_turn(conn, None, "user", "fresh start",
+                        parent_turn_id=ra["id"], context_turns=0, branched=True)
+    a1 = db.create_turn(conn, None, "assistant", "fresh reply",
+                        parent_turn_id=u1["id"], context_turns=0)
+    conn.close()
+
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    # Continuing the branch from a1 sees the branch's internal turns, not "above".
+    chain = [t["content"] for t in db.get_ancestor_chain(conn, a1["id"], limit=5)]
+    assert chain == ["fresh start", "fresh reply"], chain
+    # The reset (u1) is included; the walk stops before its parent.
+    assert "above" not in chain and "above-reply" not in chain
+    # A normal (with-context) chain from the pre-boundary reply still reaches root.
+    normal = [t["content"] for t in db.get_ancestor_chain(conn, ra["id"], limit=5)]
+    assert normal == ["above", "above-reply"]
+    conn.close()
+    print("✓ no-context branch shares internal context, stops at the reset boundary")
+
+
 def test_tree_exposes_context_window_and_boundary():
     main, db = _fresh_env()
     import sqlite3
@@ -292,5 +319,6 @@ if __name__ == "__main__":
     test_branched_flag_distinguishes_fork_from_continuation()
     test_messages_continue_from_active_leaf()
     test_turn_name_endpoint_and_tree()
+    test_no_context_branch_shares_internal_context()
     test_tree_exposes_context_window_and_boundary()
     print("\n✓ All branching tests passed!")
