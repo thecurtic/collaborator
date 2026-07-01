@@ -17,7 +17,7 @@ from db import (
     init_db, create_turn, get_recent_turns, get_turn_by_id, delete_turn,
     get_ancestor_chain, get_turn_tree,
     search_similar_turns, search_keyword_turns, set_turn_embedding, update_turn_tags,
-    set_current_recall, get_current_recall, set_turn_recall,
+    update_turn_name, set_current_recall, get_current_recall, set_turn_recall,
     get_turns_missing_embeddings,
 )
 from inference import (
@@ -107,6 +107,10 @@ class BranchRequest(BaseModel):
 class TagsRequest(BaseModel):
     add_tags: List[str] = []
     remove_tags: List[str] = []
+
+
+class NameRequest(BaseModel):
+    name: Optional[str] = None
 
 
 def get_passkey_from_header(passkey: Optional[str] = Header(None, alias="X-Passkey")) -> str:
@@ -625,6 +629,30 @@ async def patch_turn_tags(
         if tags is None:
             raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
         return {"turn_id": turn_id, "tags": tags}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/turns/{turn_id}/name")
+async def patch_turn_name(
+    turn_id: int,
+    request: NameRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Set or clear a turn's display name (used to name conversations/branches)."""
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        conn = sqlite3.connect(db_path)
+        try:
+            found, value = update_turn_name(conn, turn_id, request.name)
+        finally:
+            conn.close()
+        if not found:
+            raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
+        return {"turn_id": turn_id, "name": value}
     except HTTPException:
         raise
     except Exception as e:

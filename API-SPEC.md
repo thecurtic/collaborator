@@ -326,6 +326,10 @@ parent it branched from. `preview` is a single-line label.
   explicit fork), `false` for `POST /api/messages` continuations. Use it to render the
   fork switcher even when a with-context branch shares the parent of a continuation
   (otherwise the two are structurally identical).
+- `name` (string | null): a user-set display name for the turn (used to name a
+  conversation/branch by naming its root turn). `null` = unnamed. Set via
+  `PATCH /api/turns/{turn_id}/name` with `{ "name": "..." }` (empty/whitespace clears
+  it; returns `{ "turn_id", "name" }`; `404` if the turn doesn't exist).
 - `recall` (object, present only on turns that triggered recall): the recall block
   used for that turn — `{ "content": "...", "sources": [...] }`. This is **per-turn /
   per-branch**, so each branch shows its own recall on load, independent of the latest

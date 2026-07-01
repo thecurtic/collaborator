@@ -11,7 +11,7 @@ from contextlib import contextmanager
 TURN_COLUMNS = [
     "id", "user_id", "role", "content", "context_turns", "committed",
     "created_at", "model_name", "token_count", "tags",
-    "parent_turn_id", "paragraph_index", "branched",
+    "parent_turn_id", "paragraph_index", "branched", "name",
 ]
 _SELECT_COLS = ", ".join(TURN_COLUMNS)
 
@@ -100,6 +100,7 @@ def ensure_conversation_schema(conn) -> None:
             parent_turn_id INTEGER,
             paragraph_index INTEGER,
             branched INTEGER NOT NULL DEFAULT 0,
+            name TEXT,
             recall_content TEXT,
             recall_sources TEXT,
             embedding BLOB,
@@ -148,6 +149,8 @@ def _migrate_turns_branching(conn) -> None:
         cursor.execute("ALTER TABLE turns ADD COLUMN paragraph_index INTEGER")
     if "branched" not in existing:
         cursor.execute("ALTER TABLE turns ADD COLUMN branched INTEGER NOT NULL DEFAULT 0")
+    if "name" not in existing:
+        cursor.execute("ALTER TABLE turns ADD COLUMN name TEXT")
     if "recall_content" not in existing:
         cursor.execute("ALTER TABLE turns ADD COLUMN recall_content TEXT")
     if "recall_sources" not in existing:
@@ -627,6 +630,15 @@ def update_turn_tags(db, turn_id: int, add: Optional[List[str]] = None,
     cursor.execute("UPDATE turns SET tags = ? WHERE id = ?", (_json.dumps(new_tags), turn_id))
     db.commit()
     return new_tags
+
+
+def update_turn_name(db, turn_id: int, name: Optional[str]):
+    """Set/clear a turn's display name. Returns (found: bool, stored_name)."""
+    value = (name or "").strip() or None
+    cursor = db.cursor()
+    cursor.execute("UPDATE turns SET name = ? WHERE id = ?", (value, turn_id))
+    db.commit()
+    return cursor.rowcount > 0, value
 
 
 def set_turn_recall(db, turn_id: int, content: str, sources: List[dict]) -> None:

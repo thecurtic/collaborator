@@ -241,6 +241,30 @@ def test_messages_continue_from_active_leaf():
     print("✓ /api/messages continues from the active leaf (parent_turn_id)")
 
 
+def test_turn_name_endpoint_and_tree():
+    """PATCH /api/turns/{id}/name sets node.name; clearing and 404 work."""
+    main, db = _fresh_env()
+    import sqlite3
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    t = db.create_turn(conn, None, "user", "root of a conversation")
+    conn.close()
+    from starlette.testclient import TestClient
+    c = TestClient(main.app)
+
+    r = c.patch(f"/api/turns/{t['id']}/name", json={"name": "  Database planning  "})
+    assert r.status_code == 200 and r.json()["name"] == "Database planning"   # trimmed
+
+    node = c.get("/api/tree").json()["roots"][0]
+    assert node["name"] == "Database planning"
+
+    # Clear it.
+    assert c.patch(f"/api/turns/{t['id']}/name", json={"name": ""}).json()["name"] is None
+    assert c.get("/api/tree").json()["roots"][0]["name"] is None
+
+    assert c.patch("/api/turns/999999/name", json={"name": "x"}).status_code == 404
+    print("✓ turn name: set/trim/clear + tree node.name + 404")
+
+
 def test_tree_exposes_context_window_and_boundary():
     main, db = _fresh_env()
     import sqlite3
@@ -267,5 +291,6 @@ if __name__ == "__main__":
     test_delete_reparent_vs_subtree()
     test_branched_flag_distinguishes_fork_from_continuation()
     test_messages_continue_from_active_leaf()
+    test_turn_name_endpoint_and_tree()
     test_tree_exposes_context_window_and_boundary()
     print("\n✓ All branching tests passed!")
