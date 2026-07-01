@@ -75,6 +75,8 @@ export interface ApiTreeNode {
   context_boundary?: boolean;
   /** True when this turn was created via POST /api/branches (an explicit fork). */
   branched?: boolean;
+  /** User-set name (conversation/branch naming); null/absent = unnamed. */
+  name?: string | null;
   children: ApiTreeNode[];
 }
 

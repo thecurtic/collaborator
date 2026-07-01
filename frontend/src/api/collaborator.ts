@@ -201,6 +201,8 @@ export interface CollaboratorApi {
    * `subtree: true` to delete the whole branch (the turn + all descendants).
    */
   deleteTurn(turnId: number, subtree?: boolean): Promise<void>;
+  /** Set (or clear, with an empty string) a turn's name. */
+  renameTurn(turnId: number, name: string): Promise<void>;
 
   /** Transcribe recorded audio to text (Whisper, backend). */
   transcribe(audio: Blob, opts?: TranscribeOptions): Promise<string>;
@@ -313,6 +315,13 @@ class HttpCollaboratorApi implements CollaboratorApi {
   async deleteTurn(turnId: number, subtree = false): Promise<void> {
     const qs = subtree ? '?subtree=true' : '';
     await request<unknown>(`/api/messages/${turnId}${qs}`, { method: 'DELETE' });
+  }
+
+  async renameTurn(turnId: number, name: string): Promise<void> {
+    await request<unknown>(`/api/turns/${turnId}/name`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    });
   }
 
   async transcribe(audio: Blob, opts: TranscribeOptions = {}): Promise<string> {

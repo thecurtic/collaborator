@@ -84,6 +84,7 @@ export function ChatView({
     cycleFork,
     selectPathTo,
     remove,
+    renameTurn,
   } = useConversation(reloadSignal);
   // Pending branch point awaiting a with/without-context choice.
   const [branchChoice, setBranchChoice] = useState<BranchPoint | null>(null);
@@ -239,6 +240,7 @@ export function ChatView({
         activeIds={activeIds}
         onSelect={selectBranch}
         onDeleteSubtree={handleDeleteSubtree}
+        onRename={renameTurn}
         onClose={closeMap}
       />
 

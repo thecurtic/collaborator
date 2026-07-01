@@ -291,6 +291,19 @@ export function useConversation(reloadSignal: number) {
     [load],
   );
 
+  const renameTurn = useCallback(
+    async (turnId: number, name: string) => {
+      setError(null);
+      try {
+        await api.renameTurn(turnId, name);
+        await load();
+      } catch (err) {
+        setError(errMessage(err));
+      }
+    },
+    [load],
+  );
+
   // Cycle a node's branch switcher (incl. the empty "continue here" slot).
   const cycleFork = useCallback((parentId: number, dir: 1 | -1) => {
     setSelection((prev) => {
@@ -344,6 +357,7 @@ export function useConversation(reloadSignal: number) {
     cycleFork,
     selectPathTo,
     remove,
+    renameTurn,
     reload: load,
   };
 }

@@ -2,7 +2,6 @@ import { Maximize2, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import type { ConversationTree, TreeNode } from '@/domain/models';
-import { getTreeName, setTreeName } from './treeNames';
 
 interface TreeMapProps {
   open: boolean;
@@ -10,6 +9,7 @@ interface TreeMapProps {
   activeIds: Set<number>;
   onSelect: (turnId: number) => void;
   onDeleteSubtree: (turnId: number) => void;
+  onRename: (turnId: number, name: string) => void;
   onClose: () => void;
 }
 
@@ -176,7 +176,7 @@ function buildForest(tree: ConversationTree, activeIds: Set<number>) {
     for (const s of segments) for (const id of s.nodeIds) colOf.set(id, s.column);
     trees.push({
       rootNodeId: node.id,
-      rootName: getTreeName(node.id) ?? node.preview ?? 'Untitled',
+      rootName: node.name ?? node.preview ?? 'Untitled',
       segments,
       minCol: Math.min(...cols),
       maxCol: Math.max(...cols),
@@ -233,13 +233,13 @@ export function TreeMap({
   activeIds,
   onSelect,
   onDeleteSubtree,
+  onRename,
   onClose,
 }: TreeMapProps) {
   const [selected, setSelected] = useState<Segment | null>(null);
   const [editing, setEditing] = useState<{ rootId: number; value: string } | null>(
     null,
   );
-  const [nameVersion, setNameVersion] = useState(0);
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -249,12 +249,7 @@ export function TreeMap({
     null,
   );
 
-  const trees = useMemo(
-    () => buildForest(tree, activeIds),
-    // nameVersion forces a rebuild when a name is edited.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tree, activeIds, nameVersion],
-  );
+  const trees = useMemo(() => buildForest(tree, activeIds), [tree, activeIds]);
 
   useEffect(() => {
     if (!open) {
@@ -343,8 +338,7 @@ export function TreeMap({
 
   const commitName = () => {
     if (editing) {
-      setTreeName(editing.rootId, editing.value);
-      setNameVersion((n) => n + 1);
+      onRename(editing.rootId, editing.value); // persists + reloads the tree
       setEditing(null);
     }
   };

@@ -78,6 +78,7 @@ export function toTreeNode(api: ApiTreeNode): TreeNode {
     paragraphIndex: api.paragraph_index ?? null,
     contextBoundary: api.context_boundary === true,
     branched: api.branched === true,
+    name: typeof api.name === 'string' ? api.name : null,
     recall: api.recall ? toRecallBlock(api.recall) : null,
     children: (api.children ?? []).map(toTreeNode),
   };

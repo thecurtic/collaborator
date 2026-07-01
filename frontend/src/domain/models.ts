@@ -55,6 +55,8 @@ export interface TreeNode {
   contextBoundary: boolean;
   /** True when this turn was created as an explicit fork (POST /api/branches). */
   branched: boolean;
+  /** User-set name (used to name a conversation/branch by its root turn). */
+  name: string | null;
   /** Recall block that this turn triggered (user turns only), or null. */
   recall: RecallBlock | null;
   children: TreeNode[];
