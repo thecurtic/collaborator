@@ -193,11 +193,16 @@ def _recall_sources(matches: List[dict]) -> List[dict]:
     } for m in matches]
 
 
-def _build_tools(db_path: str):
-    """Assemble enabled tool schemas + an executor + shared state for one turn."""
+def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
+    """Assemble enabled tool schemas + an executor + shared state for one turn.
+
+    `exclude_ids` are turns already in the model's context window; recall searches
+    skip them (the model is seeing them anyway).
+    """
     tcfg = _tools_settings()
     avail = tcfg.get("available", {}) or {}
     rc = _recall_config()
+    exclude_ids = exclude_ids or []
     state = {"last_matches": [], "synthesis": None, "synthesis_kind": None}
 
     def _search_schema(name, desc):
@@ -239,11 +244,13 @@ def _build_tools(db_path: str):
                     vec = get_embedding(query)
                     matches = search_similar_turns(
                         conn, vec, limit=rc.get("search_limit", 10),
-                        tag_boosts=rc.get("tag_boosts", {})) if vec else []
+                        tag_boosts=rc.get("tag_boosts", {}),
+                        exclude_ids=exclude_ids) if vec else []
                 else:
                     matches = search_keyword_turns(
                         conn, query, limit=rc.get("search_limit", 10),
-                        tag_boosts=rc.get("tag_boosts", {}))
+                        tag_boosts=rc.get("tag_boosts", {}),
+                        exclude_ids=exclude_ids)
             finally:
                 conn.close()
             state["last_matches"] = matches
@@ -387,7 +394,10 @@ def _stream_turn_response(
         synthesis_sources = []
 
         if tools_enabled:
-            schemas, execute, state = _build_tools(db_path)
+            # Turns already in the context window are excluded from recall searches
+            # (the model is seeing them anyway).
+            context_ids = [t["id"] for t in (context_list or []) if t.get("id") is not None]
+            schemas, execute, state = _build_tools(db_path, exclude_ids=context_ids)
             tcfg = _tools_settings()
             try:
                 for ev in generate_with_tools(

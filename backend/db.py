@@ -577,12 +577,13 @@ def search_similar_turns(db, query_vector: List[float], limit: int = 10,
 
 
 def search_keyword_turns(db, query: str, limit: int = 10,
-                         tag_boosts: Optional[Dict[str, float]] = None) -> List[dict]:
+                         tag_boosts: Optional[Dict[str, float]] = None,
+                         exclude_ids: Optional[List[int]] = None) -> List[dict]:
     """Lexical search over committed turns by term overlap (no embeddings needed).
 
     Scores each turn by how many query terms it contains (case-insensitive), times
     any per-tag boost. Returns the top matches with the same shape as the semantic
-    search (incl. branch_root_id).
+    search (incl. branch_root_id). Turns in `exclude_ids` are skipped.
     """
     if not query or not query.strip():
         return []
@@ -591,6 +592,7 @@ def search_keyword_turns(db, query: str, limit: int = 10,
     if not terms:
         return []
     tag_boosts = {k.lower(): v for k, v in (tag_boosts or {}).items()}
+    exclude = set(exclude_ids or [])
 
     cursor = db.cursor()
     rows = cursor.execute(
@@ -600,6 +602,8 @@ def search_keyword_turns(db, query: str, limit: int = 10,
 
     scored = []
     for (tid, role, content, tags_raw, created_at, parent_id) in rows:
+        if tid in exclude:
+            continue
         low = (content or "").lower()
         hits = sum(1 for t in set(terms) if t in low)
         if hits == 0:

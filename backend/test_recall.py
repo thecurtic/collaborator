@@ -67,6 +67,23 @@ def test_keyword_search():
     print("✓ keyword search ranks by term overlap")
 
 
+def test_search_excludes_context_ids():
+    """Both searches skip turns already in the context window (exclude_ids)."""
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    a = db.create_turn(conn, None, "user", "kubernetes deployment topic alpha")
+    b = db.create_turn(conn, None, "assistant", "kubernetes deployment topic beta")
+    db.set_turn_embedding(conn, a["id"], [0.0, 1.0])
+    db.set_turn_embedding(conn, b["id"], [0.0, 1.0])
+
+    kw = db.search_keyword_turns(conn, "kubernetes deployment", limit=10, exclude_ids=[a["id"]])
+    assert all(r["turn_id"] != a["id"] for r in kw) and any(r["turn_id"] == b["id"] for r in kw)
+
+    sem = db.search_similar_turns(conn, [0.0, 1.0], limit=10, exclude_ids=[a["id"]])
+    assert all(r["turn_id"] != a["id"] for r in sem) and any(r["turn_id"] == b["id"] for r in sem)
+    conn.close()
+    print("✓ keyword + semantic search exclude context-window ids")
+
+
 def _scripted_stream(rounds):
     """Return a fake inference._iter_stream_events driven by a list of per-round
     delta lists. Each delta is a dict yielded as (choice, delta)."""
@@ -188,6 +205,7 @@ if __name__ == "__main__":
     test_search_ranking_and_tag_boosts()
     test_tags_endpoint()
     test_keyword_search()
+    test_search_excludes_context_ids()
     test_tool_loop_end_to_end()
     test_embed_texts_backend_dispatch()
     test_synthesis_prompt_loads_from_file()

@@ -14,7 +14,7 @@ inference:
 
 # Memory settings
 memory:
-  default_context_window: 5
+  default_context_window: 20
   db_path: "/home/chat/collaborator/backend/data/conversations.db"
 
 # Server settings

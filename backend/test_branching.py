@@ -303,7 +303,7 @@ def test_tree_exposes_context_window_and_boundary():
 
     from starlette.testclient import TestClient
     tree = TestClient(main.app).get("/api/tree").json()
-    assert tree["context_turns"] == 5                      # default window surfaced
+    assert tree["context_turns"] == 20                     # default window surfaced
     root_node = tree["roots"][0]
     assert root_node["context_boundary"] is False
     assert root_node["children"][0]["context_boundary"] is True   # the fresh branch start

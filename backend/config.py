@@ -54,7 +54,7 @@ def load_config() -> dict:
             "streaming": True
         },
         "memory": {
-            "default_context_window": 5,
+            "default_context_window": 20,
             "db_path": resolve_path("backend/data/conversations.db")
         },
         "server": {
