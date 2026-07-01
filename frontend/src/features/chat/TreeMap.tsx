@@ -66,6 +66,7 @@ interface TreeLayout {
   maxCol: number;
   rows: number;
   originId: number | null; // node this without-context tree branched from
+  side: number; // -1 left of main, +1 right, 0 = a main/root tree
   xOffset: number; // px offset of this tree in the forest
 }
 
@@ -82,8 +83,14 @@ function buildSeg(node: TreeNode, activeIds: Set<number>, detached: Detach[]): S
     nodeIds.push(cur.id);
     const attached: TreeNode[] = [];
     for (const k of cur.children) {
-      if (k.contextBoundary) detached.push({ node: k, originId: cur.id });
-      else attached.push(k);
+      // Detach only a WITHOUT-context branch START (its user turn is both an
+      // explicit branch and a context boundary) — not its reply/continuations,
+      // which also carry context_boundary but must stay in the same tree.
+      if (k.branched && k.contextBoundary) {
+        detached.push({ node: k, originId: cur.id });
+      } else {
+        attached.push(k);
+      }
     }
     if (attached.length === 1) {
       cur = attached[0];
@@ -152,19 +159,21 @@ function assign(
 }
 
 function buildForest(tree: ConversationTree, activeIds: Set<number>) {
-  const queue: { node: TreeNode; originId: number | null }[] = tree.roots.map(
-    (r) => ({ node: r, originId: null }),
-  );
+  const queue: { node: TreeNode; originId: number | null; side: number }[] =
+    tree.roots.map((r) => ({ node: r, originId: null, side: 0 }));
   const trees: TreeLayout[] = [];
 
   while (queue.length) {
-    const { node, originId } = queue.shift()!;
+    const { node, originId, side } = queue.shift()!;
     const detached: Detach[] = [];
     const rootSeg = buildSeg(node, activeIds, detached);
     measure(rootSeg);
     const segments: Segment[] = [];
     assign(rootSeg, 0, 0, null, null, segments);
     const cols = segments.map((s) => s.column);
+    // Which column each node sits in (to decide a detached child's side).
+    const colOf = new Map<number, number>();
+    for (const s of segments) for (const id of s.nodeIds) colOf.set(id, s.column);
     trees.push({
       rootNodeId: node.id,
       rootName: getTreeName(node.id) ?? node.preview ?? 'Untitled',
@@ -173,17 +182,41 @@ function buildForest(tree: ConversationTree, activeIds: Set<number>) {
       maxCol: Math.max(...cols),
       rows: segments.reduce((m, s) => Math.max(m, s.startRow + s.count), 0),
       originId,
+      side,
       xOffset: 0,
     });
-    detached.forEach((d) => queue.push(d));
+    for (const d of detached) {
+      // A detached tree goes on the side its origin branch is on (relative to the
+      // parent tree's trunk); on the trunk it inherits the parent tree's side.
+      const oc = colOf.get(d.originId) ?? 0;
+      const childSide = oc > 0 ? 1 : oc < 0 ? -1 : side || 1;
+      queue.push({ node: d.node, originId: d.originId, side: childSide });
+    }
   }
 
-  // Lay trees out left-to-right.
-  let x = 0;
-  for (const t of trees) {
-    t.xOffset = x;
-    x += (t.maxCol - t.minCol) * COL + COL + TREE_GAP;
-  }
+  const widthOf = (t: TreeLayout) => (t.maxCol - t.minCol) * COL + COL;
+  // Main/root trees form the center block; detached trees stack out to each side.
+  let mainX = 0;
+  for (const t of trees)
+    if (t.side === 0) {
+      t.xOffset = mainX;
+      mainX += widthOf(t) + TREE_GAP;
+    }
+  let rightX = mainX;
+  for (const t of trees)
+    if (t.side > 0) {
+      t.xOffset = rightX;
+      rightX += widthOf(t) + TREE_GAP;
+    }
+  let leftX = -TREE_GAP;
+  for (const t of trees)
+    if (t.side < 0) {
+      t.xOffset = leftX - widthOf(t);
+      leftX = t.xOffset - TREE_GAP;
+    }
+  // Shift everything positive so the leftmost tree starts at the origin.
+  const minOff = Math.min(0, ...trees.map((t) => t.xOffset));
+  for (const t of trees) t.xOffset -= minOff;
   return trees;
 }
 
