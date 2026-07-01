@@ -134,8 +134,12 @@ export function ChatView({
     onActiveLeafChange(activeLeafId);
   }, [activeLeafId, onActiveLeafChange]);
 
-  const enterBranch = (id: number) => {
+  // Tapping a branch in the map makes it active (map stays open, highlight
+  // follows); closing the map jumps to the active branch's tip.
+  const selectBranch = (id: number) => {
     selectPathTo(id);
+  };
+  const closeMap = () => {
     pinnedRef.current = true;
     scrollTipRef.current = true;
     setMapOpen(false);
@@ -230,9 +234,9 @@ export function ChatView({
         open={mapOpen}
         tree={tree}
         activeIds={activeIds}
-        onSelect={enterBranch}
+        onSelect={selectBranch}
         onDeleteSubtree={handleDeleteSubtree}
-        onClose={() => setMapOpen(false)}
+        onClose={closeMap}
       />
 
       {/* Branch context choice. */}

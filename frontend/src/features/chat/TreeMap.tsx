@@ -1,5 +1,5 @@
-import { LogIn, Trash2, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import type { ConversationTree, TreeNode } from '@/domain/models';
 
@@ -168,22 +168,15 @@ export function TreeMap({
   onClose,
 }: TreeMapProps) {
   const [selected, setSelected] = useState<Segment | null>(null);
-  const { segments, segById, minCol, maxCol, rows } = useMemo(
+  const { segments, minCol, maxCol, rows } = useMemo(
     () => layout(tree.roots, activeIds),
     [tree, activeIds],
   );
 
-  // The selected branch's full line down to the tip (follows the newest child at
-  // each fork), so selecting highlights the whole branch — not just its segment.
-  const selectedLine = useMemo(() => {
-    const ids = new Set<number>();
-    let s = selected ? segById.get(selected.startNodeId) : undefined;
-    while (s) {
-      ids.add(s.startNodeId);
-      s = s.children.length ? s.children[s.children.length - 1] : undefined;
-    }
-    return ids;
-  }, [selected, segById]);
+  // Clear the action bar when the map closes.
+  useEffect(() => {
+    if (!open) setSelected(null);
+  }, [open]);
 
   if (!open) return null;
 
@@ -221,15 +214,18 @@ export function TreeMap({
               const top = rowY(seg.startRow);
               const bottom = rowY(seg.startRow + seg.count - 1);
               const color = colorFor(seg.column);
-              const isSel = selected?.startNodeId === seg.startNodeId;
-              const onLine = selectedLine.has(seg.startNodeId);
-              const emphasized = isSel || onLine || seg.active;
-              const opacity = emphasized ? 1 : 0.4;
-              const stroke = isSel || onLine ? 8 : seg.active ? 6 : 4;
+              // Tapping a branch makes it active (see onClick), so the highlight
+              // simply follows the active path — active branch == highlighted.
+              const emphasized = seg.active;
+              const opacity = emphasized ? 1 : 0.28;
+              const stroke = emphasized ? 7 : 4;
               return (
                 <g
                   key={seg.startNodeId}
-                  onClick={() => setSelected(seg)}
+                  onClick={() => {
+                    setSelected(seg);
+                    onSelect(seg.startNodeId); // enter this branch (make it active)
+                  }}
                   className="cursor-pointer"
                 >
                   {seg.parentColumn != null && seg.forkRow != null && (
@@ -237,9 +233,10 @@ export function TreeMap({
                       d={`M ${colX(seg.parentColumn)} ${rowY(seg.forkRow)} C ${colX(seg.parentColumn)} ${top} ${x} ${rowY(seg.forkRow)} ${x} ${top}`}
                       fill="none"
                       stroke={color}
-                      strokeWidth={onLine ? 8 : seg.active ? 6 : 4}
+                      strokeWidth={emphasized ? 5 : 4}
                       strokeLinecap="round"
                       opacity={opacity}
+                      pointerEvents="none"
                     />
                   )}
                   <line
@@ -281,20 +278,10 @@ export function TreeMap({
       {selected && (
         <div className="border-t border-border bg-card p-4">
           <p className="mb-3 text-sm text-muted-foreground">
-            Branch · {selected.count} {selected.count === 1 ? 'turn' : 'turns'}
+            Active branch · {selected.count}{' '}
+            {selected.count === 1 ? 'turn' : 'turns'}
           </p>
           <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              className="flex-1 gap-2"
-              onClick={() => {
-                onSelect(selected.startNodeId);
-                setSelected(null);
-              }}
-            >
-              <LogIn className="h-4 w-4" />
-              Enter branch
-            </Button>
             <Button
               variant="destructive"
               className="flex-1 gap-2"
@@ -307,13 +294,8 @@ export function TreeMap({
               <Trash2 className="h-4 w-4" />
               Delete branch
             </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              aria-label="Cancel"
-              onClick={() => setSelected(null)}
-            >
-              <X className="h-4 w-4" />
+            <Button variant="secondary" className="flex-1" onClick={onClose}>
+              Go to conversation
             </Button>
           </div>
         </div>
