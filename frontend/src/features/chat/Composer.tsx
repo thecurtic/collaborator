@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { getSttEngine } from '@/features/settings/uiPrefs';
 import { transcribeBlobOnDevice } from '@/features/voice/deviceTranscriber';
 import { useRecorder } from '@/features/voice/useRecorder';
+import { useWakeLock } from '@/features/voice/useWakeLock';
 
 interface ComposerProps {
   disabled: boolean;
@@ -27,6 +28,7 @@ export function Composer({
     useRecorder();
 
   const recording = recStatus === 'recording';
+  useWakeLock(recording || transcribing); // keep screen on while capturing
 
   function submit() {
     const trimmed = value.trim();

@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import type { BranchTarget } from '@/features/chat/branchTarget';
 import { splitParagraphs } from './speechUtils';
 import { useCall, type CallPhase } from './useCall';
+import { useWakeLock } from './useWakeLock';
 
 interface CallScreenProps {
   open: boolean;
@@ -143,6 +144,7 @@ export function CallScreen({
     end,
     skipTo,
   } = useCall(open, onClose, branchTarget, activeLeafId, onBranchConsumed);
+  useWakeLock(open); // keep the screen on for the whole call
   const showDebug = useDebugEnabled();
   const bottomRef = useRef<HTMLDivElement>(null);
   const currentParaRef = useRef<HTMLParagraphElement>(null);
