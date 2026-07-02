@@ -99,7 +99,8 @@ def load_config() -> dict:
             "show_step_results": False,  # also emit each tool's raw results
             "max_rounds": 5,
             "temperature": 0.3,        # lower temp -> more reliable tool calls
-            "guidance_file": "tools-guidance.md",  # editable tool-usage instruction
+            "guidance_file": "tools-guidance.md",  # editable "when to use tools" instruction
+            "spec_file": "tools-spec.md",          # editable per-tool descriptions the model sees
             "auto_recall_fallback": False,  # reserved: auto-run recall if model calls nothing
             "available": {
                 "recall_semantic": True,

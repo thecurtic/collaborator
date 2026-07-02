@@ -71,7 +71,8 @@ tools:
   show_step_results: false    # also stream each tool's raw results
   max_rounds: 5               # max tool rounds before forcing an answer
   temperature: 0.3            # tool-loop temperature (lower = more reliable tool calls)
-  guidance_file: "tools-guidance.md"  # editable instruction telling the model how/when to use tools
+  guidance_file: "tools-guidance.md"  # editable "when to use tools" instruction (system prompt)
+  spec_file: "tools-spec.md"          # editable per-tool descriptions the model sees (the tool schemas)
   auto_recall_fallback: false # reserved for later
   available:                  # enable/disable individual tools
     recall_semantic: true     # semantic (embedding) search over turns

@@ -193,6 +193,51 @@ def _recall_sources(matches: List[dict]) -> List[dict]:
     } for m in matches]
 
 
+# Fallback tool descriptions if tools-spec.md is missing a section (or the file
+# is absent). tools-spec.md is the editable source of truth for what the model sees.
+DEFAULT_TOOL_DESCRIPTIONS = {
+    "recall_semantic": ("Search the user's past conversation turns by meaning (semantic "
+                        "similarity). Use when the user refers to earlier discussion or ideas."),
+    "recall_keyword": ("Search the user's past conversation turns by exact keywords/terms. "
+                       "Use for names, specific words, or when semantic search might miss a "
+                       "literal match."),
+    "synthesize": ("Synthesize retrieved items into a concise block. Call after a search "
+                   "tool to produce a memory block for the user."),
+}
+
+
+def _load_tool_descriptions() -> dict:
+    """Model-facing tool descriptions, sourced from the tools-spec.md file.
+
+    Format: a `## tool_name` heading followed by that tool's description. Read fresh
+    each turn (edits apply without a restart); missing sections fall back to defaults.
+    """
+    descriptions = dict(DEFAULT_TOOL_DESCRIPTIONS)
+    spec_file = _tools_settings().get("spec_file")
+    if not spec_file:
+        return descriptions
+    try:
+        with open(resolve_path(spec_file), "r", encoding="utf-8") as f:
+            text = f.read()
+    except IOError:
+        return descriptions
+
+    current, buf = None, []
+    def _flush():
+        if current and buf:
+            body = "\n".join(buf).strip()
+            if body:
+                descriptions[current] = body
+    for line in text.splitlines():
+        if line.startswith("## "):
+            _flush()
+            current, buf = line[3:].strip(), []
+        elif current is not None:
+            buf.append(line)
+    _flush()
+    return descriptions
+
+
 def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
     """Assemble enabled tool schemas + an executor + shared state for one turn.
 
@@ -212,22 +257,16 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "query": {"type": "string", "description": "what to search for"}},
                 "required": ["query"]}}}
 
+    descs = _load_tool_descriptions()
     schemas = []
     if avail.get("recall_semantic", True):
-        schemas.append(_search_schema(
-            "recall_semantic",
-            "Search the user's past conversation turns by meaning (semantic similarity). "
-            "Use when the user refers to earlier discussion or ideas."))
+        schemas.append(_search_schema("recall_semantic", descs["recall_semantic"]))
     if avail.get("recall_keyword", True):
-        schemas.append(_search_schema(
-            "recall_keyword",
-            "Search the user's past conversation turns by exact keywords/terms. Use for "
-            "names, specific words, or when semantic search might miss a literal match."))
+        schemas.append(_search_schema("recall_keyword", descs["recall_keyword"]))
     if avail.get("synthesize", True):
         schemas.append({"type": "function", "function": {
             "name": "synthesize",
-            "description": "Synthesize retrieved items into a concise block. Call after a "
-                           "search tool to produce a memory block for the user.",
+            "description": descs["synthesize"],
             "parameters": {"type": "object", "properties": {
                 "kind": {"type": "string", "enum": _synthesis_kinds(),
                          "description": "kind of synthesis / source type"},
