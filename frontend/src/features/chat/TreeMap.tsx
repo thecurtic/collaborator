@@ -42,6 +42,7 @@ interface Seg {
   nodeIds: number[];
   count: number;
   active: boolean;
+  branched: boolean; // this segment's start is an explicit branch
   children: Seg[];
   offset: number;
   left: number;
@@ -106,6 +107,7 @@ function buildSeg(node: TreeNode, activeIds: Set<number>, detached: Detach[]): S
       nodeIds,
       count: nodeIds.length,
       active: nodeIds.some((id) => activeIds.has(id)),
+      branched: node.branched, // start-node's branch flag
       children,
       offset: 0,
       left: 0,
@@ -117,14 +119,27 @@ function buildSeg(node: TreeNode, activeIds: Set<number>, detached: Detach[]): S
 function measure(seg: Seg, state: { toggle: number }) {
   if (seg.children.length === 0) return;
   seg.children.forEach((c) => measure(c, state));
-  const c0 = seg.children[0]; // first child continues the trunk
-  c0.offset = 0;
-  let leftEdge = -c0.left;
-  let rightEdge = c0.right;
-  for (let i = 1; i < seg.children.length; i++) {
+  // The MAIN line (newest non-branched child) continues the trunk (offset 0),
+  // matching the default active path; if there's none (all branches) the trunk
+  // ends here. Everything else fans out to alternating sides.
+  let mainIdx = -1;
+  for (let i = seg.children.length - 1; i >= 0; i--) {
+    if (!seg.children[i].branched) {
+      mainIdx = i;
+      break;
+    }
+  }
+  let leftEdge = 0;
+  let rightEdge = 0;
+  if (mainIdx >= 0) {
+    const m = seg.children[mainIdx];
+    m.offset = 0;
+    leftEdge = -m.left;
+    rightEdge = m.right;
+  }
+  for (let i = 0; i < seg.children.length; i++) {
+    if (i === mainIdx) continue;
     const c = seg.children[i];
-    // Alternate the side each branch goes so single-branch forks don't all pile
-    // up on the right; the subtree extents keep everything non-overlapping.
     const goRight = state.toggle > 0;
     state.toggle = -state.toggle;
     if (goRight) {

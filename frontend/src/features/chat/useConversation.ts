@@ -165,22 +165,21 @@ export function useConversation(reloadSignal: number) {
     void load();
   }, [load, reloadSignal]);
 
-  // Point the active path at a specific turn by selecting it along its ancestry.
-  // Uses the nesting-derived parent map (robust even if nodes lack parent_turn_id).
+  // Point the active path at a specific turn: build a FRESH selection with only
+  // the ancestry to it, so everything below (and any prior off-path picks) reverts
+  // to the default main line. Uses the nesting-derived parent map.
   const selectPathTo = useCallback((turnId: number) => {
     const { parentOf } = indexRef.current;
-    setSelection((prev) => {
-      const next = new Map(prev);
-      let child = turnId;
-      let parent = parentOf.get(turnId);
-      while (parent !== undefined) {
-        next.set(parent, child);
-        if (parent === VIRTUAL_ROOT) break;
-        child = parent;
-        parent = parentOf.get(parent);
-      }
-      return next;
-    });
+    const next = new Map<number, number>();
+    let child = turnId;
+    let parent = parentOf.get(turnId);
+    while (parent !== undefined) {
+      next.set(parent, child);
+      if (parent === VIRTUAL_ROOT) break;
+      child = parent;
+      parent = parentOf.get(parent);
+    }
+    setSelection(next);
   }, []);
 
   const runStream = useCallback(
