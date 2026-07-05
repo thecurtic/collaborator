@@ -64,8 +64,38 @@ def test_auth_via_first_message():
     print("✓ accepts passkey via first text frame")
 
 
+def test_ws_ticket_flow():
+    """A single-use ticket from POST /api/auth/ws-ticket authenticates the WS."""
+    main.auth_enabled = True
+    main.validate_passkey = lambda pk: pk == "good"
+    _stub_whisper()
+    c = TestClient(main.app)
+
+    # Wrong passkey -> no ticket.
+    assert c.post("/api/auth/ws-ticket", headers={"X-Passkey": "bad"}).status_code == 403
+    r = c.post("/api/auth/ws-ticket", headers={"X-Passkey": "good"})
+    assert r.status_code == 200 and r.json()["expires_in"] == 30
+    ticket = r.json()["ticket"]
+
+    # Valid ticket authenticates the WS.
+    with c.websocket_connect(f"/api/transcribe/stream?ticket={ticket}") as ws:
+        ws.send_text(json.dumps({"type": "end"}))
+        assert ws.receive_json()["type"] == "final"
+
+    # Single use: the same ticket is now rejected.
+    with c.websocket_connect(f"/api/transcribe/stream?ticket={ticket}") as ws:
+        assert ws.receive_json()["type"] == "error"
+
+    # Bogus ticket rejected.
+    with c.websocket_connect("/api/transcribe/stream?ticket=nope") as ws:
+        assert ws.receive_json()["type"] == "error"
+    main.auth_enabled = False
+    print("✓ ws-ticket: issue (header auth), single-use, rejects bad/expired")
+
+
 if __name__ == "__main__":
     test_partial_then_final()
     test_auth_rejects_bad_passkey()
     test_auth_via_first_message()
+    test_ws_ticket_flow()
     print("\n✓ All streaming-transcribe tests passed!")

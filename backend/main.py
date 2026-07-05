@@ -7,6 +7,8 @@ import os
 import sqlite3
 import asyncio
 import json
+import time
+import secrets
 from typing import List, Optional
 from starlette.responses import StreamingResponse
 
@@ -1039,17 +1041,55 @@ async def _ws_send(websocket: WebSocket, payload: dict) -> None:
     await websocket.send_text(json.dumps(payload))
 
 
+# --- Short-lived, single-use tickets for WebSocket auth ----------------------
+# Browsers can't set headers on WebSockets, so the passkey would otherwise ride in
+# the URL (and land in access/proxy logs). Instead the client exchanges its passkey
+# (via a normal header-authenticated POST) for a one-time ticket used on the WS URL.
+WS_TICKET_TTL = 30  # seconds
+_ws_tickets: dict = {}  # ticket -> expiry epoch
+
+
+def _prune_ws_tickets(now: float) -> None:
+    for t in [t for t, exp in _ws_tickets.items() if exp <= now]:
+        _ws_tickets.pop(t, None)
+
+
+def _consume_ws_ticket(ticket: Optional[str]) -> bool:
+    """Validate + consume a WS ticket (single-use). True if valid and unexpired."""
+    if not ticket:
+        return False
+    expiry = _ws_tickets.pop(ticket, None)  # single-use: removed on first check
+    return expiry is not None and time.time() <= expiry
+
+
+@app.post("/api/auth/ws-ticket")
+async def create_ws_ticket(passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Exchange a passkey (X-Passkey header) for a short-lived, single-use WS ticket.
+
+    The ticket is valid for ~30s, one use, and only accepted by the WS endpoints —
+    so the long-lived passkey never appears in a WebSocket URL / logs.
+    """
+    _require_auth(passkey)
+    now = time.time()
+    _prune_ws_tickets(now)
+    ticket = secrets.token_urlsafe(32)
+    _ws_tickets[ticket] = now + WS_TICKET_TTL
+    return {"ticket": ticket, "expires_in": WS_TICKET_TTL}
+
+
 @app.websocket("/api/transcribe/stream")
 async def transcribe_stream(
     websocket: WebSocket,
+    ticket: Optional[str] = Query(None),
     passkey: Optional[str] = Query(None),
     language: Optional[str] = Query(None),
 ):
     """Stream mic audio in, get incremental transcripts back.
 
     Protocol:
-      - Auth: ?passkey=... OR first text frame {"passkey": "..."} (browsers can't
-        set WebSocket headers). Invalid/missing -> error + close.
+      - Auth (preferred): ?ticket=<one-time ticket from POST /api/auth/ws-ticket>.
+        Backward compat: ?passkey=... OR first text frame {"passkey": "..."}.
+        Invalid/missing -> error + close.
       - Client -> server (binary): raw PCM16, mono, 16 kHz, little-endian.
       - Client -> server (text): {"type":"end"} to finalize the turn.
       - Server -> client (text): {"type":"partial","text":...} as it transcribes,
@@ -1057,23 +1097,28 @@ async def transcribe_stream(
     """
     await websocket.accept()
 
-    # --- Auth (query param, else first text frame carrying the passkey) ---
+    # --- Auth: ticket (preferred) -> ?passkey= -> first text frame {"passkey"} ---
     if auth_enabled:
-        pk = passkey
-        if not pk:
-            try:
-                first = await websocket.receive()
-            except WebSocketDisconnect:
-                return
-            if first.get("type") == "websocket.disconnect":
-                return
-            if first.get("text"):
+        authed = False
+        if ticket is not None:
+            authed = _consume_ws_ticket(ticket)   # ticket path: don't fall back to passkey
+        else:
+            pk = passkey
+            if not pk:
                 try:
-                    pk = json.loads(first["text"]).get("passkey")
-                except Exception:
-                    pk = None
-        if not pk or not validate_passkey(pk):
-            await _ws_send(websocket, {"type": "error", "detail": "Invalid or missing passkey"})
+                    first = await websocket.receive()
+                except WebSocketDisconnect:
+                    return
+                if first.get("type") == "websocket.disconnect":
+                    return
+                if first.get("text"):
+                    try:
+                        pk = json.loads(first["text"]).get("passkey")
+                    except Exception:
+                        pk = None
+            authed = bool(pk) and validate_passkey(pk)
+        if not authed:
+            await _ws_send(websocket, {"type": "error", "detail": "Invalid or missing credentials"})
             await websocket.close(code=1008)
             return
 

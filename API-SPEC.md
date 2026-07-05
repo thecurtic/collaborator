@@ -357,9 +357,20 @@ WS /api/transcribe/stream?passkey=<your-passkey>&language=en
 Stream mic audio in and receive incremental transcripts. For tap-to-record, keep
 using the one-shot `POST /api/transcribe`.
 
-**Auth:** browsers can't set WebSocket headers, so pass the passkey as the
-`?passkey=` query param, **or** as the first text frame `{"passkey":"..."}`. Invalid
-/ missing → `{"type":"error"}` then close (1008).
+**Auth (preferred): one-time ticket.** Browsers can't set WebSocket headers, so
+exchange the passkey for a short-lived single-use ticket over a normal request, then
+put the *ticket* (not the secret) in the WS URL:
+```
+POST /api/auth/ws-ticket        (X-Passkey header)
+-> 200 { "ticket": "<random>", "expires_in": 30 }
+WS /api/transcribe/stream?ticket=<ticket>
+```
+The ticket is single-use, expires in ~30s, and only the WS endpoint accepts it — so
+the long-lived passkey never lands in a WS URL or proxy logs.
+
+**Backward compat (deprecated):** `?passkey=<secret>` or a first text frame
+`{"passkey":"..."}` still work; remove once the ticket flow ships. Invalid/missing
+auth → `{"type":"error"}` then close (1008).
 
 **Audio in (binary frames):** raw **PCM16, mono, 16 kHz, little-endian** — sent as
 captured (any frame size). This is fed straight to Whisper (no transcode).
