@@ -5,13 +5,14 @@ import {
   getStopWord,
   getSttEngine,
 } from '@/features/settings/uiPrefs';
+import { holdPwaUpdates } from '@/pwa';
 import { chimeListenStart, chimeListenStop } from './chime';
 import { DeviceTranscriber } from './deviceTranscriber';
 import { listenForWords, warmUpKeywordSpotter } from './keywordSpotter';
 import { startPcmStream, type PcmStream } from './pcmStreamer';
 import type { BranchTarget } from '@/features/chat/branchTarget';
 import { createSpeechSession, type SpeechSession } from './speech';
-import { splitParagraphs } from './speechUtils';
+import { splitParagraphs, stripTrailingWord } from './speechUtils';
 import { TranscriptionStream } from './transcriptionStream';
 
 /** Common shape for server (WebSocket) and on-device (worker) transcribers. */
@@ -35,22 +36,22 @@ export interface CallTurn {
   text: string;
 }
 
+/** A [start, end) char range of a turn's text that TTS could not speak. */
+export interface FailedRange {
+  turnId: number;
+  start: number;
+  end: number;
+}
+
 // Detection confidence. "stop" listens while the agent (and room noise) is
 // audible, so it must be strict to avoid false interrupts that cut speech short.
 const END_WORD_THRESHOLD = 0.85;
 const STOP_WORD_THRESHOLD = 0.97;
 
-/** Strip a trailing command word (e.g. the spoken "go") from the transcript. */
-function stripTrailingWord(text: string, word: string): string {
-  const t = text.trim();
-  if (!word) return t;
-  const re = new RegExp(`[\\s,.!?]*\\b${word}\\b[\\s,.!?]*$`, 'i');
-  return t.replace(re, '').trim();
-}
-
 interface Controls {
   endTurn: () => void;
   end: () => void;
+  retry: () => void;
   skipTo: (turnId: number, text: string, fromParagraph: number) => void;
 }
 
@@ -67,6 +68,7 @@ export function useCall(
   branchTarget?: BranchTarget | null,
   activeLeafId?: number | null,
   onBranchConsumed?: () => void,
+  onBranchCreated?: (parentTurnId: number) => void,
 ) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
   const [partial, setPartial] = useState('');
@@ -75,6 +77,8 @@ export function useCall(
   const [speakingId, setSpeakingId] = useState<number | null>(null);
   const [spokenChars, setSpokenChars] = useState(0);
   const [speakBase, setSpeakBase] = useState(0);
+  // Char ranges TTS failed to speak (rendered red so unread text is visible).
+  const [failedRanges, setFailedRanges] = useState<FailedRange[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const controlsRef = useRef<Controls | null>(null);
@@ -85,6 +89,8 @@ export function useCall(
   activeLeafIdRef.current = activeLeafId;
   const onBranchConsumedRef = useRef(onBranchConsumed);
   onBranchConsumedRef.current = onBranchConsumed;
+  const onBranchCreatedRef = useRef(onBranchCreated);
+  onBranchCreatedRef.current = onBranchCreated;
 
   useEffect(() => {
     if (!open) return;
@@ -112,6 +118,10 @@ export function useCall(
     setSpeakingId(null);
     setSpokenChars(0);
     setSpeakBase(0);
+    setFailedRanges([]);
+    setError(null);
+    // Pause PWA update checks — an auto-update reload would drop the call.
+    const releaseUpdateHold = holdPwaUpdates();
     let stream: MediaStream | null = null;
     let pcm: PcmStream | null = null;
     let transcriber: Transcriber | null = null;
@@ -166,6 +176,7 @@ export function useCall(
 
     const cleanup = () => {
       active = false;
+      releaseUpdateHold();
       stopKws();
       streamAbort?.abort();
       stopCapture();
@@ -258,6 +269,27 @@ export function useCall(
       void listen();
     };
 
+    // Speech session that reports read-along progress and marks any sentence
+    // TTS couldn't speak (rendered red). `base` = char offset playback started
+    // from, so failed ranges land at the right spot in the full turn text.
+    const makeSession = (turnId: number, base: number): SpeechSession => {
+      setFailedRanges((prev) => prev.filter((r) => r.turnId !== turnId));
+      return createSpeechSession(
+        onSpeechIdle,
+        (chars) => {
+          if (active) setSpokenChars(chars);
+        },
+        (start, end) => {
+          if (!active) return;
+          log(`tts FAIL: chars ${base + start}–${base + end} not spoken`);
+          setFailedRanges((prev) => [
+            ...prev,
+            { turnId, start: base + start, end: base + end },
+          ]);
+        },
+      );
+    };
+
     const respond = async (text: string) => {
       if (!active) return;
       log(`responding to: "${text.slice(0, 40)}"`);
@@ -268,9 +300,7 @@ export function useCall(
       setSpeakBase(0);
       setSpokenChars(0);
       setPhase('responding');
-      queue = createSpeechSession(onSpeechIdle, (chars) => {
-        if (active) setSpokenChars(chars);
-      });
+      queue = makeSession(aid, 0);
       // Barge-in: spot the stop word while the assistant is speaking. Strict
       // threshold so the agent's own audio / room noise doesn't false-trigger.
       startKws(
@@ -307,6 +337,8 @@ export function useCall(
             streamAbort.signal,
           );
           if (res.id != null) leafId = res.id; // continue off the new branch
+          // Graduation signal: the app promotes the seed this forked from.
+          onBranchCreatedRef.current?.(pb.turnId);
         } else {
           const res = await api.sendMessageStream(
             {
@@ -363,9 +395,7 @@ export function useCall(
       setSpeakBase(base);
       setSpokenChars(0);
       setPhase('responding');
-      queue = createSpeechSession(onSpeechIdle, (chars) => {
-        if (active) setSpokenChars(chars);
-      });
+      queue = makeSession(turnId, base);
       startKws(
         [stopWord],
         () => {
@@ -378,19 +408,7 @@ export function useCall(
       queue.finish();
     };
 
-    controlsRef.current = {
-      endTurn: () => {
-        log('Done tapped');
-        void finalize();
-      },
-      end: () => {
-        cleanup();
-        onClose();
-      },
-      skipTo: speakFrom,
-    };
-
-    void (async () => {
+    const init = async () => {
       try {
         endWord = getEndWord();
         stopWord = getStopWord();
@@ -403,6 +421,7 @@ export function useCall(
         });
         if (!active) {
           stream.getTracks().forEach((t) => t.stop());
+          stream = null;
           return;
         }
         try {
@@ -424,13 +443,37 @@ export function useCall(
               : 'Could not start the call.',
         );
       }
-    })();
+    };
+
+    controlsRef.current = {
+      endTurn: () => {
+        log('Done tapped');
+        void finalize();
+      },
+      end: () => {
+        cleanup();
+        onClose();
+      },
+      // Recover from an error without ending the call: if the mic is still
+      // alive just listen again; otherwise redo the full startup.
+      retry: () => {
+        if (!active) return;
+        log('retry tapped');
+        setError(null);
+        if (stream) void listen();
+        else void init();
+      },
+      skipTo: speakFrom,
+    };
+
+    void init();
 
     return () => cleanup();
   }, [open, onClose]);
 
   const endTurn = useCallback(() => controlsRef.current?.endTurn(), []);
   const end = useCallback(() => controlsRef.current?.end(), []);
+  const retry = useCallback(() => controlsRef.current?.retry(), []);
   const skipTo = useCallback(
     (turnId: number, text: string, fromParagraph: number) =>
       controlsRef.current?.skipTo(turnId, text, fromParagraph),
@@ -444,10 +487,12 @@ export function useCall(
     speakingId,
     spokenChars,
     speakBase,
+    failedRanges,
     error,
     logs,
     endTurn,
     end,
+    retry,
     skipTo,
   };
 }

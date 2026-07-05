@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
 import type { ConversationTree, RecallBlock, TreeNode } from '@/domain/models';
 import { getRecallEnabled } from '@/features/settings/uiPrefs';
-
-const VIRTUAL_ROOT = 0;
-// Selection sentinel: "no branch chosen here — stop and continue from this turn".
-const CONTINUE = -1;
+import {
+  CONTINUE,
+  VIRTUAL_ROOT,
+  computePath,
+  forkOf,
+  indexNodes,
+  mainChild,
+  rootOf,
+  type NodeIndex,
+  type PathStep,
+} from './treePath';
 
 /** The branch switcher shown on a node that has branch children. */
 export interface ForkInfo {
@@ -18,14 +25,6 @@ export interface ForkInfo {
   paragraphIndex: number | null;
 }
 
-interface PathStep {
-  node: TreeNode;
-  /** All children at this level (siblings of `node`) — for the root switcher. */
-  siblings: TreeNode[];
-  /** Parent id (VIRTUAL_ROOT for top-level). Keys the selection map. */
-  parentId: number;
-}
-
 export interface PathEntry extends PathStep {
   /** Switcher for this node's children (branch fork), or null. */
   fork: ForkInfo | null;
@@ -35,86 +34,6 @@ export interface PathEntry extends PathStep {
 export interface Streaming {
   user: string;
   reply: string;
-}
-
-interface NodeIndex {
-  byId: Map<number, TreeNode>;
-  childrenOf: Map<number, TreeNode[]>;
-  /** child id → parent id (VIRTUAL_ROOT for roots), derived from the nesting. */
-  parentOf: Map<number, number>;
-}
-
-function indexNodes(tree: ConversationTree): NodeIndex {
-  const byId = new Map<number, TreeNode>();
-  const childrenOf = new Map<number, TreeNode[]>();
-  const parentOf = new Map<number, number>();
-  childrenOf.set(VIRTUAL_ROOT, tree.roots);
-  const walk = (nodes: TreeNode[], parentId: number) => {
-    for (const n of nodes) {
-      byId.set(n.id, n);
-      childrenOf.set(n.id, n.children);
-      parentOf.set(n.id, parentId);
-      walk(n.children, n.id);
-    }
-  };
-  walk(tree.roots, VIRTUAL_ROOT);
-  return { byId, childrenOf, parentOf };
-}
-
-/** The main line at a fork = the newest non-branched (continuation) child. */
-function mainChild(siblings: TreeNode[]): TreeNode | undefined {
-  for (let i = siblings.length - 1; i >= 0; i--) {
-    if (!siblings[i].branched) return siblings[i];
-  }
-  return undefined;
-}
-
-/**
- * Walk root→leaf following the MAIN line (`0/n`) by default — the non-branched
- * continuation. Branches are opt-in: only followed when explicitly selected. If a
- * node has no continuation (all children are branches), the main line ends there.
- */
-function computePath(
-  childrenOf: Map<number, TreeNode[]>,
-  selection: Map<number, number>,
-): PathStep[] {
-  const path: PathStep[] = [];
-  let parentId = VIRTUAL_ROOT;
-  let siblings = childrenOf.get(VIRTUAL_ROOT) ?? [];
-  while (siblings.length > 0) {
-    const selId = selection.get(parentId);
-    if (selId === CONTINUE) break; // "0" with no continuation → stop here
-    let chosen =
-      selId !== undefined ? siblings.find((s) => s.id === selId) : undefined;
-    if (!chosen) chosen = mainChild(siblings); // default: the main line
-    if (!chosen) break; // only branches, none selected → main line ends
-    path.push({ node: chosen, siblings, parentId });
-    parentId = chosen.id;
-    siblings = childrenOf.get(chosen.id) ?? [];
-  }
-  return path;
-}
-
-/**
- * Branch switcher for a node's children: position 0 = the main line, 1..n = the
- * branches (branched children). null if there are no branches (linear turn).
- */
-function forkOf(
-  children: TreeNode[],
-  selId: number | undefined,
-): { current: number; total: number; paragraphIndex: number | null } | null {
-  const branches = children.filter((c) => c.branched);
-  if (branches.length === 0) return null;
-  let current = 0; // 0 = main line
-  let paragraphIndex: number | null = null;
-  if (selId !== undefined && selId !== CONTINUE) {
-    const bi = branches.findIndex((b) => b.id === selId);
-    if (bi >= 0) {
-      current = bi + 1;
-      paragraphIndex = branches[bi].paragraphIndex;
-    }
-  }
-  return { current, total: branches.length, paragraphIndex };
 }
 
 function errMessage(err: unknown): string {
@@ -145,25 +64,48 @@ export function useConversation(reloadSignal: number) {
   );
   const [version, setVersion] = useState(0);
   const leafRef = useRef<number | null>(null);
+  // Abort controller for the in-flight send/branch stream (stop generation).
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Swap in a fresh tree synchronously so callers can batch further state
+  // updates (e.g. clearing the streaming overlay) into the same render.
+  const applyTree = useCallback((t: ConversationTree) => {
+    indexRef.current = indexNodes(t);
+    setTree(t);
+    if (t.contextWindow != null) setContextWindow(t.contextWindow);
+    setVersion((v) => v + 1);
+    setLoading(false);
+  }, []);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const t = await api.getTree();
-      indexRef.current = indexNodes(t);
-      setTree(t);
-      if (t.contextWindow != null) setContextWindow(t.contextWindow);
-      setVersion((v) => v + 1);
-      setLoading(false);
+      applyTree(await api.getTree());
     } catch (err) {
       setError(errMessage(err));
       setLoading(false);
     }
-  }, []);
+  }, [applyTree]);
 
   useEffect(() => {
     void load();
   }, [load, reloadSignal]);
+
+  /**
+   * Enter "new chat" mode: empty path, so the next send omits parent_turn_id
+   * and creates a fresh root (a seed, per the backend default). Implemented as
+   * the CONTINUE sentinel at the virtual root — once the send completes,
+   * selectPathTo(new id) replaces this selection with the new conversation.
+   */
+  const startNewChat = useCallback(() => {
+    setSelection(new Map([[VIRTUAL_ROOT, CONTINUE]]));
+  }, []);
+
+  /** The root of the conversation containing `turnId` (per the current tree). */
+  const rootOfTurn = useCallback((turnId: number): TreeNode | null => {
+    const { parentOf, byId } = indexRef.current;
+    return byId.get(rootOf(parentOf, turnId)) ?? null;
+  }, []);
 
   // Point the active path at a specific turn: build a FRESH selection with only
   // the ancestry to it, so everything below (and any prior off-path picks) reverts
@@ -182,6 +124,10 @@ export function useConversation(reloadSignal: number) {
     setSelection(next);
   }, []);
 
+  /**
+   * Run a streamed send/branch. Resolves true on success (or a deliberate
+   * stop), false on failure — so the composer can restore the lost draft.
+   */
   const runStream = useCallback(
     async (
       userText: string,
@@ -189,11 +135,14 @@ export function useConversation(reloadSignal: number) {
         onToken: (c: string) => void,
         onRecall: (block: RecallBlock) => void,
         onStatus: (t: string) => void,
+        signal: AbortSignal,
       ) => Promise<{
         id: number | null;
         contextWindow: number | null;
       }>,
-    ) => {
+    ): Promise<boolean> => {
+      const abort = new AbortController();
+      abortRef.current = abort;
       setSending(true);
       setError(null);
       setRecall(null);
@@ -204,13 +153,30 @@ export function useConversation(reloadSignal: number) {
           (c) => setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
           (block) => setRecall(block),
           (t) => setStatus(t),
+          abort.signal,
         );
-        await load();
+        // Fetch first, THEN apply + clear the overlay in one synchronous block
+        // (single render) — an await between the two briefly shows the new
+        // turns and the overlay copy together.
+        const t = await api.getTree();
+        applyTree(t);
         if (res.id != null) selectPathTo(res.id);
         if (res.contextWindow != null) setContextWindow(res.contextWindow);
+        return true;
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          // Deliberate stop: sync whatever the backend persisted, no error.
+          try {
+            applyTree(await api.getTree());
+          } catch {
+            /* offline — the next load will catch up */
+          }
+          return true;
+        }
         setError(errMessage(err));
+        return false;
       } finally {
+        abortRef.current = null;
         setSending(false);
         setStreaming(null);
         setStatus('');
@@ -218,14 +184,19 @@ export function useConversation(reloadSignal: number) {
         setRecall(null);
       }
     },
-    [load, selectPathTo],
+    [applyTree, selectPathTo],
   );
 
+  /** Abort the in-flight send/branch stream (the reply so far is kept server-side). */
+  const stopGeneration = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
+
   const send = useCallback(
-    (message: string) => {
+    (message: string): Promise<boolean> => {
       const trimmed = message.trim();
-      if (!trimmed) return;
-      void runStream(trimmed, (onToken, onRecall, onStatus) =>
+      if (!trimmed) return Promise.resolve(true);
+      return runStream(trimmed, (onToken, onRecall, onStatus, signal) =>
         api.sendMessageStream(
           // Active leaf to continue from (omit for a brand-new conversation).
           {
@@ -234,7 +205,7 @@ export function useConversation(reloadSignal: number) {
             recall: getRecallEnabled(),
           },
           onToken,
-          undefined,
+          signal,
           onRecall,
           onStatus,
         ),
@@ -243,16 +214,34 @@ export function useConversation(reloadSignal: number) {
     [runStream],
   );
 
+  /** Promote a conversation (call with its root id): seed → tree. */
+  const promote = useCallback(
+    async (rootId: number) => {
+      setError(null);
+      try {
+        await api.setTurnState(rootId, 'tree');
+        await load();
+      } catch (err) {
+        setError(errMessage(err));
+      }
+    },
+    [load],
+  );
+
   const branch = useCallback(
-    (
+    async (
       parentTurnId: number,
       message: string,
       paragraphIndex?: number,
       withContext = true,
-    ) => {
+    ): Promise<boolean> => {
       const trimmed = message.trim();
-      if (!trimmed) return;
-      void runStream(trimmed, (onToken, onRecall, onStatus) =>
+      if (!trimmed) return true;
+      // Branching is a graduation signal: capture the seed root BEFORE the
+      // stream (the reload inside runStream rebuilds the index).
+      const root = rootOfTurn(parentTurnId);
+      const seedRootId = root?.state === 'seed' ? root.id : null;
+      const ok = await runStream(trimmed, (onToken, onRecall, onStatus, signal) =>
         api.branchMessage(
           {
             parentTurnId,
@@ -263,30 +252,15 @@ export function useConversation(reloadSignal: number) {
             ...(withContext ? {} : { contextTurns: 0 }),
           },
           onToken,
-          undefined,
+          signal,
           onRecall,
           onStatus,
         ),
       );
+      if (ok && seedRootId != null) await promote(seedRootId);
+      return ok;
     },
-    [runStream],
-  );
-
-  const switchSibling = useCallback(
-    (parentId: number, siblings: TreeNode[], dir: 1 | -1) => {
-      setSelection((prev) => {
-        const curId = prev.get(parentId);
-        const curIdx =
-          curId != null && siblings.some((s) => s.id === curId)
-            ? siblings.findIndex((s) => s.id === curId)
-            : siblings.length - 1;
-        const nextIdx = (curIdx + dir + siblings.length) % siblings.length;
-        const next = new Map(prev);
-        next.set(parentId, siblings[nextIdx].id);
-        return next;
-      });
-    },
-    [],
+    [runStream, rootOfTurn, promote],
   );
 
   const remove = useCallback(
@@ -307,12 +281,17 @@ export function useConversation(reloadSignal: number) {
       setError(null);
       try {
         await api.renameTurn(turnId, name);
+        // Naming a seed is a "this matters" signal — it graduates the chat.
+        const root = rootOfTurn(turnId);
+        if (name.trim() && root?.state === 'seed') {
+          await api.setTurnState(root.id, 'tree');
+        }
         await load();
       } catch (err) {
         setError(errMessage(err));
       }
     },
-    [load],
+    [load, rootOfTurn],
   );
 
   // Cycle a node's branch switcher: 0 = main line, 1..n = branches.
@@ -335,24 +314,28 @@ export function useConversation(reloadSignal: number) {
     });
   }, []);
 
-  // Recomputed when the tree (version) or selection changes.
-  void version;
-  const steps = computePath(indexRef.current.childrenOf, selection);
-  const path: PathEntry[] = steps.map((s) => {
-    const children = indexRef.current.childrenOf.get(s.node.id) ?? [];
-    const f = forkOf(children, selection.get(s.node.id));
-    const fork: ForkInfo | null = f
-      ? {
-          parentId: s.node.id,
-          current: f.current,
-          total: f.total,
-          paragraphIndex: f.paragraphIndex,
-        }
-      : null;
-    return { ...s, fork };
-  });
-  const activeIds = new Set(path.map((e) => e.node.id));
-  const activeLeafId = path.length ? path[path.length - 1].node.id : null;
+  // Recomputed only when the tree (version) or selection changes — TreeMap
+  // and ChatView get referentially stable values between those changes.
+  const { path, activeIds, activeLeafId } = useMemo(() => {
+    const steps = computePath(indexRef.current.childrenOf, selection);
+    const path: PathEntry[] = steps.map((s) => {
+      const children = indexRef.current.childrenOf.get(s.node.id) ?? [];
+      const f = forkOf(children, selection.get(s.node.id));
+      const fork: ForkInfo | null = f
+        ? {
+            parentId: s.node.id,
+            current: f.current,
+            total: f.total,
+            paragraphIndex: f.paragraphIndex,
+          }
+        : null;
+      return { ...s, fork };
+    });
+    const activeIds = new Set(path.map((e) => e.node.id));
+    const activeLeafId = path.length ? path[path.length - 1].node.id : null;
+    return { path, activeIds, activeLeafId };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version, selection]);
   // Kept in a ref so `send` (a stable callback) always reads the current leaf.
   leafRef.current = activeLeafId;
 
@@ -370,11 +353,17 @@ export function useConversation(reloadSignal: number) {
     status,
     send,
     branch,
-    switchSibling,
+    stopGeneration,
     cycleFork,
     selectPathTo,
+    startNewChat,
+    rootOfTurn,
+    promote,
     remove,
     renameTurn,
     reload: load,
   };
 }
+
+/** Everything the conversation screens share (lifted to the app shell). */
+export type Conversation = ReturnType<typeof useConversation>;

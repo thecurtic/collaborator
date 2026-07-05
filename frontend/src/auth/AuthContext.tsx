@@ -27,6 +27,13 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+function isAuthError(err: unknown): boolean {
+  return (
+    err instanceof ApiRequestError &&
+    (err.status === 403 || err.status === 401)
+  );
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [gate, setGate] = useState<Gate>('checking');
 
@@ -43,9 +50,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelled) setGate('open');
       } catch (err) {
         if (cancelled) return;
-        // Only an actual 403 means "needs passkey". Network/other errors leave
-        // the app open so the chat + health indicator can surface them instead.
-        if (err instanceof ApiRequestError && err.status === 403) {
+        // Only an actual 403/401 means "needs passkey". Network/other errors
+        // leave the app open so the chat + health indicator surface them.
+        if (isAuthError(err)) {
           setGate('locked');
         } else {
           setGate('open');
@@ -68,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { ok: true };
       } catch (err) {
         clearPasskey(); // also cleared by notifyForbidden on 403; harmless
-        if (err instanceof ApiRequestError && err.status === 403) {
+        if (isAuthError(err)) {
           return {
             ok: false,
             error: 'Invalid or expired passkey. Please try again.',

@@ -1,7 +1,6 @@
 import type {
   ApiHealth,
   ApiRecall,
-  ApiSendMessageResponse,
   ApiTree,
   ApiTreeNode,
   ApiTurn,
@@ -11,24 +10,28 @@ import type {
   ConversationTree,
   HealthStatus,
   RecallBlock,
-  SendMessageResult,
   TreeNode,
   Turn,
   TurnsPage,
 } from './models';
 
-/** Map a tree node's stored recall (or the recall SSE event) to a RecallBlock. */
+/**
+ * Map a tree node's stored recall (or the recall SSE event) to a RecallBlock.
+ * Defensive per-field checks: SSE payloads arrive unvalidated.
+ */
 export function toRecallBlock(api: ApiRecall): RecallBlock {
+  const raw = Array.isArray(api.sources) ? api.sources : [];
   return {
     content: typeof api.content === 'string' ? api.content : '',
-    sources: (api.sources ?? []).map((s) => ({
-      turnId: s.turn_id,
-      role: s.role ?? '',
-      tags: s.tags ?? [],
-      branchRootId: s.branch_root_id ?? null,
-      similarity: s.similarity ?? 0,
-      score: s.score ?? 0,
-      preview: s.preview ?? '',
+    sources: raw.map((s) => ({
+      turnId: typeof s.turn_id === 'number' ? s.turn_id : 0,
+      role: typeof s.role === 'string' ? s.role : '',
+      tags: Array.isArray(s.tags) ? s.tags : [],
+      branchRootId:
+        typeof s.branch_root_id === 'number' ? s.branch_root_id : null,
+      similarity: typeof s.similarity === 'number' ? s.similarity : 0,
+      score: typeof s.score === 'number' ? s.score : 0,
+      preview: typeof s.preview === 'string' ? s.preview : '',
     })),
   };
 }
@@ -79,6 +82,8 @@ export function toTreeNode(api: ApiTreeNode): TreeNode {
     contextBoundary: api.context_boundary === true,
     branched: api.branched === true,
     name: typeof api.name === 'string' ? api.name : null,
+    // Unknown/absent state → treat as an established conversation.
+    state: api.state === 'seed' ? 'seed' : 'tree',
     recall: api.recall ? toRecallBlock(api.recall) : null,
     children: (api.children ?? []).map(toTreeNode),
   };
@@ -106,17 +111,4 @@ export function toTurnsPage(api: ApiTurnsResponse): TurnsPage {
 
 export function toHealth(api: ApiHealth): HealthStatus {
   return { status: api.status, version: api.version };
-}
-
-export function toSendResult(api: ApiSendMessageResponse): SendMessageResult {
-  return {
-    id: api.id,
-    userId: api.user_id,
-    message: api.message,
-    response: api.response,
-    committed: api.committed,
-    contextTurnsUsed: api.context_turns_used?.map(toTurn),
-    systemPrompt: api.system_prompt,
-    agentsMd: api.agents_md_content,
-  };
 }

@@ -1,5 +1,11 @@
 import { GitBranch, Loader2, Mic, SendHorizontal, Square, X } from 'lucide-react';
-import { type FormEvent, type KeyboardEvent, useState } from 'react';
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
 import { getSttEngine } from '@/features/settings/uiPrefs';
@@ -9,44 +15,65 @@ import { useWakeLock } from '@/features/voice/useWakeLock';
 
 interface ComposerProps {
   disabled: boolean;
-  onSend: (message: string) => void;
+  /** Resolves false if the send failed — the draft is then restored. */
+  onSend: (message: string) => Promise<boolean>;
+  /** Abort the in-flight response stream (shown as a stop button). */
+  onStop?: () => void;
   /** When set, the next send branches from this point (shown as a chip). */
   branchLabel?: string | null;
   onCancelBranch?: () => void;
 }
 
+const MAX_TEXTAREA_PX = 160; // matches max-h-40
+
 export function Composer({
   disabled,
   onSend,
+  onStop,
   branchLabel = null,
   onCancelBranch,
 }: ComposerProps) {
   const [value, setValue] = useState('');
   const [transcribing, setTranscribing] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
-  const { status: recStatus, error: recError, supported, start, stop } =
+  const { status: recStatus, error: recError, supported, start, stop, cancel } =
     useRecorder();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const recording = recStatus === 'recording';
   useWakeLock(recording || transcribing); // keep screen on while capturing
 
-  function submit() {
+  // Release the mic if we unmount mid-recording.
+  useEffect(() => () => cancel(), [cancel]);
+
+  // Grow with the content (up to max-h-40), shrink when cleared.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_PX)}px`;
+  }, [value]);
+
+  async function submit() {
     const trimmed = value.trim();
     if (!trimmed || disabled) return;
-    onSend(trimmed);
+    // Clear optimistically (the streaming bubble shows the text); restore the
+    // draft if the send fails so the message isn't lost.
     setValue('');
+    const ok = await onSend(trimmed);
+    if (!ok) setValue((v) => (v ? v : trimmed));
   }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    submit();
+    void submit();
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     // Enter sends; Shift+Enter inserts a newline.
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      submit();
+      void submit();
     }
   }
 
@@ -127,6 +154,7 @@ export function Composer({
         )}
 
         <textarea
+          ref={textareaRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -135,15 +163,29 @@ export function Composer({
           // text-base (16px) on mobile prevents iOS from auto-zooming on focus.
           className="max-h-40 min-h-[2.75rem] flex-1 resize-none rounded-xl border border-input bg-card px-3.5 py-3 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:rounded-md sm:py-2.5 sm:text-sm"
         />
-        <Button
-          type="submit"
-          size="icon"
-          disabled={disabled || !value.trim()}
-          aria-label="Send message"
-          className="h-11 w-11 shrink-0 rounded-xl sm:h-10 sm:w-10 sm:rounded-md"
-        >
-          <SendHorizontal className="h-5 w-5 sm:h-4 sm:w-4" />
-        </Button>
+        {disabled && onStop ? (
+          <Button
+            type="button"
+            size="icon"
+            variant="secondary"
+            onClick={onStop}
+            aria-label="Stop generating"
+            title="Stop generating"
+            className="h-11 w-11 shrink-0 rounded-xl sm:h-10 sm:w-10 sm:rounded-md"
+          >
+            <Square className="h-4 w-4" />
+          </Button>
+        ) : (
+          <Button
+            type="submit"
+            size="icon"
+            disabled={disabled || !value.trim()}
+            aria-label="Send message"
+            className="h-11 w-11 shrink-0 rounded-xl sm:h-10 sm:w-10 sm:rounded-md"
+          >
+            <SendHorizontal className="h-5 w-5 sm:h-4 sm:w-4" />
+          </Button>
+        )}
       </form>
     </div>
   );

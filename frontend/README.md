@@ -32,6 +32,21 @@ npm run build        # type-check + production build
 npm run typecheck    # types only
 ```
 
+## Microphone use (heads-up for self-hosters)
+
+Voice features are **local-first by design**, but the microphone is on in more
+situations than you might expect:
+
+- **Read-aloud keeps the mic on while speaking.** Tapping the speaker icon (or
+  any TTS playback) starts an on-device keyword spotter so you can say the
+  configured stop word (default "stop") to interrupt. This is intentional
+  barge-in, not surveillance — audio is processed locally by a TF.js model and
+  never leaves the device — but expect a mic permission prompt the first time.
+- **Call mode streams mic audio continuously** while listening. With the
+  on-device engine selected, transcription happens locally (Whisper via
+  Transformers.js); with the server engine, PCM audio is streamed to *your*
+  backend only.
+
 ## Architecture
 
 ```

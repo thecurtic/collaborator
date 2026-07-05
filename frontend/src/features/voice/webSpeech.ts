@@ -37,6 +37,7 @@ export class WebSpeechSession implements SpeechSession {
   constructor(
     private onIdle?: () => void,
     private onProgress?: (chars: number) => void,
+    private onFailed?: (start: number, end: number) => void,
   ) {}
 
   push(chunk: string): void {
@@ -51,8 +52,8 @@ export class WebSpeechSession implements SpeechSession {
   finish(): void {
     if (this.stopped) return;
     this.finished = true;
-    const rest = this.buffer.trim();
-    if (rest) this.queue.push(rest);
+    // Push the raw (untrimmed) tail so read-along char counts stay exact.
+    if (this.buffer.trim()) this.queue.push(this.buffer);
     this.buffer = '';
     this.pump();
   }
@@ -76,6 +77,7 @@ export class WebSpeechSession implements SpeechSession {
       return;
     }
     // This sentence is now being read — advance the read-along position.
+    // Sentences are verbatim slices, so raw lengths map 1:1 to original text.
     this.spokenChars += next.length;
     this.onProgress?.(this.spokenChars);
     const clean = sanitizeForSpeech(next);
@@ -88,12 +90,23 @@ export class WebSpeechSession implements SpeechSession {
     utter.rate = SPEECH_RATE;
     const voice = pickVoice();
     if (voice) utter.voice = voice;
+    const range: [number, number] = [
+      this.spokenChars - next.length,
+      this.spokenChars,
+    ];
     const done = () => {
       this.speaking = false;
       if (!this.stopped) this.pump();
     };
     utter.onend = done;
-    utter.onerror = done;
+    utter.onerror = (e) => {
+      // 'interrupted'/'canceled' come from our own stop(); anything else means
+      // this sentence genuinely wasn't spoken.
+      if (e.error !== 'interrupted' && e.error !== 'canceled') {
+        this.onFailed?.(range[0], range[1]);
+      }
+      done();
+    };
     window.speechSynthesis.speak(utter);
   }
 }

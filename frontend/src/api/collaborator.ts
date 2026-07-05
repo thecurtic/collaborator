@@ -3,15 +3,14 @@ import type {
   ConversationTree,
   HealthStatus,
   RecallBlock,
-  RecallSource,
   SendMessageInput,
-  SendMessageResult,
   TurnsPage,
 } from '@/domain/models';
-import { toHealth, toSendResult, toTree, toTurnsPage } from '@/domain/adapters';
+import { toHealth, toRecallBlock, toTree, toTurnsPage } from '@/domain/adapters';
 import { ApiRequestError, request, requestStream } from './http';
 import type {
   ApiHealth,
+  ApiRecall,
   ApiSendMessageResponse,
   ApiTranscription,
   ApiTree,
@@ -62,31 +61,6 @@ function parseSseData(line: string): Record<string, unknown> | null {
   }
 }
 
-/**
- * Consume an SSE stream from /api/messages or /api/branches: fire `onToken` per
- * token and return the assembled text plus the `done` event payload. Tolerates a
- * non-streaming JSON fallback.
- */
-function toRecallBlock(evt: Record<string, unknown>): RecallBlock {
-  const raw = Array.isArray(evt.sources) ? evt.sources : [];
-  const sources: RecallSource[] = raw.map((s) => {
-    const o = s as Record<string, unknown>;
-    return {
-      turnId: typeof o.turn_id === 'number' ? o.turn_id : 0,
-      role: typeof o.role === 'string' ? o.role : '',
-      tags: Array.isArray(o.tags) ? (o.tags as string[]) : [],
-      branchRootId: typeof o.branch_root_id === 'number' ? o.branch_root_id : null,
-      similarity: typeof o.similarity === 'number' ? o.similarity : 0,
-      score: typeof o.score === 'number' ? o.score : 0,
-      preview: typeof o.preview === 'string' ? o.preview : '',
-    };
-  });
-  return {
-    content: typeof evt.content === 'string' ? evt.content : '',
-    sources,
-  };
-}
-
 function firstString(evt: Record<string, unknown>, keys: string[]): string {
   for (const k of keys) {
     if (typeof evt[k] === 'string') return evt[k] as string;
@@ -128,7 +102,8 @@ async function consumeStream(
           text += evt.content;
           onToken(evt.content);
         } else if (evt.type === 'recall') {
-          onRecall?.(toRecallBlock(evt));
+          // toRecallBlock guards every field — SSE payloads are unvalidated.
+          onRecall?.(toRecallBlock(evt as unknown as ApiRecall));
         } else if (evt.type === 'status') {
           // Tool-calling: a live "what it's doing" line, e.g.
           // {"type":"status","tool":"recall_semantic","label":"Searching memory…"}
@@ -173,7 +148,6 @@ export interface CollaboratorApi {
    */
   verifyAuth(): Promise<void>;
   listTurns(params?: ListTurnsParams): Promise<TurnsPage>;
-  sendMessage(input: SendMessageInput): Promise<SendMessageResult>;
   /**
    * Send a message and stream the assistant response (SSE). `onToken` fires for
    * each incremental chunk; the promise resolves with final metadata once the
@@ -203,6 +177,11 @@ export interface CollaboratorApi {
   deleteTurn(turnId: number, subtree?: boolean): Promise<void>;
   /** Set (or clear, with an empty string) a turn's name. */
   renameTurn(turnId: number, name: string): Promise<void>;
+  /**
+   * Set a conversation's stage. Applies to the turn's ENTIRE subtree, so call
+   * it on the conversation's root to promote the whole chat (seed → tree).
+   */
+  setTurnState(turnId: number, state: 'seed' | 'tree'): Promise<void>;
 
   /** Transcribe recorded audio to text (Whisper, backend). */
   transcribe(audio: Blob, opts?: TranscribeOptions): Promise<string>;
@@ -233,20 +212,6 @@ class HttpCollaboratorApi implements CollaboratorApi {
       `/api/messages${qs ? `?${qs}` : ''}`,
     );
     return toTurnsPage(res);
-  }
-
-  async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
-    const res = await request<ApiSendMessageResponse>('/api/messages', {
-      method: 'POST',
-      body: JSON.stringify({
-        message: input.message,
-        context_turns: input.contextTurns,
-        commit: input.commit,
-        user_id: input.userId,
-        mode: input.mode,
-      }),
-    });
-    return toSendResult(res);
   }
 
   async sendMessageStream(
@@ -321,6 +286,13 @@ class HttpCollaboratorApi implements CollaboratorApi {
     await request<unknown>(`/api/turns/${turnId}/name`, {
       method: 'PATCH',
       body: JSON.stringify({ name }),
+    });
+  }
+
+  async setTurnState(turnId: number, state: 'seed' | 'tree'): Promise<void> {
+    await request<unknown>(`/api/turns/${turnId}/state`, {
+      method: 'PATCH',
+      body: JSON.stringify({ state }),
     });
   }
 

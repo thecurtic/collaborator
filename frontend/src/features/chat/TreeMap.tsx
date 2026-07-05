@@ -1,16 +1,17 @@
-import { Maximize2, Trash2, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Maximize2, Trash2 } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import type { ConversationTree, TreeNode } from '@/domain/models';
 
 interface TreeMapProps {
-  open: boolean;
+  /** The forest to draw (pass only promoted/tree-state roots). */
   tree: ConversationTree;
   activeIds: Set<number>;
   onSelect: (turnId: number) => void;
   onDeleteSubtree: (turnId: number) => void;
   onRename: (turnId: number, name: string) => void;
-  onClose: () => void;
+  /** "Go to conversation" — open the chat view on the selected branch. */
+  onOpenConversation: () => void;
 }
 
 const COL = 40; // px between branch columns
@@ -249,13 +250,12 @@ function dist(a: { x: number; y: number }, b: { x: number; y: number }) {
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 export function TreeMap({
-  open,
   tree,
   activeIds,
   onSelect,
   onDeleteSubtree,
   onRename,
-  onClose,
+  onOpenConversation,
 }: TreeMapProps) {
   const [selected, setSelected] = useState<Segment | null>(null);
   const [editing, setEditing] = useState<{ rootId: number; value: string } | null>(
@@ -270,14 +270,8 @@ export function TreeMap({
     null,
   );
 
+  // Rendered only as the active tab, so mount = visible (no open gate needed).
   const trees = useMemo(() => buildForest(tree, activeIds), [tree, activeIds]);
-
-  useEffect(() => {
-    if (!open) {
-      setSelected(null);
-      setEditing(null);
-    }
-  }, [open]);
 
   const layout = useMemo(() => {
     // A name label extends LABEL_HALF px on each side of its root column, so the
@@ -306,8 +300,6 @@ export function TreeMap({
       : 200;
     return { globalX, rowY, pos, width, height };
   }, [trees]);
-
-  if (!open) return null;
 
   const { globalX, rowY, pos, width, height } = layout;
 
@@ -372,29 +364,18 @@ export function TreeMap({
   };
 
   return (
-    <div className="pt-safe pb-safe px-safe fixed inset-0 z-50 flex flex-col bg-background">
-      <header className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h2 className="text-base font-semibold">Conversation map</h2>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Reset view"
-            onClick={() => setView({ x: 0, y: 0, scale: 1 })}
-            className="h-8 w-8"
-          >
-            <Maximize2 className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Close map"
-            onClick={onClose}
-            className="h-8 w-8"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+    <div className="flex h-full flex-col">
+      <header className="flex items-center justify-between border-b border-border px-4 py-2">
+        <h2 className="text-sm font-semibold">Conversations</h2>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Reset view"
+          onClick={() => setView({ x: 0, y: 0, scale: 1 })}
+          className="h-8 w-8"
+        >
+          <Maximize2 className="h-4 w-4" />
+        </Button>
       </header>
 
       <div
@@ -408,7 +389,7 @@ export function TreeMap({
       >
         {trees.length === 0 ? (
           <p className="py-12 text-center text-sm text-muted-foreground">
-            No conversation yet.
+            No conversations yet — promote a chat to see it here.
           </p>
         ) : (
           <div
@@ -543,7 +524,11 @@ export function TreeMap({
               onChange={(e) => setEditing({ ...editing, value: e.target.value })}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') commitName();
-                if (e.key === 'Escape') setEditing(null);
+                if (e.key === 'Escape') {
+                  // Claim the key: cancel the rename, don't close the map.
+                  e.stopPropagation();
+                  setEditing(null);
+                }
               }}
               placeholder="Tree name"
               className="min-h-[2.5rem] flex-1 rounded-md border border-input bg-background px-3 text-base text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
@@ -576,7 +561,11 @@ export function TreeMap({
               <Trash2 className="h-4 w-4" />
               Delete branch
             </Button>
-            <Button variant="secondary" className="flex-1" onClick={onClose}>
+            <Button
+              variant="secondary"
+              className="flex-1"
+              onClick={onOpenConversation}
+            >
               Go to conversation
             </Button>
           </div>

@@ -40,6 +40,16 @@ function ensureWorker(): { worker: Worker; ready: Promise<void> } {
     });
   });
 
+  // If init fails (offline, WebGPU/WASM hiccup), drop the singleton so the
+  // next attempt rebuilds the worker instead of reusing a dead one forever.
+  readyPromise.catch(() => {
+    if (worker === w) {
+      w.terminate();
+      worker = null;
+      readyPromise = null;
+    }
+  });
+
   // Route partial/final/error to whichever transcriber is currently active.
   w.addEventListener('message', (e: MessageEvent) =>
     activeInstance?.handle(e.data as WorkerMsg),

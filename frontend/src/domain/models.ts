@@ -41,6 +41,13 @@ export interface Turn {
   embeddingId?: number;
 }
 
+/**
+ * Conversation stage: `seed` = a provisional new chat (lives in the Chats
+ * staging list), `tree` = promoted to a full conversation (list + map). The
+ * whole conversation shares one state (inherited from the root).
+ */
+export type ConversationState = 'seed' | 'tree';
+
 /** A node in the conversation tree (GET /api/tree). */
 export interface TreeNode {
   id: number;
@@ -57,6 +64,8 @@ export interface TreeNode {
   branched: boolean;
   /** User-set name (used to name a conversation/branch by its root turn). */
   name: string | null;
+  /** Conversation stage (see ConversationState). Meaningful on roots. */
+  state: ConversationState;
   /** Recall block that this turn triggered (user turns only), or null. */
   recall: RecallBlock | null;
   children: TreeNode[];
@@ -131,16 +140,3 @@ export interface SendMessageInput {
   mode?: 'voice' | 'text';
 }
 
-export interface SendMessageResult {
-  id: number;
-  userId: string | null;
-  message: string;
-  response: string;
-  committed: boolean;
-  /** Turns the backend actually used as context for this response, if reported. */
-  contextTurnsUsed?: Turn[];
-  /** System prompt used for this response, if reported. */
-  systemPrompt?: string;
-  /** AGENTS.md content, if exposed by the backend. */
-  agentsMd?: string;
-}

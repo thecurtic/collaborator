@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { holdPwaUpdates } from '@/pwa';
 
 export type RecorderStatus = 'idle' | 'recording';
 
@@ -39,6 +40,9 @@ export function useRecorder() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  // While recording, pause PWA update checks (an auto-update reload would
+  // discard the capture). Released on stop/cancel.
+  const updateHoldRef = useRef<(() => void) | null>(null);
 
   const supported =
     typeof MediaRecorder !== 'undefined' &&
@@ -48,6 +52,8 @@ export function useRecorder() {
   const releaseStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    updateHoldRef.current?.();
+    updateHoldRef.current = null;
   }, []);
 
   const start = useCallback(async (): Promise<boolean> => {
@@ -67,6 +73,7 @@ export function useRecorder() {
       };
       rec.start();
       recorderRef.current = rec;
+      updateHoldRef.current = holdPwaUpdates();
       setStatus('recording');
       return true;
     } catch (err) {

@@ -58,19 +58,53 @@ export function splitParagraphs(text: string): Paragraph[] {
   return out;
 }
 
-/** Split off complete sentences from a buffer, returning the leftover tail. */
+/**
+ * Split off complete sentences from a buffer, returning the leftover tail.
+ *
+ * Sentences are VERBATIM contiguous slices of the input (whitespace included):
+ * every character lands in exactly one sentence or in `rest`, so summing
+ * sentence lengths gives exact read-along offsets into the original text.
+ * (A previous version collected regex matches instead — text between a failed
+ * match and the next match start, e.g. before "**bold.**", was silently
+ * dropped from speech.)
+ */
 export function extractSentences(buffer: string): {
   sentences: string[];
   rest: string;
 } {
-  const re = /[^.!?]*[.!?]+["')\]]*\s/g;
+  // Boundary = sentence punctuation, optional closing quotes/brackets/markdown
+  // markers, then whitespace.
+  const re = /[.!?]+["')\]*_~]*\s+/g;
   const sentences: string[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(buffer)) !== null) {
-    const sentence = match[0].trim();
-    if (sentence) sentences.push(sentence);
-    lastIndex = re.lastIndex;
+  let last = 0;
+  while (re.exec(buffer) !== null) {
+    sentences.push(buffer.slice(last, re.lastIndex));
+    last = re.lastIndex;
   }
-  return { sentences, rest: lastIndex > 0 ? buffer.slice(lastIndex) : buffer };
+  return { sentences, rest: buffer.slice(last) };
+}
+
+/** Strip a trailing command word (e.g. the spoken "go") from a transcript. */
+export function stripTrailingWord(text: string, word: string): string {
+  const t = text.trim();
+  if (!word) return t;
+  const re = new RegExp(`[\\s,.!?]*\\b${word}\\b[\\s,.!?]*$`, 'i');
+  return t.replace(re, '').trim();
+}
+
+/**
+ * Index of the paragraph containing the read-along position `readChars`
+ * (falls back to the last non-empty paragraph); -1 for empty text.
+ */
+export function currentParagraphIndex(text: string, readChars: number): number {
+  const paras = splitParagraphs(text);
+  const idx = paras.findIndex(
+    ({ text: p, start }) =>
+      p.trim() !== '' && readChars >= start && readChars < start + p.length,
+  );
+  if (idx !== -1) return idx;
+  for (let i = paras.length - 1; i >= 0; i--) {
+    if (paras[i].text.trim()) return i;
+  }
+  return -1;
 }

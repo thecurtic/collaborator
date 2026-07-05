@@ -69,8 +69,9 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
 
   if (!res.ok) {
     const message = await parseError(res);
-    // 403 = missing/invalid passkey: clear it and let the UI prompt re-auth.
-    if (res.status === 403) notifyForbidden();
+    // 403 (or 401, if a proxy/backend swaps codes) = missing/invalid passkey:
+    // clear it and let the UI prompt re-auth.
+    if (res.status === 403 || res.status === 401) notifyForbidden();
     throw new ApiRequestError(message, res.status);
   }
 

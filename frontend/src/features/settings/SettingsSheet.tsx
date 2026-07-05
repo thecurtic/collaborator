@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useModalA11y } from '@/lib/useModalA11y';
 import { KEYWORD_OPTIONS } from '@/features/voice/keywordSpotter';
 import { PIPER_VOICES } from '@/features/voice/piperVoices';
 import { webSpeechSupported } from '@/features/voice/speech';
@@ -36,13 +36,8 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
   const endWord = useEndWord();
   const stopWord = useStopWord();
 
-  // Close on Escape.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  // Focus trap + Escape-to-close + focus restore.
+  const dialogRef = useModalA11y<HTMLDivElement>(open, onClose);
 
   if (!open) return null;
 
@@ -53,7 +48,14 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
         onClick={onClose}
         className="absolute inset-0 bg-black/60"
       />
-      <div className="pb-safe relative max-h-[90vh] w-full overflow-y-auto rounded-t-2xl border border-border bg-card p-5 sm:max-w-md sm:rounded-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        tabIndex={-1}
+        className="pb-safe relative max-h-[90vh] w-full overflow-y-auto rounded-t-2xl border border-border bg-card p-5 outline-none sm:max-w-md sm:rounded-2xl"
+      >
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-base font-semibold">Settings</h2>
           <Button
@@ -71,7 +73,9 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
         <div className="space-y-3">
           <p className="text-sm font-medium">Voice commands</p>
           <p className="text-xs text-muted-foreground">
-            Spoken on-device. Limited to recognizable command words.
+            Spoken on-device. Limited to recognizable command words. Note: the
+            microphone stays on while the assistant reads aloud so the stop
+            word can interrupt it — audio never leaves this device.
           </p>
           <div className="grid grid-cols-2 gap-3">
             <label className="block">

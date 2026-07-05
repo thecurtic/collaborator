@@ -6,8 +6,14 @@ import {
   type SpeechSession,
 } from './speechUtils';
 
+interface SynthResult {
+  blob: Blob | null;
+  /** True when synthesis errored (vs. nothing speakable after sanitizing). */
+  failed: boolean;
+}
+
 interface Item {
-  promise: Promise<Blob | null>;
+  promise: Promise<SynthResult>;
   text: string;
 }
 
@@ -15,7 +21,9 @@ interface Item {
  * Piper speech session. Speaks streamed text sentence-by-sentence with pipelined
  * synthesis (the next sentence is synthesized while the current one plays) so
  * there are no gaps. Markdown is stripped before synthesis. `onProgress` reports
- * the cumulative count of original characters spoken (for read-along).
+ * the cumulative count of original characters spoken (for read-along);
+ * `onFailed` reports the [start, end) original-char range of a sentence that
+ * could not be synthesized.
  */
 export class SpeechQueue implements SpeechSession {
   private buffer = '';
@@ -31,6 +39,7 @@ export class SpeechQueue implements SpeechSession {
   constructor(
     private onIdle?: () => void,
     private onProgress?: (chars: number) => void,
+    private onFailed?: (start: number, end: number) => void,
   ) {}
 
   push(chunk: string): void {
@@ -45,8 +54,8 @@ export class SpeechQueue implements SpeechSession {
   finish(): void {
     if (this.stopped) return;
     this.finished = true;
-    const rest = this.buffer.trim();
-    if (rest) this.queue.push(rest);
+    // Push the raw (untrimmed) tail so read-along char counts stay exact.
+    if (this.buffer.trim()) this.queue.push(this.buffer);
     this.buffer = '';
     void this.pump();
   }
@@ -60,10 +69,13 @@ export class SpeechQueue implements SpeechSession {
     this.cleanup();
   }
 
-  private synth(text: string): Promise<Blob | null> {
+  private synth(text: string): Promise<SynthResult> {
     const clean = sanitizeForSpeech(text);
-    if (!clean) return Promise.resolve(null);
-    return synthesize(clean).catch(() => null);
+    if (!clean) return Promise.resolve({ blob: null, failed: false });
+    return synthesize(clean).then(
+      (blob) => ({ blob, failed: false }),
+      () => ({ blob: null, failed: true }),
+    );
   }
 
   private cleanup(): void {
@@ -89,15 +101,19 @@ export class SpeechQueue implements SpeechSession {
     }
 
     this.playing = true;
-    const blob = await item.promise;
+    const { blob, failed } = await item.promise;
     if (this.stopped) {
       this.playing = false;
       return;
     }
 
     // This sentence is now being read — advance the read-along position.
+    // Sentences are verbatim slices, so raw lengths map 1:1 to original text.
     this.spokenChars += item.text.length;
     this.onProgress?.(this.spokenChars);
+    if (failed) {
+      this.onFailed?.(this.spokenChars - item.text.length, this.spokenChars);
+    }
 
     // Pre-synthesize the following sentence while this one plays.
     const following = this.queue.shift();

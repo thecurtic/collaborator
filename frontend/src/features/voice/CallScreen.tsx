@@ -1,10 +1,19 @@
-import { Check, Loader2, Mic, PhoneOff, Volume2 } from 'lucide-react';
+import {
+  Check,
+  Loader2,
+  Mic,
+  PhoneOff,
+  RotateCcw,
+  Settings as SettingsIcon,
+  Volume2,
+} from 'lucide-react';
 import { useEffect, useRef, type Ref } from 'react';
 import { Button } from '@/components/ui/button';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
+import { useModalA11y } from '@/lib/useModalA11y';
 import { cn } from '@/lib/utils';
 import type { BranchTarget } from '@/features/chat/branchTarget';
-import { splitParagraphs } from './speechUtils';
+import { currentParagraphIndex, splitParagraphs } from './speechUtils';
 import { useCall, type CallPhase } from './useCall';
 import { useWakeLock } from './useWakeLock';
 
@@ -16,6 +25,44 @@ interface CallScreenProps {
   /** Active branch leaf to continue from when not branching. */
   activeLeafId?: number | null;
   onBranchConsumed?: () => void;
+  /** Fired after a spoken branch is created (the app promotes seed roots). */
+  onBranchCreated?: (parentTurnId: number) => void;
+  /** Open the settings sheet on top of the call (engine/voice/debug toggles). */
+  onOpenSettings?: () => void;
+}
+
+interface Range {
+  start: number;
+  end: number;
+}
+
+/**
+ * Split a paragraph into styled runs: spoken, not-yet-spoken (faded), and
+ * failed (red — TTS couldn't speak it). Offsets are absolute in the turn text.
+ */
+function paragraphRuns(
+  p: string,
+  pStart: number,
+  read: number,
+  failed: Range[],
+): { text: string; failed: boolean; read: boolean }[] {
+  const rel = (x: number) => Math.min(Math.max(x - pStart, 0), p.length);
+  const n = rel(read); // read boundary within this paragraph
+  const cuts = new Set<number>([0, p.length, n]);
+  for (const r of failed) {
+    cuts.add(rel(r.start));
+    cuts.add(rel(r.end));
+  }
+  const pts = [...cuts].sort((a, b) => a - b);
+  const runs: { text: string; failed: boolean; read: boolean }[] = [];
+  for (let k = 0; k < pts.length - 1; k++) {
+    const a = pts[k];
+    const b = pts[k + 1];
+    if (a >= b) continue;
+    const isFailed = failed.some((r) => rel(r.start) <= a && b <= rel(r.end));
+    runs.push({ text: p.slice(a, b), failed: isFailed, read: b <= n });
+  }
+  return runs;
 }
 
 const LABELS: Record<CallPhase, string> = {
@@ -32,6 +79,7 @@ function Turn({
   live,
   speaking,
   readChars,
+  failedRanges,
   onSkip,
   currentRef,
 }: {
@@ -41,6 +89,8 @@ function Turn({
   /** While true, render read-along (fade the not-yet-spoken remainder). */
   speaking?: boolean;
   readChars?: number;
+  /** Char ranges TTS failed to speak (shown red). Absolute in `text`. */
+  failedRanges?: Range[];
   /** Tap a paragraph to (re)speak from there. Assistant turns, when idle. */
   onSkip?: (paragraphIndex: number) => void;
   /** Attached to the paragraph currently being read (for follow-scroll). */
@@ -51,25 +101,13 @@ function Turn({
   let body;
   if (role === 'assistant' && onSkip) {
     // Tappable paragraphs (tap to (re)speak from here) with per-paragraph
-    // read-along fade while this turn is being spoken.
-    const read = readChars ?? 0;
+    // read-along fade while this turn is being spoken. Everything counts as
+    // "read" once the turn isn't speaking, except failed (red) ranges.
+    const read = speaking ? (readChars ?? 0) : text.length;
     const paras = splitParagraphs(text);
+    const failed = failedRanges ?? [];
     // The paragraph currently being read (for follow-scroll).
-    let currentIdx = -1;
-    if (speaking) {
-      currentIdx = paras.findIndex(
-        ({ text: p, start }) =>
-          p.trim() !== '' && read >= start && read < start + p.length,
-      );
-      if (currentIdx === -1) {
-        for (let i = paras.length - 1; i >= 0; i--) {
-          if (paras[i].text.trim()) {
-            currentIdx = i;
-            break;
-          }
-        }
-      }
-    }
+    const currentIdx = speaking ? currentParagraphIndex(text, read) : -1;
     body = (
       <div className="space-y-2">
         {paras.map(({ text: p, start }, i) =>
@@ -81,21 +119,17 @@ function Turn({
               title="Tap to play from here"
               className="cursor-pointer whitespace-pre-wrap text-[17px] leading-relaxed transition active:opacity-70"
             >
-              {(() => {
-                const n = speaking
-                  ? Math.min(Math.max(read - start, 0), p.length)
-                  : p.length;
-                return (
-                  <>
-                    <span className="text-foreground">{p.slice(0, n)}</span>
-                    {n < p.length && (
-                      <span className="text-foreground opacity-40">
-                        {p.slice(n)}
-                      </span>
-                    )}
-                  </>
-                );
-              })()}
+              {paragraphRuns(p, start, read, failed).map((r, k) => (
+                <span
+                  key={k}
+                  className={cn(
+                    r.failed ? 'text-destructive' : 'text-foreground',
+                    !r.failed && !r.read && 'opacity-40',
+                  )}
+                >
+                  {r.text}
+                </span>
+              ))}
             </p>
           ) : null,
         )}
@@ -130,6 +164,8 @@ export function CallScreen({
   branchTarget = null,
   activeLeafId = null,
   onBranchConsumed,
+  onBranchCreated,
+  onOpenSettings,
 }: CallScreenProps) {
   const {
     phase,
@@ -138,16 +174,36 @@ export function CallScreen({
     speakingId,
     spokenChars,
     speakBase,
+    failedRanges,
     error,
     logs,
     endTurn,
     end,
+    retry,
     skipTo,
-  } = useCall(open, onClose, branchTarget, activeLeafId, onBranchConsumed);
+  } = useCall(
+    open,
+    onClose,
+    branchTarget,
+    activeLeafId,
+    onBranchConsumed,
+    onBranchCreated,
+  );
   useWakeLock(open); // keep the screen on for the whole call
   const showDebug = useDebugEnabled();
   const bottomRef = useRef<HTMLDivElement>(null);
   const currentParaRef = useRef<HTMLParagraphElement>(null);
+  // Dialog semantics + focus trap. Deliberately NO Escape-to-close: a stray
+  // keypress must not end an active call — that's the red button's job.
+  const dialogRef = useModalA11y<HTMLDivElement>(open);
+
+  // Paragraph currently being read — scrolling keys off this (not every
+  // sentence tick) so the view doesn't judder mid-paragraph.
+  const speakingTurn =
+    speakingId != null ? transcript.find((t) => t.id === speakingId) : undefined;
+  const currentParaIdx = speakingTurn
+    ? currentParagraphIndex(speakingTurn.text, speakBase + spokenChars)
+    : -1;
 
   useEffect(() => {
     // While the agent speaks, keep the paragraph being read in view (centered);
@@ -160,7 +216,7 @@ export function CallScreen({
     } else {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
-  }, [transcript.length, partial, spokenChars, speakingId]);
+  }, [transcript.length, partial, currentParaIdx, speakingId]);
 
   if (!open) return null;
 
@@ -168,9 +224,27 @@ export function CallScreen({
   const busy = phase === 'connecting' || phase === 'processing';
 
   return (
-    <div className="pt-safe pb-safe px-safe fixed inset-0 z-50 flex flex-col bg-background">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Voice call"
+      tabIndex={-1}
+      className="pt-safe pb-safe px-safe fixed inset-0 z-50 flex flex-col bg-background outline-none"
+    >
       {/* Status indicator — kept up top so the transcript has room below. */}
-      <div className="flex flex-col items-center gap-2 border-b border-border px-4 py-4">
+      <div className="relative flex flex-col items-center gap-2 border-b border-border px-4 py-4">
+        {onOpenSettings && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Settings"
+            onClick={onOpenSettings}
+            className="absolute right-3 top-3 h-8 w-8 text-muted-foreground"
+          >
+            <SettingsIcon className="h-4 w-4" />
+          </Button>
+        )}
         <div className="relative flex h-16 w-16 items-center justify-center">
           <span
             className={cn(
@@ -215,6 +289,7 @@ export function CallScreen({
                 text={t.text}
                 speaking={isSpeaking}
                 readChars={speakBase + spokenChars}
+                failedRanges={failedRanges.filter((r) => r.turnId === t.id)}
                 currentRef={isSpeaking ? currentParaRef : undefined}
                 onSkip={
                   t.role === 'assistant'
@@ -250,6 +325,16 @@ export function CallScreen({
           >
             <Check className="h-4 w-4" />
             Done speaking
+          </Button>
+        )}
+        {phase === 'error' && (
+          <Button
+            variant="secondary"
+            onClick={retry}
+            className="h-12 gap-2 rounded-full px-5 active:scale-95"
+          >
+            <RotateCcw className="h-4 w-4" />
+            Try again
           </Button>
         )}
         <Button

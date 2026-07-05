@@ -1,21 +1,19 @@
-import { Brain, ChevronLeft, ChevronRight, Loader2, Network } from 'lucide-react';
+import { Brain, Loader2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/Markdown';
+import { useModalA11y } from '@/lib/useModalA11y';
 import type { RecallBlock } from '@/domain/models';
 import type { BranchTarget } from './branchTarget';
 import { Composer } from './Composer';
 import { TreeBubble } from './TreeBubble';
-import { TreeMap } from './TreeMap';
-import { useConversation } from './useConversation';
+import type { Conversation } from './useConversation';
 
 interface ChatViewProps {
-  /** Bumped to force a reload (e.g. after returning from call mode). */
-  reloadSignal?: number;
+  /** Conversation state/actions, owned by the app shell (shared with tabs). */
+  convo: Conversation;
   /** Shared with App so a call can fork from the same point. */
   branchTarget: BranchTarget | null;
   onBranchTargetChange: (b: BranchTarget | null) => void;
-  /** Reports the active branch leaf so a call continues the in-view branch. */
-  onActiveLeafChange: (id: number | null) => void;
 }
 
 interface BranchPoint {
@@ -61,16 +59,12 @@ function RecallCard({ recall }: { recall: RecallBlock }) {
 }
 
 export function ChatView({
-  reloadSignal = 0,
+  convo,
   branchTarget,
   onBranchTargetChange,
-  onActiveLeafChange,
 }: ChatViewProps) {
   const {
     path,
-    tree,
-    activeIds,
-    activeLeafId,
     loading,
     sending,
     error,
@@ -80,21 +74,19 @@ export function ChatView({
     status,
     send,
     branch,
-    switchSibling,
+    stopGeneration,
     cycleFork,
-    selectPathTo,
     remove,
-    renameTurn,
-  } = useConversation(reloadSignal);
+  } = convo;
   // Pending branch point awaiting a with/without-context choice.
   const [branchChoice, setBranchChoice] = useState<BranchPoint | null>(null);
-  const [mapOpen, setMapOpen] = useState(false);
+  const branchDialogRef = useModalA11y<HTMLDivElement>(branchChoice !== null, () =>
+    setBranchChoice(null),
+  );
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
-  // Entering a branch jumps to its tip; switching siblings keeps the view put.
-  const scrollTipRef = useRef(false);
   const suppressScrollRef = useRef(false);
 
   const handleScroll = () => {
@@ -103,58 +95,25 @@ export function ChatView({
     pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
-  // Jump to the newest message on load / reload / return.
+  // Jump to the newest message when the screen opens (mount) / finishes loading.
   useLayoutEffect(() => {
     if (!loading) {
       pinnedRef.current = true;
       bottomRef.current?.scrollIntoView({ block: 'end' });
     }
-  }, [loading, reloadSignal]);
+  }, [loading]);
 
   // Follow new/streaming content while pinned to the bottom — but not when
-  // switching siblings (keep the tapped toggle under the finger).
+  // switching branch forks (keep the tapped toggle under the finger).
   useEffect(() => {
     if (suppressScrollRef.current) {
       suppressScrollRef.current = false;
       return;
     }
-    if (!loading && pinnedRef.current && !scrollTipRef.current) {
+    if (!loading && pinnedRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
   }, [path.length, streaming?.reply, sending, loading]);
-
-  // After entering a branch, jump to the branch tip (bottom of the new path).
-  useEffect(() => {
-    if (scrollTipRef.current) {
-      bottomRef.current?.scrollIntoView({ block: 'end' });
-      scrollTipRef.current = false;
-    }
-  });
-
-  // Keep App informed of the active leaf so a call continues the in-view branch.
-  useEffect(() => {
-    onActiveLeafChange(activeLeafId);
-  }, [activeLeafId, onActiveLeafChange]);
-
-  // Tapping a branch in the map makes it active (map stays open, highlight
-  // follows); closing the map jumps to the active branch's tip.
-  const selectBranch = (id: number) => {
-    selectPathTo(id);
-  };
-  const closeMap = () => {
-    pinnedRef.current = true;
-    scrollTipRef.current = true;
-    setMapOpen(false);
-  };
-
-  const switchAt = (
-    parentId: number,
-    siblings: Parameters<typeof switchSibling>[1],
-    dir: 1 | -1,
-  ) => {
-    suppressScrollRef.current = true;
-    switchSibling(parentId, siblings, dir);
-  };
 
   // Cycle a node's branch fork (keeps the tapped button under the finger).
   const switchFork = (parentId: number, dir: 1 | -1) => {
@@ -162,18 +121,19 @@ export function ChatView({
     cycleFork(parentId, dir);
   };
 
-  const handleSend = (message: string) => {
+  // Resolves false on failure so the composer can restore the lost draft.
+  const handleSend = (message: string): Promise<boolean> => {
     if (branchTarget) {
-      branch(
+      const result = branch(
         branchTarget.turnId,
         message,
         branchTarget.paragraphIndex,
         branchTarget.withContext,
       );
       onBranchTargetChange(null);
-    } else {
-      send(message);
+      return result;
     }
+    return send(message);
   };
 
   // Tapping a branch button asks with/without context first.
@@ -196,14 +156,6 @@ export function ChatView({
     }
   };
 
-  const handleDeleteSubtree = (turnId: number) => {
-    if (
-      window.confirm('Delete this branch and all its replies? This is permanent.')
-    ) {
-      void remove(turnId, true);
-    }
-  };
-
   // A without-context branch is a fresh chat: show only from its start (the most
   // recent branched context-boundary on the path) down to the tip, hiding the
   // prior thread that the model can't see anyway.
@@ -223,27 +175,6 @@ export function ChatView({
 
   return (
     <div className="relative flex h-full flex-col">
-      {!loading && (
-        <button
-          type="button"
-          aria-label="Conversation map"
-          title="Conversation map"
-          onClick={() => setMapOpen(true)}
-          className="absolute right-3 top-3 z-10 rounded-full border border-border bg-card p-2 text-muted-foreground shadow-sm hover:text-foreground active:scale-95"
-        >
-          <Network className="h-4 w-4" />
-        </button>
-      )}
-      <TreeMap
-        open={mapOpen}
-        tree={tree}
-        activeIds={activeIds}
-        onSelect={selectBranch}
-        onDeleteSubtree={handleDeleteSubtree}
-        onRename={renameTurn}
-        onClose={closeMap}
-      />
-
       {/* Branch context choice. */}
       {branchChoice && (
         <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
@@ -252,7 +183,14 @@ export function ChatView({
             onClick={() => setBranchChoice(null)}
             className="absolute inset-0 bg-black/60"
           />
-          <div className="pb-safe relative w-full rounded-t-2xl border border-border bg-card p-5 sm:max-w-sm sm:rounded-2xl">
+          <div
+            ref={branchDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Branch from here"
+            tabIndex={-1}
+            className="pb-safe relative w-full rounded-t-2xl border border-border bg-card p-5 outline-none sm:max-w-sm sm:rounded-2xl"
+          >
             <p className="mb-1 text-sm font-medium">Branch from here</p>
             <p className="mb-4 truncate text-xs text-muted-foreground">
               {branchChoice.label}
@@ -299,71 +237,40 @@ export function ChatView({
                 Start a conversation
               </p>
               <p className="mt-1 text-sm">
-                Collaborator remembers what matters. Say something below.
+                New chats start as seeds — promote the good ones later.
               </p>
             </div>
           ) : (
-            <>
-              {/* Root-level branches (multiple conversation roots). Hidden inside
-                  a fresh (without-context) chat. */}
-              {freshStart === 0 && path[0] && path[0].siblings.length > 1 && (
-                <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
-                  <button
-                    type="button"
-                    aria-label="Previous branch"
-                    onClick={() => switchAt(0, path[0].siblings, -1)}
-                    className="rounded p-1 hover:text-foreground active:scale-90"
-                  >
-                    <ChevronLeft className="h-5 w-5" />
-                  </button>
-                  <span>
-                    {path[0].siblings.findIndex((s) => s.id === path[0].node.id) +
-                      1}{' '}
-                    / {path[0].siblings.length}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Next branch"
-                    onClick={() => switchAt(0, path[0].siblings, 1)}
-                    className="rounded p-1 hover:text-foreground active:scale-90"
-                  >
-                    <ChevronRight className="h-5 w-5" />
-                  </button>
+            displayPath.map((entry, i) => {
+              // The switcher (incl. the empty "continue here" slot) is computed
+              // per node in useConversation; highlight its source paragraph.
+              const fork = entry.fork
+                ? {
+                    paragraphIndex: entry.fork.paragraphIndex,
+                    current: entry.fork.current,
+                    total: entry.fork.total,
+                    onPrev: () => switchFork(entry.node.id, -1),
+                    onNext: () => switchFork(entry.node.id, 1),
+                  }
+                : undefined;
+              return (
+                <div
+                  key={entry.node.id}
+                  data-tid={entry.node.id}
+                  className="flex flex-col gap-3 sm:gap-4"
+                >
+                  <TreeBubble
+                    node={entry.node}
+                    onBranch={handleBranch}
+                    onDelete={handleDelete}
+                    fork={fork}
+                    inContext={i >= inCtxStart}
+                  />
+                  {/* This turn's stored recall (between the message and reply). */}
+                  {entry.node.recall && <RecallCard recall={entry.node.recall} />}
                 </div>
-              )}
-              {displayPath.map((entry, i) => {
-                // The switcher (incl. the empty "continue here" slot) is computed
-                // per node in useConversation; highlight its source paragraph.
-                const fork = entry.fork
-                  ? {
-                      paragraphIndex: entry.fork.paragraphIndex,
-                      current: entry.fork.current,
-                      total: entry.fork.total,
-                      onPrev: () => switchFork(entry.node.id, -1),
-                      onNext: () => switchFork(entry.node.id, 1),
-                    }
-                  : undefined;
-                return (
-                  <div
-                    key={entry.node.id}
-                    data-tid={entry.node.id}
-                    className="flex flex-col gap-3 sm:gap-4"
-                  >
-                    <TreeBubble
-                      node={entry.node}
-                      onBranch={handleBranch}
-                      onDelete={handleDelete}
-                      fork={fork}
-                      inContext={i >= inCtxStart}
-                    />
-                    {/* This turn's stored recall (between the message and reply). */}
-                    {entry.node.recall && (
-                      <RecallCard recall={entry.node.recall} />
-                    )}
-                  </div>
-                );
-              })}
-            </>
+              );
+            })
           )}
 
           {/* Optimistic streaming overlay while a send/branch is in flight. */}
@@ -412,6 +319,7 @@ export function ChatView({
         <Composer
           disabled={sending}
           onSend={handleSend}
+          onStop={stopGeneration}
           branchLabel={
             branchTarget
               ? `${branchTarget.label}${branchTarget.withContext ? '' : ' · no context'}`

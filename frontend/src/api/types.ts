@@ -77,6 +77,8 @@ export interface ApiTreeNode {
   branched?: boolean;
   /** User-set name (conversation/branch naming); null/absent = unnamed. */
   name?: string | null;
+  /** Conversation stage: "seed" (provisional chat) or "tree" (promoted). */
+  state?: string;
   children: ApiTreeNode[];
 }
 
@@ -96,15 +98,7 @@ export interface ApiTurnsResponse {
   context_turns_used?: number;
 }
 
-/** POST /api/messages request body. */
-export interface ApiSendMessageRequest {
-  message: string;
-  context_turns?: number;
-  commit?: boolean;
-  user_id?: string;
-}
-
-/** POST /api/messages 201 response. */
+/** POST /api/messages 201 response (non-streaming fallback). */
 export interface ApiSendMessageResponse {
   id: number;
   user_id: string | null;
@@ -117,12 +111,6 @@ export interface ApiSendMessageResponse {
   system_prompt?: string;
   /** AGENTS.md content, if the backend exposes it (may be absent/empty). */
   agents_md_content?: string;
-}
-
-/** DELETE /api/messages/{turn_id} 200 response. */
-export interface ApiDiscardResponse {
-  id: number;
-  committed: boolean;
 }
 
 /** POST /api/transcribe response. */
