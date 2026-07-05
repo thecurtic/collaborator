@@ -241,6 +241,48 @@ def test_messages_continue_from_active_leaf():
     print("✓ /api/messages continues from the active leaf (parent_turn_id)")
 
 
+def test_state_seed_promote_and_filter():
+    """New chats are seeds; continuations/branches inherit; promote flips the subtree."""
+    main, db = _fresh_env()
+    from starlette.testclient import TestClient
+    import json as _json
+    main.stream_llm_tokens = lambda *a, **k: iter(["ok"])
+    c = TestClient(main.app)
+    def done(r):
+        return [_json.loads(l[6:]) for l in r.text.splitlines()
+                if l.startswith("data: ") and '"done"' in l][0]
+
+    # New root chat -> seed by default.
+    d1 = done(c.post("/api/messages", json={"message": "new chat"}))
+    root = d1["user_turn_id"]
+    nodes = {n["id"]: n for n in c.get("/api/tree").json()["roots"]}
+    assert nodes[root]["state"] == "seed"
+
+    # Continuation inherits seed.
+    d2 = done(c.post("/api/messages", json={"message": "more", "parent_turn_id": d1["id"]}))
+    # A branch also inherits seed.
+    done(c.post(f"/api/branches/{d1['id']}", json={"message": "branchy"}))
+
+    # Filter: this seed shows under ?state=seed, not ?state=tree.
+    assert any(r["id"] == root for r in c.get("/api/tree?state=seed").json()["roots"])
+    assert not any(r["id"] == root for r in c.get("/api/tree?state=tree").json()["roots"])
+
+    # Promote the whole subtree seed -> tree.
+    pr = c.patch(f"/api/turns/{root}/state", json={"state": "tree"})
+    assert pr.status_code == 200 and len(pr.json()["updated_turn_ids"]) >= 4  # root+reply+cont+branch...
+    tree_roots = c.get("/api/tree?state=tree").json()["roots"]
+    assert any(r["id"] == root and r["state"] == "tree" for r in tree_roots)
+    # descendants promoted too
+    def all_nodes(rs, acc):
+        for n in rs:
+            acc[n["id"]] = n; all_nodes(n["children"], acc)
+        return acc
+    acc = all_nodes(tree_roots, {})
+    assert all(n["state"] == "tree" for n in acc.values())
+    assert c.patch("/api/turns/999999/state", json={"state": "tree"}).status_code == 404
+    print("✓ state: new=seed, inherit, promote subtree, filter, 404")
+
+
 def test_turn_name_endpoint_and_tree():
     """PATCH /api/turns/{id}/name sets node.name; clearing and 404 work."""
     main, db = _fresh_env()
@@ -318,6 +360,7 @@ if __name__ == "__main__":
     test_delete_reparent_vs_subtree()
     test_branched_flag_distinguishes_fork_from_continuation()
     test_messages_continue_from_active_leaf()
+    test_state_seed_promote_and_filter()
     test_turn_name_endpoint_and_tree()
     test_no_context_branch_shares_internal_context()
     test_tree_exposes_context_window_and_boundary()

@@ -80,6 +80,10 @@ X-Passkey: <your-passkey>
 
 **Fields:**
 - `message` (required): User's input text
+- `state` (optional, new root only): conversation stage for a brand-new chat —
+  `"seed"` (default) or `"tree"`. New chats start as **seeds** (they live in the
+  new-chats list); promote them to `"tree"` later. Ignored on continuations/branches,
+  which **inherit** the parent's state.
 - `parent_turn_id` (optional): **The active leaf to continue from.** Context is built
   from this turn's ancestor chain and the new turns chain off it — this is how the
   backend knows which branch is active. **Omit it only to start a fresh root
@@ -326,6 +330,12 @@ parent it branched from. `preview` is a single-line label.
   explicit fork), `false` for `POST /api/messages` continuations. Use it to render the
   fork switcher even when a with-context branch shares the parent of a continuation
   (otherwise the two are structurally identical).
+- `state` (string): conversation stage — `"seed"` (a new provisional chat, shown in
+  the new-chats list) or `"tree"` (a promoted full conversation, shown in the map).
+  Filter the tree by stage with `GET /api/tree?state=seed` (new-chats list) or
+  `GET /api/tree?state=tree` (main map). Promote with `PATCH /api/turns/{id}/state`
+  (below). All turns in a conversation share the same state (inherited on
+  continuation/branch; set across the subtree on promote).
 - `name` (string | null): a user-set display name for the turn (used to name a
   conversation/branch by naming its root turn). `null` = unnamed. Set via
   `PATCH /api/turns/{turn_id}/name` with `{ "name": "..." }` (empty/whitespace clears
@@ -399,6 +409,26 @@ boosts):
 { "turn_id": 15, "tags": ["concept", "decision"] }
 ```
 `404` if the turn doesn't exist.
+
+---
+
+### 9. Promote a Chat (seed → tree)
+```
+PATCH /api/turns/{turn_id}/state
+{ "state": "tree" }
+-> 200 { "turn_id": 12, "state": "tree", "updated_turn_ids": [12,13,14, ...] }
+```
+Sets the conversation stage for the turn and its **entire subtree**, so promoting a
+seed's root promotes the whole conversation. `404` if the turn doesn't exist.
+
+New chats are created as **`seed`** (see `state` on `POST /api/messages`); promote them
+to **`tree`** when they become real conversations. Filter the tree by stage with
+`GET /api/tree?state=seed` (new-chats list) / `GET /api/tree?state=tree` (main map).
+
+> **Upgrade triggers are the frontend's call.** Typical choices: a conscious user
+> "upgrade" action, or automatically when a seed chat is branched from. The backend
+> just provides this endpoint — call it whenever your UX decides a seed has become a
+> real conversation.
 
 > Setup: embeddings run locally on the backend by default (`fastembed`, downloads a
 > small model once). Enable via `recall.enabled` or the per-request `recall` flag.

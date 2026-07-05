@@ -11,7 +11,7 @@ from contextlib import contextmanager
 TURN_COLUMNS = [
     "id", "user_id", "role", "content", "context_turns", "committed",
     "created_at", "model_name", "token_count", "tags",
-    "parent_turn_id", "paragraph_index", "branched", "name",
+    "parent_turn_id", "paragraph_index", "branched", "name", "state",
 ]
 _SELECT_COLS = ", ".join(TURN_COLUMNS)
 
@@ -101,6 +101,7 @@ def ensure_conversation_schema(conn) -> None:
             paragraph_index INTEGER,
             branched INTEGER NOT NULL DEFAULT 0,
             name TEXT,
+            state TEXT NOT NULL DEFAULT 'seed',
             recall_content TEXT,
             recall_sources TEXT,
             embedding BLOB,
@@ -151,6 +152,8 @@ def _migrate_turns_branching(conn) -> None:
         cursor.execute("ALTER TABLE turns ADD COLUMN branched INTEGER NOT NULL DEFAULT 0")
     if "name" not in existing:
         cursor.execute("ALTER TABLE turns ADD COLUMN name TEXT")
+    if "state" not in existing:
+        cursor.execute("ALTER TABLE turns ADD COLUMN state TEXT NOT NULL DEFAULT 'seed'")
     if "recall_content" not in existing:
         cursor.execute("ALTER TABLE turns ADD COLUMN recall_content TEXT")
     if "recall_sources" not in existing:
@@ -225,24 +228,26 @@ def create_turn(
     parent_turn_id: Optional[int] = None,
     paragraph_index: Optional[int] = None,
     branched: bool = False,
+    state: str = "seed",
 ) -> dict:
     """Create a new turn in the database.
 
     parent_turn_id is the fork point this turn descends from (None = root).
     paragraph_index, when set, records which paragraph of the parent turn the
     branch was taken from. branched=True marks a turn created via an explicit
-    fork (POST /api/branches) so it's distinguishable from a continuation.
+    fork (POST /api/branches). state is the conversation stage: "seed" (a new
+    provisional chat) or "tree" (a promoted full conversation).
     """
     cursor = db.cursor()
     cursor.execute(
         """
         INSERT INTO turns
             (user_id, role, content, context_turns, committed, model_name,
-             token_count, parent_turn_id, paragraph_index, branched)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             token_count, parent_turn_id, paragraph_index, branched, state)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (user_id, role, content, context_turns, committed, model_name,
-         token_count, parent_turn_id, paragraph_index, 1 if branched else 0)
+         token_count, parent_turn_id, paragraph_index, 1 if branched else 0, state)
     )
     db.commit()
 
@@ -643,6 +648,35 @@ def update_turn_tags(db, turn_id: int, add: Optional[List[str]] = None,
     cursor.execute("UPDATE turns SET tags = ? WHERE id = ?", (_json.dumps(new_tags), turn_id))
     db.commit()
     return new_tags
+
+
+def update_subtree_state(db, turn_id: int, state: str):
+    """Set the conversation `state` for a turn and its whole subtree.
+
+    Used to promote a seed to a tree (or back). Returns (found, updated_ids).
+    """
+    cursor = db.cursor()
+    if cursor.execute("SELECT 1 FROM turns WHERE id = ?", (turn_id,)).fetchone() is None:
+        return False, []
+
+    ids: List[int] = []
+    frontier = [turn_id]
+    seen = set()
+    while frontier:
+        current = frontier.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        ids.append(current)
+        for (cid,) in cursor.execute(
+            "SELECT id FROM turns WHERE parent_turn_id = ?", (current,)
+        ).fetchall():
+            frontier.append(cid)
+
+    cursor.executemany("UPDATE turns SET state = ? WHERE id = ?",
+                       [(state, i) for i in ids])
+    db.commit()
+    return True, sorted(ids)
 
 
 def update_turn_name(db, turn_id: int, name: Optional[str]):

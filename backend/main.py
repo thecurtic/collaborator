@@ -17,8 +17,8 @@ from db import (
     init_db, create_turn, get_recent_turns, get_turn_by_id, delete_turn,
     get_ancestor_chain, get_turn_tree,
     search_similar_turns, search_keyword_turns, set_turn_embedding, update_turn_tags,
-    update_turn_name, set_current_recall, get_current_recall, set_turn_recall,
-    get_turns_missing_embeddings,
+    update_turn_name, update_subtree_state, set_current_recall, get_current_recall,
+    set_turn_recall, get_turns_missing_embeddings,
 )
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
@@ -63,6 +63,9 @@ class UserMessage(BaseModel):
     user_id: Optional[str] = None
     # Run recall for this turn. None = use config default (recall.enabled).
     recall: Optional[bool] = None
+    # Conversation stage for a NEW root chat: "seed" (default) or "tree".
+    # Ignored on continuations/branches, which inherit the parent's state.
+    state: Optional[str] = None
     # "voice" = turn came from call mode (spoken); absent/"text" = normal chat.
     # On voice turns the system prompt is augmented for spoken-style output.
     mode: Optional[str] = None
@@ -111,6 +114,10 @@ class TagsRequest(BaseModel):
 
 class NameRequest(BaseModel):
     name: Optional[str] = None
+
+
+class StateRequest(BaseModel):
+    state: str
 
 
 def get_passkey_from_header(passkey: Optional[str] = Header(None, alias="X-Passkey")) -> str:
@@ -418,6 +425,7 @@ def _stream_turn_response(
     paragraph_index: Optional[int],
     tools_enabled: bool = False,
     branched: bool = False,
+    state: str = "seed",
 ):
     """Build the SSE generator that streams the reply and persists both turns.
 
@@ -436,7 +444,7 @@ def _stream_turn_response(
             # Turns already in the context window are excluded from recall searches
             # (the model is seeing them anyway).
             context_ids = [t["id"] for t in (context_list or []) if t.get("id") is not None]
-            schemas, execute, state = _build_tools(db_path, exclude_ids=context_ids)
+            schemas, execute, tool_state = _build_tools(db_path, exclude_ids=context_ids)
             tcfg = _tools_settings()
             try:
                 for ev in generate_with_tools(
@@ -454,9 +462,9 @@ def _stream_turn_response(
             except Exception as e:
                 yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
                 return
-            synthesis_block = state.get("synthesis") or None
+            synthesis_block = tool_state.get("synthesis") or None
             if synthesis_block:
-                synthesis_sources = _recall_sources(state.get("last_matches") or [])
+                synthesis_sources = _recall_sources(tool_state.get("last_matches") or [])
         else:
             try:
                 for content in stream_llm_tokens(message, context_list, mode=mode):
@@ -473,12 +481,13 @@ def _stream_turn_response(
                     conn, user_id=user_id, role="user", content=message,
                     context_turns=context_turns, committed=commit,
                     parent_turn_id=user_parent_id, paragraph_index=paragraph_index,
-                    branched=branched,
+                    branched=branched, state=state,
                 )
                 assistant_turn = create_turn(
                     conn, user_id=user_id, role="assistant", content=full_response,
                     context_turns=context_turns, committed=commit,
                     parent_turn_id=user_turn["id"], paragraph_index=None,
+                    state=state,
                 )
                 # Persist a synthesized recall block on the user turn (per-branch).
                 if synthesis_block:
@@ -546,11 +555,16 @@ async def send_message(
         conn = sqlite3.connect(db_path)
         try:
             if parent_id is not None:
-                if get_turn_by_id(conn, parent_id) is None:
+                parent = get_turn_by_id(conn, parent_id)
+                if parent is None:
                     raise HTTPException(status_code=404, detail=f"parent_turn_id {parent_id} not found")
                 context_list = get_ancestor_chain(conn, parent_id, limit=ctx_turns)
+                # Continuations inherit the conversation's stage.
+                turn_state = parent.get("state") or "seed"
             else:
                 context_list = []
+                # A new root chat is a seed by default (frontend may override).
+                turn_state = request.state or "seed"
         finally:
             conn.close()
 
@@ -565,6 +579,7 @@ async def send_message(
             user_parent_id=parent_id,
             paragraph_index=None,
             tools_enabled=_tools_enabled(request.recall),
+            state=turn_state,
         )
         return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -608,6 +623,7 @@ async def create_branch(
                     )
 
             context_list = get_ancestor_chain(conn, parent_turn_id, limit=ctx_turns)
+            branch_state = parent.get("state") or "seed"   # a branch inherits the stage
         finally:
             conn.close()
 
@@ -623,6 +639,7 @@ async def create_branch(
             paragraph_index=request.paragraph_index,
             tools_enabled=_tools_enabled(request.recall),
             branched=True,
+            state=branch_state,
         )
         return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -634,9 +651,14 @@ async def create_branch(
 
 @app.get("/api/tree")
 async def get_tree(
+    state: Optional[str] = None,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
-    """Return the full conversation tree (roots -> children) for the metro map."""
+    """Return the conversation tree (roots -> children) for the metro map.
+
+    Optional ?state= filters roots by conversation stage: "tree" for the main
+    conversation map, "seed" for the new-chats list.
+    """
     _require_auth(passkey)
 
     try:
@@ -648,12 +670,43 @@ async def get_tree(
             conn.close()
 
         enriched = [_enrich_tree_node(node) for node in roots]
+        if state:
+            enriched = [r for r in enriched if r.get("state") == state]
         return {
             "roots": enriched,
             "count": _count_nodes(enriched),
             # Default window size: how many recent turns feed the next message.
             "context_turns": _default_context_window(),
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/turns/{turn_id}/state")
+async def patch_turn_state(
+    turn_id: int,
+    request: StateRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Set a conversation's stage for a turn and its whole subtree.
+
+    Primary use: promote a seed to a tree (`{"state": "tree"}`). The frontend
+    decides when to call this — e.g. on a conscious "upgrade" action or when the
+    chat is branched from.
+    """
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        conn = sqlite3.connect(db_path)
+        try:
+            found, updated = update_subtree_state(conn, turn_id, request.state)
+        finally:
+            conn.close()
+        if not found:
+            raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
+        return {"turn_id": turn_id, "state": request.state, "updated_turn_ids": updated}
     except HTTPException:
         raise
     except Exception as e:
