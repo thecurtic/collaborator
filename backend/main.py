@@ -30,6 +30,7 @@ from inference import (
     generate_with_tools, synthesize, synthesize_notes,
 )
 from export_tree import export_forest, find_tree
+import notes_index
 from auth import validate_passkey, create_user_db
 
 app = FastAPI()
@@ -991,6 +992,11 @@ async def approve_draft(
             path = _write_note_file(vault, title, draft["body"],
                                     draft["tags"], draft["source_turns"])
             draft = set_note_draft_status(conn, draft_id, "approved")
+            # Index the new note immediately (best-effort; reindex reconciles).
+            try:
+                notes_index.index_note_file(conn, path, embed_fn=embed_texts)
+            except Exception as e:
+                print(f"Warning: could not index approved note: {e}")
         finally:
             conn.close()
         return {"draft": draft, "path": path, "filename": os.path.basename(path)}
@@ -1019,6 +1025,104 @@ async def reject_draft(
         finally:
             conn.close()
         return {"draft": draft}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notes/reindex")
+async def reindex_notes(
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Reconcile the notes index against the vault (files always win).
+
+    Picks up notes added/edited/renamed/deleted outside the app (e.g. in Obsidian).
+    Re-embeds changed notes. The index is a pure cache — it can be rebuilt from the
+    files at any time.
+    """
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        vault = _resolve_vault_dir(db_path)
+        conn = sqlite3.connect(db_path)
+        try:
+            stats = notes_index.reindex_vault(conn, vault, embed_fn=embed_texts)
+        finally:
+            conn.close()
+        return stats
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/notes")
+async def list_vault_notes(
+    tag: Optional[str] = None,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """List indexed notes (metadata + link edges; filter with ?tag=)."""
+    _require_auth(passkey)
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            notes = notes_index.list_notes(conn, tag=tag)
+        finally:
+            conn.close()
+        return {"notes": notes, "count": len(notes)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/notes/search")
+async def search_vault_notes(
+    q: str,
+    mode: str = "semantic",
+    limit: int = 10,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Search notes: mode=semantic (embeddings) or mode=keyword (lexical)."""
+    _require_auth(passkey)
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            if mode == "keyword":
+                results = notes_index.search_notes_keyword(conn, q, limit=limit)
+            else:
+                vec = get_embedding(q)
+                results = notes_index.search_notes_semantic(conn, vec, limit=limit) if vec else []
+        finally:
+            conn.close()
+        for n in results:
+            n.pop("body", None)
+        return {"results": results, "count": len(results), "mode": mode}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# NOTE: declared after the literal /api/notes/* routes so it can't shadow them.
+@app.get("/api/notes/{title}")
+async def get_vault_note(
+    title: str,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Fetch one note by title (case-insensitive), with body and backlinks."""
+    _require_auth(passkey)
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            note = notes_index.get_note_by_title(conn, title)
+            if note is None:
+                raise HTTPException(status_code=404, detail=f"Note \"{title}\" not found")
+            note["backlinks"] = notes_index.get_backlinks(conn, note["title"])
+        finally:
+            conn.close()
+        return {"note": note}
     except HTTPException:
         raise
     except Exception as e:

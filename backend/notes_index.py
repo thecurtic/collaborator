@@ -1,0 +1,267 @@
+"""Index over the notes vault: parse, reconcile, search.
+
+Files are the source of truth; this index is a pure, REBUILDABLE cache.
+
+INVARIANT (Nostr foresight): everything graph-relevant — titles (the `# H1`),
+[[wikilink]] edges (in the body), and tags (frontmatter, which a future converter
+maps to kind-1 event `t` tags) — is derived from note content alone and never
+stored index-only. Dropping this index and rebuilding from files must always yield
+the identical graph; the same property is what lets notes round-trip through Nostr
+relays and remain reconstructable. Do not add graph state that lives only here.
+"""
+
+import hashlib
+import json
+import os
+import re
+
+import yaml
+
+# [[Target]], [[Target|alias]], [[Target#heading]] -> "Target"
+WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
+
+NOTES_INDEX_COLUMNS = [
+    "filename", "title", "created", "tags", "source_turns", "links",
+    "body", "content_hash", "mtime",
+]
+_COLS = ", ".join(NOTES_INDEX_COLUMNS)
+
+
+def extract_wikilinks(body: str):
+    """Return link target titles from [[wikilinks]] (alias/heading parts stripped)."""
+    targets = []
+    for match in WIKILINK_RE.finditer(body or ""):
+        target = match.group(1).split("|")[0].split("#")[0].strip()
+        if target and target not in targets:
+            targets.append(target)
+    return targets
+
+
+def parse_note_file(path: str) -> dict:
+    """Parse one vault note: frontmatter + H1 title + body prose + link edges."""
+    with open(path, "r", encoding="utf-8") as f:
+        raw = f.read()
+
+    front, body = {}, raw
+    if raw.startswith("---"):
+        end = raw.find("\n---", 3)
+        if end != -1:
+            try:
+                front = yaml.safe_load(raw[4:end]) or {}
+                if not isinstance(front, dict):
+                    front = {}
+            except yaml.YAMLError:
+                front = {}
+            body = raw[end + 4:]
+
+    body = body.strip()
+    lines = body.splitlines()
+    title = None
+    if lines and lines[0].startswith("# "):
+        title = lines[0][2:].strip()
+        body = "\n".join(lines[1:]).strip()
+    if not title:  # fall back to the filename (identity and H1 should agree)
+        title = os.path.splitext(os.path.basename(path))[0]
+
+    tags = front.get("tags") or []
+    if not isinstance(tags, list):
+        tags = [t.strip() for t in str(tags).split(",") if t.strip()]
+    source_turns = front.get("source_turns") or []
+    if not isinstance(source_turns, list):
+        source_turns = []
+
+    return {
+        "filename": os.path.basename(path),
+        "title": title,
+        "created": str(front.get("created")) if front.get("created") is not None else None,
+        "tags": [str(t) for t in tags],
+        "source_turns": [int(i) for i in source_turns if isinstance(i, (int, float))],
+        "links": extract_wikilinks(body),
+        "body": body,
+        "content_hash": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "mtime": os.path.getmtime(path),
+    }
+
+
+def _row_to_note(row) -> dict:
+    d = dict(zip(NOTES_INDEX_COLUMNS, row))
+    for key in ("tags", "source_turns", "links"):
+        try:
+            d[key] = json.loads(d[key]) if d[key] else []
+        except Exception:
+            d[key] = []
+    return d
+
+
+def _upsert(conn, note: dict, embedding=None) -> None:
+    conn.cursor().execute(
+        """
+        INSERT INTO notes_index
+            (filename, title, created, tags, source_turns, links, body,
+             content_hash, mtime, embedding)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(filename) DO UPDATE SET
+            title = excluded.title, created = excluded.created,
+            tags = excluded.tags, source_turns = excluded.source_turns,
+            links = excluded.links, body = excluded.body,
+            content_hash = excluded.content_hash, mtime = excluded.mtime,
+            embedding = COALESCE(excluded.embedding, notes_index.embedding)
+        """,
+        (note["filename"], note["title"], note["created"],
+         json.dumps(note["tags"]), json.dumps(note["source_turns"]),
+         json.dumps(note["links"]), note["body"],
+         note["content_hash"], note["mtime"], embedding),
+    )
+    conn.commit()
+
+
+def _embed_blob(vector):
+    if not vector:
+        return None
+    import numpy as np
+    return np.asarray(vector, dtype="float32").tobytes()
+
+
+def index_note_file(conn, path: str, embed_fn=None) -> dict:
+    """Parse + upsert a single note file (used right after approval). Best-effort
+    embedding via embed_fn(texts)->vectors."""
+    note = parse_note_file(path)
+    blob = None
+    if embed_fn is not None:
+        try:
+            vecs = embed_fn([f"{note['title']}\n{note['body']}"])
+            blob = _embed_blob(vecs[0] if vecs else None)
+        except Exception:
+            blob = None
+    _upsert(conn, note, embedding=blob)
+    return note
+
+
+def reindex_vault(conn, vault_dir: str, embed_fn=None) -> dict:
+    """Reconcile the index against the vault directory (files win, always).
+
+    New/changed files (by content hash) are re-parsed and re-embedded; rows whose
+    files vanished are removed. Returns {"added", "updated", "removed", "total"}.
+    """
+    cursor = conn.cursor()
+    on_disk = {}
+    if os.path.isdir(vault_dir):
+        for name in os.listdir(vault_dir):
+            if name.endswith(".md") and not name.startswith("."):
+                on_disk[name] = os.path.join(vault_dir, name)
+
+    existing = dict(cursor.execute(
+        "SELECT filename, content_hash FROM notes_index").fetchall())
+
+    added, updated, changed = 0, 0, []
+    for name, path in on_disk.items():
+        note = parse_note_file(path)
+        if name not in existing:
+            added += 1
+            changed.append(note)
+        elif existing[name] != note["content_hash"]:
+            updated += 1
+            changed.append(note)
+
+    # Embed changed notes in batches (one model call per chunk).
+    embeddings = {}
+    if embed_fn is not None and changed:
+        CHUNK = 64
+        for start in range(0, len(changed), CHUNK):
+            chunk = changed[start:start + CHUNK]
+            try:
+                vecs = embed_fn([f"{n['title']}\n{n['body']}" for n in chunk])
+            except Exception:
+                vecs = [None] * len(chunk)
+            for note, vec in zip(chunk, vecs):
+                embeddings[note["filename"]] = _embed_blob(vec)
+
+    for note in changed:
+        _upsert(conn, note, embedding=embeddings.get(note["filename"]))
+
+    removed = 0
+    for name in set(existing) - set(on_disk):
+        cursor.execute("DELETE FROM notes_index WHERE filename = ?", (name,))
+        removed += 1
+    conn.commit()
+
+    total = cursor.execute("SELECT COUNT(*) FROM notes_index").fetchone()[0]
+    return {"added": added, "updated": updated, "removed": removed, "total": total}
+
+
+def list_notes(conn, tag: str = None):
+    """All indexed notes (metadata only, no body/embedding)."""
+    rows = conn.cursor().execute(
+        f"SELECT {_COLS} FROM notes_index ORDER BY filename ASC").fetchall()
+    notes = [_row_to_note(r) for r in rows]
+    for n in notes:
+        n.pop("body", None)
+    if tag:
+        wanted = tag.lower()
+        notes = [n for n in notes if wanted in [t.lower() for t in n["tags"]]]
+    return notes
+
+
+def get_note_by_title(conn, title: str):
+    """Fetch one note (with body) by title, case-insensitive."""
+    row = conn.cursor().execute(
+        f"SELECT {_COLS} FROM notes_index WHERE lower(title) = lower(?)", (title,)
+    ).fetchone()
+    return _row_to_note(row) if row else None
+
+
+def get_backlinks(conn, title: str):
+    """Notes whose bodies link to `title` (edges derived from content, inverted)."""
+    wanted = title.lower()
+    result = []
+    for row in conn.cursor().execute(f"SELECT {_COLS} FROM notes_index").fetchall():
+        note = _row_to_note(row)
+        if wanted in [l.lower() for l in note["links"]]:
+            note.pop("body", None)
+            result.append(note)
+    return result
+
+
+def search_notes_semantic(conn, query_vector, limit: int = 10):
+    """Cosine similarity over indexed note embeddings."""
+    if not query_vector:
+        return []
+    import numpy as np
+    q = np.asarray(query_vector, dtype="float32")
+    q_norm = np.linalg.norm(q)
+    if q_norm == 0:
+        return []
+    scored = []
+    for row in conn.cursor().execute(
+            f"SELECT {_COLS}, embedding FROM notes_index").fetchall():
+        blob = row[-1]
+        if not blob:
+            continue
+        vec = np.frombuffer(blob, dtype="float32")
+        if vec.shape != q.shape:
+            continue
+        denom = q_norm * np.linalg.norm(vec)
+        if denom == 0:
+            continue
+        note = _row_to_note(row[:-1])
+        note["score"] = float(np.dot(q, vec) / denom)
+        scored.append(note)
+    scored.sort(key=lambda n: n["score"], reverse=True)
+    return scored[:limit]
+
+
+def search_notes_keyword(conn, query: str, limit: int = 10):
+    """Lexical search over title/body/tags by term overlap."""
+    terms = [t.lower() for t in re.split(r"\W+", query or "") if len(t) >= 2]
+    if not terms:
+        return []
+    scored = []
+    for row in conn.cursor().execute(f"SELECT {_COLS} FROM notes_index").fetchall():
+        note = _row_to_note(row)
+        haystack = f"{note['title']}\n{note['body']}\n{' '.join(note['tags'])}".lower()
+        hits = sum(1 for t in set(terms) if t in haystack)
+        if hits:
+            note["score"] = hits
+            scored.append(note)
+    scored.sort(key=lambda n: n["score"], reverse=True)
+    return scored[:limit]

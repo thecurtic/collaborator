@@ -553,6 +553,45 @@ without auth it's the vault itself. It's a machine path — set it in `.config.y
 (e.g. `/srv/vaults`, then serve `/srv/vaults/<your-hash>` from Obsidian). Unset →
 vaults sit next to each user's DB (`users/{hash}/notes`, else `backend/data/notes`).
 
+---
+
+### 12. Notes Index (vault read/search)
+
+A **rebuildable** SQLite index over the vault. Files are the source of truth;
+everything graph-relevant (titles, `[[wikilink]]` edges, tags) is derived from note
+content alone — never stored index-only — so the index can always be rebuilt from
+files, and the graph survives round-trips through other carriers (future Nostr
+kind-1 export). Approving a draft indexes the note immediately.
+
+**Reconcile against the vault** (picks up Obsidian edits/renames/deletes; re-embeds
+changed notes):
+```
+POST /api/notes/reindex
+-> 200 { "added": 1, "updated": 0, "removed": 0, "total": 12 }
+```
+
+**List** (metadata + link edges; optional `?tag=`):
+```
+GET /api/notes?tag=decision
+-> 200 { "notes": [ { "filename", "title", "created", "tags", "source_turns",
+                      "links", "content_hash", "mtime" } ], "count": N }
+```
+
+**Get one** (case-insensitive title; body + backlinks):
+```
+GET /api/notes/{title}
+-> 200 { "note": { ..., "body": "…", "backlinks": [ ...notes linking here... ] } }
+```
+`404` if unknown. (Literal routes like `/api/notes/drafts` are matched first.)
+
+**Search**:
+```
+GET /api/notes/search?q=…&mode=semantic|keyword&limit=10
+-> 200 { "results": [ ...notes with "score"... ], "count": N, "mode": "semantic" }
+```
+`semantic` uses the local embedder (same as recall); `keyword` is lexical over
+title/body/tags.
+
 > Setup: embeddings run locally on the backend by default (`fastembed`, downloads a
 > small model once). Enable via `recall.enabled` or the per-request `recall` flag.
 > Synthesis uses the LM Studio chat model. Set `recall.embedding_backend: lmstudio`

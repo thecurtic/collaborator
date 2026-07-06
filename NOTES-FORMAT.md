@@ -163,8 +163,25 @@ must not block it. Rules the future integration must honor:
 - No Nostr fields, keys, or signatures in files.
 - No LLM-written frontmatter, ever.
 
+## Index (derived, rebuildable — the Nostr-foresight invariant)
+
+The backend keeps a SQLite index over the vault (`notes_index`, per user) for
+search, backlinks, and future recall/dedupe. Binding rule:
+
+> **Everything graph-relevant — titles, `[[wikilink]]` edges, tags — is derived from
+> note content/frontmatter alone and never stored index-only.** Dropping the index
+> and rebuilding from the files must always yield the identical graph.
+
+This is enforced by test, and it is exactly the property that keeps a future Nostr
+export reconstructable: a converter emits each note as a kind-1 event (content =
+`# Title` + body with its wikilinks intact; frontmatter tags → event `t` tags;
+`created_at` from the event envelope; `source_turns` stripped as private), and anyone
+pulling those events from relays can rebuild the full graph by parsing first-lines,
+wikilinks, and event tags — no index required.
+
 ## Related
 
 - Input side: `GET /api/tree/{id}/export` / `backend/export_tree.py` (turns → JSON).
-- Synthesis prompt (later): `synthesis-notes.md` via `tools.synthesis.prompts.notes`.
+- Synthesis: `synthesis-notes.md` + `POST /api/notes/synthesize/{tree_id}`.
+- Index: `backend/notes_index.py` + `/api/notes` endpoints.
 - Intent: `INTENTS.md`.

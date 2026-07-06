@@ -131,6 +131,23 @@ def ensure_conversation_schema(conn) -> None:
         )
     """)
 
+    # Rebuildable index over the notes vault (files are the source of truth; see
+    # notes_index.py for the derived-from-content-only invariant).
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notes_index (
+            filename TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            created TEXT,
+            tags TEXT,
+            source_turns TEXT,
+            links TEXT,
+            body TEXT,
+            content_hash TEXT,
+            mtime REAL,
+            embedding BLOB
+        )
+    """)
+
     # LLM-synthesized note drafts awaiting user approval. Drafts are app state,
     # NOT knowledge: they never touch the notes vault until approved (Obsidian
     # indexes everything it sees, so unapproved files would leak into the graph).
