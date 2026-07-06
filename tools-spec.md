@@ -46,6 +46,13 @@ titles, URLs, snippets, and sometimes direct answers/infoboxes. Ground what you 
 the user in these results and cite sources by domain; if you want to present a clean
 summary, call synthesize with kind "web" on the snippets.
 
+## fetch_url
+Fetch and read one specific web page. ALWAYS call this when the user pastes or
+references a URL — read the page before discussing it; never pretend you visited a
+link you didn't fetch. Also useful for opening a promising web_search result in full.
+Returns the page title and its readable text (truncated when long, and JS-rendered
+apps may yield little text — say so if the content looks empty).
+
 ## propose_note
 Propose a new atomic note distilled from this conversation. This creates a PENDING
 DRAFT in the user's review inbox — it never writes to their vault and never publishes;

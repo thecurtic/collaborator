@@ -101,12 +101,17 @@ tools:
     get_note: true            # read one note in full (body + backlinks)
     propose_note: true        # propose a note -> PENDING draft only (user approves)
     web_search: true          # self-gating: active only when web_search.url is set
+    fetch_url: true           # read a specific page (pasted links)
   web_search:                 # private SearXNG instance (JSON format must be enabled
     url: "http://<search-vm-ip>"  # in its settings.yml: search.formats: [html, json])
     results: 5                # max results returned to the model
     timeout: 15
     language: "en"
     safesearch: 0
+  fetch_url:
+    max_chars: 8000           # readable text handed to the model per page
+    timeout: 20
+    allow_private: false      # true to allow tailnet/LAN URLs (off = public web only)
   synthesis:
     max_tokens: 256
     prompts:                  # per-kind synthesis prompt files (editable/auditable)

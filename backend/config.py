@@ -128,6 +128,7 @@ def load_config() -> dict:
                 "get_note": True,
                 "propose_note": True,  # only ever creates PENDING drafts
                 "web_search": True,    # self-gating: active only when web_search.url is set
+                "fetch_url": True,     # read a specific page (pasted links)
             },
             "web_search": {
                 "url": None,           # SearXNG base URL (e.g. tailnet IP); None = tool off
@@ -135,6 +136,11 @@ def load_config() -> dict:
                 "timeout": 15,
                 "language": "en",
                 "safesearch": 0,
+            },
+            "fetch_url": {
+                "max_chars": 8000,     # readable text handed to the model
+                "timeout": 20,
+                "allow_private": False,  # True to let it fetch tailnet/LAN URLs
             },
             "synthesis": {
                 "max_tokens": 256,

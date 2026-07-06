@@ -122,10 +122,12 @@ data: {"type":"done", ...}
 vault — read-only; `get_note` includes backlinks for graph traversal),
 `propose_note` — which **only ever creates a pending draft** in the review inbox
 (never the vault; the user approves/rejects as usual; near-duplicates of existing
-notes are flagged in the result and on the draft) — and `web_search`, which queries
+notes are flagged in the result and on the draft) — `web_search`, which queries
 the private SearXNG instance (`tools.web_search.url`; the tool is offered to the
 model only when that URL is configured, and SearXNG must have the `json` format
-enabled in its settings.yml).
+enabled in its settings.yml) — and `fetch_url`, which reads a specific web page
+(pasted links; readable text extraction, `tools.fetch_url.max_chars` cap;
+private/tailnet addresses refused unless `tools.fetch_url.allow_private`).
 
 **`drafts_proposed` SSE event** — emitted after the answer streams when the model
 called `propose_note` during the turn:

@@ -27,7 +27,7 @@ from db import (
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
     get_embedding, embed_texts, synthesize_recall,
-    generate_with_tools, synthesize, synthesize_notes, web_search_searxng,
+    generate_with_tools, synthesize, synthesize_notes, web_search_searxng, fetch_url,
 )
 from export_tree import export_forest, find_tree
 import notes_index
@@ -244,6 +244,10 @@ DEFAULT_TOOL_DESCRIPTIONS = {
     "web_search": ("Search the web via the user's private SearXNG instance. Use for "
                    "current events, facts you don't know, or anything the user asks you "
                    "to look up. Returns result titles, URLs, and snippets."),
+    "fetch_url": ("Fetch and read a specific web page. ALWAYS use this when the user "
+                  "pastes or references a URL — read it before discussing it. Also "
+                  "useful to open a promising web_search result. Returns the page "
+                  "title and readable text (JS-heavy apps may come back empty)."),
 }
 
 
@@ -334,6 +338,13 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
     # web_search is self-gating: present only when a SearXNG URL is configured.
     if avail.get("web_search", True) and (tcfg.get("web_search") or {}).get("url"):
         schemas.append(_search_schema("web_search", descs["web_search"]))
+    if avail.get("fetch_url", True):
+        schemas.append({"type": "function", "function": {
+            "name": "fetch_url",
+            "description": descs["fetch_url"],
+            "parameters": {"type": "object", "properties": {
+                "url": {"type": "string", "description": "the http(s) URL to read"}},
+                "required": ["url"]}}})
     if avail.get("propose_note", True):
         schemas.append({"type": "function", "function": {
             "name": "propose_note",
@@ -436,6 +447,8 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             return json.dumps(result)
         if name == "web_search":
             return json.dumps(web_search_searxng(args.get("query", "")))
+        if name == "fetch_url":
+            return json.dumps(fetch_url(args.get("url", "")))
         return json.dumps({"error": f"unknown tool {name}"})
 
     return schemas, execute, state

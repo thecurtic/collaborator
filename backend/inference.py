@@ -741,6 +741,141 @@ def web_search_searxng(query: str) -> Dict:
     return out
 
 
+# --- URL fetching (read a page the user pasted) --------------------------------
+
+class _HtmlTextExtractor:
+    """Stdlib HTML -> readable text (no extra deps, per the minimal-deps principle)."""
+
+    def __init__(self):
+        from html.parser import HTMLParser
+
+        skip_tags = {"script", "style", "noscript", "svg", "template", "iframe"}
+        block_tags = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5",
+                      "h6", "section", "article", "header", "footer", "ul", "ol",
+                      "table", "blockquote", "pre"}
+
+        class Parser(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.parts, self.title = [], ""
+                self._skip, self._in_title = 0, False
+
+            def handle_starttag(self, tag, attrs):
+                if tag in skip_tags:
+                    self._skip += 1
+                elif tag == "title":
+                    self._in_title = True
+                elif tag in block_tags:
+                    self.parts.append("\n")
+
+            def handle_endtag(self, tag):
+                if tag in skip_tags and self._skip > 0:
+                    self._skip -= 1
+                elif tag == "title":
+                    self._in_title = False
+                elif tag in block_tags:
+                    self.parts.append("\n")
+
+            def handle_data(self, data):
+                if self._skip:
+                    return
+                if self._in_title:
+                    self.title += data
+                else:
+                    self.parts.append(data)
+
+        self._parser = Parser()
+
+    def extract(self, html: str):
+        import re
+        self._parser.feed(html)
+        text = "".join(self._parser.parts)
+        lines = [" ".join(l.split()) for l in text.splitlines()]
+        text = "\n".join(l for l in lines if l)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return self._parser.title.strip(), text.strip()
+
+
+def _host_is_private(host: str) -> bool:
+    """True when the host resolves to a private/loopback/link-local address."""
+    import ipaddress
+    import socket
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError):
+        return False  # unresolvable: let the HTTP layer fail with its own error
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return True
+    return False
+
+
+def fetch_url(url: str) -> Dict:
+    """Fetch a URL and return readable text for the model.
+
+    Config: tools.fetch_url {max_chars, timeout, allow_private}. Only http(s);
+    private/internal hosts are refused unless allow_private is set (the user may
+    want tailnet docs fetchable). Static HTML / text / JSON only — JS-rendered
+    apps come back mostly empty (that would need a headless browser).
+    """
+    from urllib.parse import urlparse
+
+    fcfg = (_tools_config().get("fetch_url") or {})
+    parsed = urlparse(url or "")
+    if parsed.scheme not in ("http", "https"):
+        return {"error": f"only http(s) URLs can be fetched, got {url!r}"}
+    if not fcfg.get("allow_private", False) and _host_is_private(parsed.hostname or ""):
+        return {"error": "refusing to fetch a private/internal address "
+                         "(enable tools.fetch_url.allow_private for tailnet/LAN URLs)"}
+
+    try:
+        response = requests.get(
+            url,
+            timeout=fcfg.get("timeout", 20),
+            headers={"User-Agent": "Collaborator/0.2 (self-hosted personal assistant)"},
+            stream=True,
+        )
+        response.raise_for_status()
+
+        max_bytes = fcfg.get("max_bytes", 2_000_000)
+        chunks, size = [], 0
+        for chunk in response.iter_content(65536):
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > max_bytes:
+                break
+        raw = b"".join(chunks)
+    except requests.exceptions.RequestException as e:
+        return {"error": f"fetch failed: {e}"}
+
+    ctype = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+    text_types = ctype.startswith("text/") or ctype in (
+        "application/json", "application/xml", "application/xhtml+xml", "")
+    if not text_types:
+        return {"error": f"unsupported content type {ctype!r} (only html/text/json)"}
+
+    body = raw.decode(response.encoding or "utf-8", errors="replace")
+    title = ""
+    if ctype in ("text/html", "application/xhtml+xml", ""):
+        try:
+            title, body = _HtmlTextExtractor().extract(body)
+        except Exception:
+            pass  # fall back to the raw text
+
+    max_chars = fcfg.get("max_chars", 8000)
+    truncated = len(body) > max_chars
+    return {
+        "url": response.url,
+        "title": title,
+        "content": body[:max_chars],
+        "truncated": truncated,
+    }
+
+
 # --- Tool-calling loop -------------------------------------------------------
 
 def _tools_config() -> Dict:
@@ -820,6 +955,9 @@ def _tool_status_label(name: str, args: Dict) -> str:
         return f"Proposing note{f' “{t[:40]}”' if t else ''} (draft for your review)…"
     if name == "web_search":
         return f"Searching the web{f' for “{q[:40]}”' if q else ''}…"
+    if name == "fetch_url":
+        u = (args.get("url") or "").strip()
+        return f"Reading {u[:60]}…" if u else "Reading a page…"
     return f"Running {name}…"
 
 
