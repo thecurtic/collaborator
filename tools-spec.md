@@ -39,6 +39,13 @@ Fetch one note by its exact title: the full body, tags, outgoing [[wikilinks]], 
 backlinks (which notes link to it). Use after search_notes to read a note in full or
 to traverse the note graph one hop at a time.
 
+## web_search
+Search the web through the user's private SearXNG instance. Use for current events,
+facts outside your knowledge, or anything the user asks you to look up. Returns result
+titles, URLs, snippets, and sometimes direct answers/infoboxes. Ground what you tell
+the user in these results and cite sources by domain; if you want to present a clean
+summary, call synthesize with kind "web" on the snippets.
+
 ## propose_note
 Propose a new atomic note distilled from this conversation. This creates a PENDING
 DRAFT in the user's review inbox — it never writes to their vault and never publishes;

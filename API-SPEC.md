@@ -119,9 +119,13 @@ data: {"type":"done", ...}
 
 **Available tools** (each gated in `tools.available`): `recall_semantic`,
 `recall_keyword` (turn history), `synthesize`, `search_notes`, `get_note` (the notes
-vault — read-only; `get_note` includes backlinks for graph traversal), and
+vault — read-only; `get_note` includes backlinks for graph traversal),
 `propose_note` — which **only ever creates a pending draft** in the review inbox
-(never the vault; the user approves/rejects as usual).
+(never the vault; the user approves/rejects as usual; near-duplicates of existing
+notes are flagged in the result and on the draft) — and `web_search`, which queries
+the private SearXNG instance (`tools.web_search.url`; the tool is offered to the
+model only when that URL is configured, and SearXNG must have the `json` format
+enabled in its settings.yml).
 
 **`drafts_proposed` SSE event** — emitted after the answer streams when the model
 called `propose_note` during the turn:
@@ -520,6 +524,17 @@ resulting note as a **pending draft** grouped under `run_id`. Zero drafts is a v
 outcome. Nothing touches the vault. `404` unknown/uncommitted turn; `502` if the
 model call fails. Synchronous — big trees can take a while on local inference
 (`notes.synthesis_timeout`, default 300s).
+
+**Dedupe-against-vault** (automatic): the model is shown up to
+`notes.dedupe_context_notes` relevant existing notes ("link, don't duplicate"), and
+each resulting candidate is checked against the index — near-duplicates (cosine ≥
+`notes.dedupe_threshold`, default 0.85) get a `duplicate_of` field on the draft:
+```json
+"duplicate_of": [ { "title": "SQLite fits this project", "score": 0.91 } ]
+```
+Candidates are **flagged, never dropped** — surface `duplicate_of` in the review UI
+so the user can reject/merge. Empty list = no near-duplicates. The same check runs
+when the chat model calls `propose_note`.
 
 **Create a draft** (synthesis output or hand-written):
 ```

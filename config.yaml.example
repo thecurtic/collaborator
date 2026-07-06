@@ -76,6 +76,10 @@ notes:
   synthesis_max_tokens: 4096   # output budget for the whole batch of drafts
   synthesis_temperature: 0.3
   synthesis_timeout: 300       # seconds; big trees take a while on local inference
+  # Dedupe-against-vault: existing notes are shown to the synthesis LLM (link, don't
+  # duplicate), and candidates near an existing note get duplicate_of on the draft.
+  dedupe_threshold: 0.85       # cosine similarity above which a candidate is flagged
+  dedupe_context_notes: 30     # how many existing notes to show the model
 
 # Tool-calling. When enabled, the model drives retrieval/synthesis by calling tools
 # (recall is a set of tools) and streams status notes for what it's doing. Requires a
@@ -96,10 +100,15 @@ tools:
     search_notes: true        # search the notes vault (curated knowledge)
     get_note: true            # read one note in full (body + backlinks)
     propose_note: true        # propose a note -> PENDING draft only (user approves)
-    web_search: false         # (later)
+    web_search: true          # self-gating: active only when web_search.url is set
+  web_search:                 # private SearXNG instance (JSON format must be enabled
+    url: "http://<search-vm-ip>"  # in its settings.yml: search.formats: [html, json])
+    results: 5                # max results returned to the model
+    timeout: 15
+    language: "en"
+    safesearch: 0
   synthesis:
     max_tokens: 256
     prompts:                  # per-kind synthesis prompt files (editable/auditable)
       memory: "recall-synthesis-prompt.md"
-      # web: "synthesis-web.md"
-      # notes: "synthesis-notes.md"
+      web: "synthesis-web.md"

@@ -161,11 +161,16 @@ def ensure_conversation_schema(conn) -> None:
             tags TEXT,
             links TEXT,
             source_turns TEXT,
+            duplicate_of TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             decided_at TEXT
         )
     """)
+    # Migrate older draft tables (column added later).
+    draft_cols = {row[1] for row in cursor.execute("PRAGMA table_info(note_drafts)").fetchall()}
+    if "duplicate_of" not in draft_cols:
+        cursor.execute("ALTER TABLE note_drafts ADD COLUMN duplicate_of TEXT")
     conn.commit()
 
     _migrate_turns_branching(conn)
@@ -770,14 +775,14 @@ def clear_current_recall(db) -> None:
 
 NOTE_DRAFT_COLUMNS = [
     "id", "run_id", "tree_root_id", "title", "body", "tags", "links",
-    "source_turns", "status", "created_at", "decided_at",
+    "source_turns", "duplicate_of", "status", "created_at", "decided_at",
 ]
 _DRAFT_COLS = ", ".join(NOTE_DRAFT_COLUMNS)
 
 
 def _row_to_draft(row) -> Dict:
     d = dict(zip(NOTE_DRAFT_COLUMNS, row))
-    for key in ("tags", "links", "source_turns"):
+    for key in ("tags", "links", "source_turns", "duplicate_of"):
         try:
             d[key] = _json.loads(d[key]) if d[key] else []
         except Exception:
@@ -790,17 +795,20 @@ def create_note_draft(db, title: str, body: str,
                       links: Optional[List[str]] = None,
                       source_turns: Optional[List[int]] = None,
                       tree_root_id: Optional[int] = None,
-                      run_id: Optional[str] = None) -> dict:
-    """Insert a pending note draft. Returns the created draft."""
+                      run_id: Optional[str] = None,
+                      duplicate_of: Optional[List[dict]] = None) -> dict:
+    """Insert a pending note draft. duplicate_of lists near-duplicate existing
+    notes ([{title, score}]) so the user can reject/merge during review."""
     cursor = db.cursor()
     cursor.execute(
         """
-        INSERT INTO note_drafts (run_id, tree_root_id, title, body, tags, links, source_turns)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO note_drafts
+            (run_id, tree_root_id, title, body, tags, links, source_turns, duplicate_of)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (run_id, tree_root_id, title, body,
          _json.dumps(tags or []), _json.dumps(links or []),
-         _json.dumps(source_turns or [])),
+         _json.dumps(source_turns or []), _json.dumps(duplicate_of or [])),
     )
     db.commit()
     return get_note_draft(db, cursor.lastrowid)

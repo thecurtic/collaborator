@@ -621,12 +621,14 @@ def _notes_config() -> Dict:
     return _get_config().get("notes", {}) or {}
 
 
-def synthesize_notes(tree: Dict) -> List[Dict]:
+def synthesize_notes(tree: Dict, existing_notes: Optional[List[Dict]] = None) -> List[Dict]:
     """Distill an exported conversation tree into atomic note drafts.
 
-    One blocking LLM call with structured (json_schema) output. Returns a list of
-    {title, body, tags, links, source_turns} dicts; invalid entries are dropped.
-    Raises on transport/parse failure (the endpoint surfaces it to the user).
+    One blocking LLM call with structured (json_schema) output. existing_notes
+    ([{title, tags}]) are vault notes the model must NOT duplicate — it should link
+    to them with [[wikilinks]] instead. Returns a list of {title, body, tags, links,
+    source_turns} dicts; invalid entries are dropped. Raises on transport/parse
+    failure (the endpoint surfaces it to the user).
     """
     import json
 
@@ -635,11 +637,21 @@ def synthesize_notes(tree: Dict) -> List[Dict]:
         ncfg, "synthesis_prompt_file", "synthesis_prompt_text",
         DEFAULT_NOTES_SYNTHESIS_PROMPT)
 
+    user_content = json.dumps(tree, ensure_ascii=False)
+    if existing_notes:
+        listing = "\n".join(
+            f"- {n['title']}" + (f" (tags: {', '.join(n['tags'])})" if n.get("tags") else "")
+            for n in existing_notes)
+        user_content += (
+            "\n\nNOTES THAT ALREADY EXIST in the user's vault — do NOT propose a "
+            "duplicate of any of these. Where one is relevant, link to it with a "
+            "[[wikilink]] instead:\n" + listing)
+
     payload = {
         "model": _get_config()["inference"]["model_id"],
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(tree, ensure_ascii=False)},
+            {"role": "user", "content": user_content},
         ],
         "temperature": ncfg.get("synthesis_temperature", 0.3),
         "max_tokens": ncfg.get("synthesis_max_tokens", 4096),
@@ -681,6 +693,52 @@ def synthesize_notes(tree: Dict) -> List[Dict]:
                              if isinstance(i, (int, float))],
         })
     return notes
+
+
+# --- Web search (SearXNG) ------------------------------------------------------
+
+def web_search_searxng(query: str) -> Dict:
+    """Query the configured SearXNG instance (JSON API) and return compact results.
+
+    Config: tools.web_search {url (required to enable the tool), results, timeout,
+    language, safesearch}. SearXNG must have the json format enabled in its
+    settings.yml (search.formats: [html, json]).
+    """
+    wcfg = (_tools_config().get("web_search") or {})
+    base = (wcfg.get("url") or "").rstrip("/")
+    if not base:
+        return {"error": "web search is not configured (tools.web_search.url)"}
+    try:
+        response = requests.get(
+            f"{base}/search",
+            params={
+                "q": query,
+                "format": "json",
+                "language": wcfg.get("language", "en"),
+                "safesearch": wcfg.get("safesearch", 0),
+            },
+            timeout=wcfg.get("timeout", 15),
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        return {"error": f"web search failed: {e}"}
+
+    limit = wcfg.get("results", 5)
+    out = {"results": [{
+        "title": r.get("title"),
+        "url": r.get("url"),
+        "snippet": (r.get("content") or "")[:300],
+        "engine": r.get("engine"),
+    } for r in (data.get("results") or [])[:limit]]}
+    if data.get("answers"):
+        out["answers"] = [str(a) for a in data["answers"][:3]]
+    if data.get("infoboxes"):
+        out["infoboxes"] = [{
+            "title": i.get("infobox"),
+            "content": (i.get("content") or "")[:300],
+        } for i in data["infoboxes"][:1]]
+    return out
 
 
 # --- Tool-calling loop -------------------------------------------------------

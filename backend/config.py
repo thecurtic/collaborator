@@ -105,6 +105,11 @@ def load_config() -> dict:
             "synthesis_max_tokens": 4096,
             "synthesis_temperature": 0.3,
             "synthesis_timeout": 300,
+            # Dedupe-against-vault: existing notes shown to the synthesis LLM, and
+            # candidates flagged (never dropped) when semantically near an existing
+            # note. duplicate_of appears on the draft for review.
+            "dedupe_threshold": 0.85,
+            "dedupe_context_notes": 30,
         },
         "tools": {
             "enabled": False,          # master switch; false = plain chat, no tools
@@ -122,14 +127,20 @@ def load_config() -> dict:
                 "search_notes": True,
                 "get_note": True,
                 "propose_note": True,  # only ever creates PENDING drafts
-                "web_search": False,   # later
+                "web_search": True,    # self-gating: active only when web_search.url is set
+            },
+            "web_search": {
+                "url": None,           # SearXNG base URL (e.g. tailnet IP); None = tool off
+                "results": 5,
+                "timeout": 15,
+                "language": "en",
+                "safesearch": 0,
             },
             "synthesis": {
                 "max_tokens": 256,
                 "prompts": {
                     "memory": "recall-synthesis-prompt.md",
-                    # "web": "synthesis-web.md",     # later
-                    # "notes": "synthesis-notes.md", # later
+                    "web": "synthesis-web.md",
                 },
             },
         }

@@ -138,7 +138,7 @@ def test_synthesize_endpoint_creates_pending_drafts():
     conn.close()
 
     captured = {}
-    def fake_synth(tree):
+    def fake_synth(tree, existing=None):
         captured["tree"] = tree
         return [
             {"title": "SQLite fits this project", "body": "I chose SQLite because…",
@@ -163,7 +163,7 @@ def test_synthesize_endpoint_creates_pending_drafts():
 
     # Missing tree -> 404; synthesis blow-up -> 502.
     assert c.post("/api/notes/synthesize/99999").status_code == 404
-    def boom(tree): raise RuntimeError("model fell over")
+    def boom(tree, existing=None): raise RuntimeError("model fell over")
     main.synthesize_notes = boom
     assert c.post(f"/api/notes/synthesize/{root['id']}").status_code == 502
     print("✓ synthesize endpoint: export -> LLM -> pending drafts; 404/502 paths")

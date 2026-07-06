@@ -27,7 +27,7 @@ from db import (
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
     get_embedding, embed_texts, synthesize_recall,
-    generate_with_tools, synthesize, synthesize_notes,
+    generate_with_tools, synthesize, synthesize_notes, web_search_searxng,
 )
 from export_tree import export_forest, find_tree
 import notes_index
@@ -241,6 +241,9 @@ DEFAULT_TOOL_DESCRIPTIONS = {
     "propose_note": ("Propose a new atomic note. Creates a PENDING DRAFT the user must "
                      "review and approve — it never publishes. Use when the user asks to "
                      "note something down, or an idea clearly worth keeping emerges."),
+    "web_search": ("Search the web via the user's private SearXNG instance. Use for "
+                   "current events, facts you don't know, or anything the user asks you "
+                   "to look up. Returns result titles, URLs, and snippets."),
 }
 
 
@@ -328,6 +331,9 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             "parameters": {"type": "object", "properties": {
                 "title": {"type": "string", "description": "exact note title"}},
                 "required": ["title"]}}})
+    # web_search is self-gating: present only when a SearXNG URL is configured.
+    if avail.get("web_search", True) and (tcfg.get("web_search") or {}).get("url"):
+        schemas.append(_search_schema("web_search", descs["web_search"]))
     if avail.get("propose_note", True):
         schemas.append({"type": "function", "function": {
             "name": "propose_note",
@@ -407,19 +413,29 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 return json.dumps({"error": "propose_note needs a title and a body"})
             conn = sqlite3.connect(db_path)
             try:
+                dupes = _find_duplicate_notes(conn, title, body)
                 draft = create_note_draft(
                     conn, title, body,
                     tags=[str(t) for t in (args.get("tags") or [])],
                     links=[str(l) for l in (args.get("links") or [])],
                     run_id=state["chat_run_id"],
+                    duplicate_of=dupes,
                 )
             finally:
                 conn.close()
             state.setdefault("proposed_drafts", []).append(
                 {"id": draft["id"], "title": draft["title"], "run_id": draft["run_id"]})
-            return json.dumps({"draft_id": draft["id"], "status": "pending",
-                               "note": "Draft created; awaiting the user's review. Tell "
-                                       "the user it's in their drafts inbox."})
+            result = {"draft_id": draft["id"], "status": "pending",
+                      "note": "Draft created; awaiting the user's review. Tell "
+                              "the user it's in their drafts inbox."}
+            if dupes:
+                result["possible_duplicates"] = dupes
+                result["note"] += (" Warning: it may duplicate the existing note(s) "
+                                   f"{', '.join(d['title'] for d in dupes)} — mention "
+                                   "this to the user.")
+            return json.dumps(result)
+        if name == "web_search":
+            return json.dumps(web_search_searxng(args.get("query", "")))
         return json.dumps({"error": f"unknown tool {name}"})
 
     return schemas, execute, state
@@ -459,6 +475,51 @@ def _resolve_vault_dir(db_path: str) -> str:
     if root:
         return root
     return os.path.join(os.path.dirname(db_path), "notes")
+
+
+def _find_duplicate_notes(conn, title: str, body: str) -> List[dict]:
+    """Near-duplicate existing notes for a candidate (semantic, best-effort).
+
+    Returns [{title, score}] above notes.dedupe_threshold so the user can reject
+    or merge during review — candidates are never silently dropped.
+    """
+    threshold = config.get("notes", {}).get("dedupe_threshold", 0.85)
+    try:
+        vec = get_embedding(f"{title}\n{body}")
+        if not vec:
+            return []
+        matches = notes_index.search_notes_semantic(conn, vec, limit=3)
+        return [{"title": m["title"], "score": round(m["score"], 4)}
+                for m in matches if m.get("score", 0) >= threshold]
+    except Exception:
+        return []
+
+
+def _relevant_existing_notes(conn, tree: dict) -> List[dict]:
+    """Existing vault notes to show the synthesis LLM so it links instead of
+    duplicating. Semantic top-K against the tree's user content; falls back to a
+    capped title listing when embeddings are unavailable."""
+    limit = config.get("notes", {}).get("dedupe_context_notes", 30)
+
+    texts = []
+    def walk(node):
+        if node.get("role") == "user" and node.get("content"):
+            texts.append(node["content"])
+        for child in node.get("children", []):
+            walk(child)
+    walk(tree)
+    sample = "\n".join(texts)[:4000]
+
+    try:
+        vec = get_embedding(sample) if sample else None
+        if vec:
+            found = notes_index.search_notes_semantic(conn, vec, limit=limit)
+            if found:
+                return [{"title": n["title"], "tags": n["tags"]} for n in found]
+    except Exception:
+        pass
+    return [{"title": n["title"], "tags": n["tags"]}
+            for n in notes_index.list_notes(conn)[:limit]]
 
 
 # Characters that break filesystems or Obsidian [[wikilinks]] (NOTES-FORMAT.md).
@@ -955,9 +1016,17 @@ async def synthesize_tree_notes(
             raise HTTPException(status_code=404,
                                 detail=f"Turn {tree_id} not found (or not committed)")
 
+        # Dedupe context: tell the model which vault notes already exist so it
+        # links to them instead of duplicating.
+        conn = sqlite3.connect(db_path)
+        try:
+            existing = _relevant_existing_notes(conn, tree)
+        finally:
+            conn.close()
+
         # Blocking LLM call — run off the event loop. Can take a while on big trees.
         try:
-            notes = await asyncio.to_thread(synthesize_notes, tree)
+            notes = await asyncio.to_thread(synthesize_notes, tree, existing)
         except HTTPException:
             raise
         except Exception as e:
@@ -968,11 +1037,14 @@ async def synthesize_tree_notes(
         conn = sqlite3.connect(db_path)
         try:
             for n in notes:
+                # Safety net: flag near-duplicates that slipped past the model.
+                dupes = _find_duplicate_notes(conn, n["title"], n["body"])
                 drafts.append(create_note_draft(
                     conn, n["title"], n["body"],
                     tags=n["tags"], links=n["links"],
                     source_turns=n["source_turns"],
                     tree_root_id=tree_id, run_id=run_id,
+                    duplicate_of=dupes,
                 ))
         finally:
             conn.close()
