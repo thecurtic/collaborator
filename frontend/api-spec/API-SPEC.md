@@ -117,6 +117,24 @@ data: {"type":"done", ...}
   recall block (see `node.recall` in `GET /api/tree`).
 - The old single `recall` event is **removed** — recall is now tool-driven.
 
+**Available tools** (each gated in `tools.available`): `recall_semantic`,
+`recall_keyword` (turn history), `synthesize`, `search_notes`, `get_note` (the notes
+vault — read-only; `get_note` includes backlinks for graph traversal),
+`propose_note` — which **only ever creates a pending draft** in the review inbox
+(never the vault; the user approves/rejects as usual; near-duplicates of existing
+notes are flagged in the result and on the draft) — and `web_search`, which queries
+the private SearXNG instance (`tools.web_search.url`; the tool is offered to the
+model only when that URL is configured, and SearXNG must have the `json` format
+enabled in its settings.yml).
+
+**`drafts_proposed` SSE event** — emitted after the answer streams when the model
+called `propose_note` during the turn:
+```
+data: {"type":"drafts_proposed","drafts":[{"id":7,"title":"…","run_id":"chat-a1b2c3d4"}]}
+```
+Use it to surface a "review drafts" affordance; fetch details via
+`GET /api/notes/drafts?run_id=chat-…`.
+
 > Branch model: every continuation should send `parent_turn_id` = the active branch's
 > leaf turn. To fork from a mid-conversation turn or a specific paragraph, use
 > `POST /api/branches/{id}` instead. The `done` event echoes `parent_turn_id` and
@@ -357,9 +375,20 @@ WS /api/transcribe/stream?passkey=<your-passkey>&language=en
 Stream mic audio in and receive incremental transcripts. For tap-to-record, keep
 using the one-shot `POST /api/transcribe`.
 
-**Auth:** browsers can't set WebSocket headers, so pass the passkey as the
-`?passkey=` query param, **or** as the first text frame `{"passkey":"..."}`. Invalid
-/ missing → `{"type":"error"}` then close (1008).
+**Auth (preferred): one-time ticket.** Browsers can't set WebSocket headers, so
+exchange the passkey for a short-lived single-use ticket over a normal request, then
+put the *ticket* (not the secret) in the WS URL:
+```
+POST /api/auth/ws-ticket        (X-Passkey header)
+-> 200 { "ticket": "<random>", "expires_in": 30 }
+WS /api/transcribe/stream?ticket=<ticket>
+```
+The ticket is single-use, expires in ~30s, and only the WS endpoint accepts it — so
+the long-lived passkey never lands in a WS URL or proxy logs.
+
+**Backward compat (deprecated):** `?passkey=<secret>` or a first text frame
+`{"passkey":"..."}` still work; remove once the ticket flow ships. Invalid/missing
+auth → `{"type":"error"}` then close (1008).
 
 **Audio in (binary frames):** raw **PCM16, mono, 16 kHz, little-endian** — sent as
 captured (any frame size). This is fed straight to Whisper (no transcode).
@@ -429,6 +458,168 @@ to **`tree`** when they become real conversations. Filter the tree by stage with
 > "upgrade" action, or automatically when a seed chat is branched from. The backend
 > just provides this endpoint — call it whenever your UX decides a seed has become a
 > real conversation.
+
+---
+
+### 10. Export a Conversation Tree (notes-pipeline preprocessing)
+```
+GET /api/tree/{turn_id}/export
+X-Passkey: <your-passkey>
+```
+
+Exports a conversation as one nested JSON tree, shaped for downstream LLM synthesis
+into atomic notes (pure data reshaping — no LLM call). Pass a **root** turn id for a
+whole conversation, or any committed turn id for just that **subtree** (e.g. one
+branch). This is the user-initiated preprocessing step: export only the trees you
+choose.
+
+**Response (200 OK)**
+```json
+{
+  "tree": {
+    "id": 1, "parent_turn_id": null,
+    "role": "user", "content": "…",
+    "created_at": "2026-07-06T10:00:00Z",
+    "committed": true, "context_turns": 20,
+    "branched": false, "paragraph_index": null,
+    "model_name": null, "name": "Database planning", "state": "tree",
+    "tags": ["decision"],
+    "sibling_index": 0, "sibling_count": 1,
+    "children": [ { "…": "nested nodes, same shape" } ]
+  }
+}
+```
+
+Rules:
+- **Uncommitted turns are pruned**; their committed descendants are reattached to the
+  nearest committed ancestor (`parent_turn_id` on each node is the *effective*,
+  post-prune parent).
+- **Recall blocks and embeddings are excluded** (derivative content).
+- Orphaned turns (broken parent links — only possible via manual DB edits) are
+  skipped along with their subtrees.
+- `404` if the turn doesn't exist or is uncommitted.
+
+A CLI equivalent exists for offline/bulk use:
+`python backend/export_tree.py --db <conversations.db> [--tree-id N] [-o out.json]`
+(exports **all** trees as a JSON list when `--tree-id` is omitted).
+
+---
+
+### 11. Note Drafts (curation gate for atomic notes)
+
+Atomic-note drafts (see `NOTES-FORMAT.md`) live in the DB until the user approves
+them — **the vault only ever contains approved notes**. Approval validates the title,
+stamps frontmatter (`created`, `tags`, `source_turns`), and writes
+`<Title>.md` into the vault.
+
+**Synthesize drafts from a conversation tree** (the pipeline bridge):
+```
+POST /api/notes/synthesize/{tree_id}
+-> 200 { "run_id": "run-abc123", "drafts": [ ...pending drafts... ], "count": 2 }
+```
+User-initiated on a chosen tree: exports the subtree rooted at `tree_id` (a root id =
+the whole conversation; any committed turn id = one branch), runs one LLM pass with
+the editable `synthesis-notes.md` prompt (structured JSON output), and stores each
+resulting note as a **pending draft** grouped under `run_id`. Zero drafts is a valid
+outcome. Nothing touches the vault. `404` unknown/uncommitted turn; `502` if the
+model call fails. Synchronous — big trees can take a while on local inference
+(`notes.synthesis_timeout`, default 300s).
+
+**Dedupe-against-vault** (automatic): the model is shown up to
+`notes.dedupe_context_notes` relevant existing notes ("link, don't duplicate"), and
+each resulting candidate is checked against the index — near-duplicates (cosine ≥
+`notes.dedupe_threshold`, default 0.85) get a `duplicate_of` field on the draft:
+```json
+"duplicate_of": [ { "title": "SQLite fits this project", "score": 0.91 } ]
+```
+Candidates are **flagged, never dropped** — surface `duplicate_of` in the review UI
+so the user can reject/merge. Empty list = no near-duplicates. The same check runs
+when the chat model calls `propose_note`.
+
+**Create a draft** (synthesis output or hand-written):
+```
+POST /api/notes/drafts
+{ "title": "SQLite fits single-user local persistence",
+  "body": "distilled prose with [[wikilinks]]…",
+  "tags": ["databases", "decision"], "links": [],
+  "source_turns": [42, 47], "tree_root_id": 1, "run_id": "run-abc" }
+-> 200 { "draft": { "id": 1, "status": "pending", ... } }
+```
+
+**List / review:**
+```
+GET /api/notes/drafts?status=pending&run_id=run-abc
+-> 200 { "drafts": [...], "count": N }
+```
+
+**Edit during review** (pending drafts only; `409` once decided):
+```
+PATCH /api/notes/drafts/{id}
+{ "title"?: "...", "body"?: "...", "tags"?: [...], "links"?: [...] }
+```
+
+**Approve** → writes the note file, returns its location:
+```
+POST /api/notes/drafts/{id}/approve
+-> 200 { "draft": {...status:"approved"...}, "path": "...", "filename": "<Title>.md" }
+```
+- `422` if the title is empty/too long or contains `/ \ : * ? " < > | # ^ [ ]`
+- `409` if a note with that title already exists (case-insensitive) — the draft stays
+  pending; rename via PATCH and re-approve.
+- Tags are normalized to lowercase-hyphenated; a duplicate leading `# H1` in the body
+  is dropped (the file gets exactly one H1 = the title).
+
+**Reject** (kept in the table for audit; never touches the vault):
+```
+POST /api/notes/drafts/{id}/reject
+-> 200 { "draft": {...status:"rejected"...} }
+```
+
+Vault location: vaults are **always per-user** — notes never cross passkeys, same
+isolation as the conversation DBs. `notes.vault_dir` relocates where vaults live, it
+never merges them: under auth each user's vault is `<vault_dir>/<user-hash>`;
+without auth it's the vault itself. It's a machine path — set it in `.config.yaml`
+(e.g. `/srv/vaults`, then serve `/srv/vaults/<your-hash>` from Obsidian). Unset →
+vaults sit next to each user's DB (`users/{hash}/notes`, else `backend/data/notes`).
+
+---
+
+### 12. Notes Index (vault read/search)
+
+A **rebuildable** SQLite index over the vault. Files are the source of truth;
+everything graph-relevant (titles, `[[wikilink]]` edges, tags) is derived from note
+content alone — never stored index-only — so the index can always be rebuilt from
+files, and the graph survives round-trips through other carriers (future Nostr
+kind-1 export). Approving a draft indexes the note immediately.
+
+**Reconcile against the vault** (picks up Obsidian edits/renames/deletes; re-embeds
+changed notes):
+```
+POST /api/notes/reindex
+-> 200 { "added": 1, "updated": 0, "removed": 0, "total": 12 }
+```
+
+**List** (metadata + link edges; optional `?tag=`):
+```
+GET /api/notes?tag=decision
+-> 200 { "notes": [ { "filename", "title", "created", "tags", "source_turns",
+                      "links", "content_hash", "mtime" } ], "count": N }
+```
+
+**Get one** (case-insensitive title; body + backlinks):
+```
+GET /api/notes/{title}
+-> 200 { "note": { ..., "body": "…", "backlinks": [ ...notes linking here... ] } }
+```
+`404` if unknown. (Literal routes like `/api/notes/drafts` are matched first.)
+
+**Search**:
+```
+GET /api/notes/search?q=…&mode=semantic|keyword&limit=10
+-> 200 { "results": [ ...notes with "score"... ], "count": N, "mode": "semantic" }
+```
+`semantic` uses the local embedder (same as recall); `keyword` is lexical over
+title/body/tags.
 
 > Setup: embeddings run locally on the backend by default (`fastembed`, downloads a
 > small model once). Enable via `recall.enabled` or the per-request `recall` flag.

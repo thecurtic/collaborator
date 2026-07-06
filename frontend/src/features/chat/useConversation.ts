@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
-import type { ConversationTree, RecallBlock, TreeNode } from '@/domain/models';
+import type {
+  ConversationTree,
+  ProposedDraft,
+  RecallBlock,
+  TreeNode,
+} from '@/domain/models';
 import { getRecallEnabled } from '@/features/settings/uiPrefs';
 import {
   CONTINUE,
@@ -59,6 +64,10 @@ export function useConversation(reloadSignal: number) {
   const [recall, setRecall] = useState<RecallBlock | null>(null);
   // Live tool-calling status line ("what it's doing"), cleared each turn.
   const [status, setStatus] = useState('');
+  // Drafts the model proposed via propose_note this turn (pending in the
+  // inbox). Kept after the stream so the chat can offer a "review" link;
+  // cleared on the next send or when the user follows the link.
+  const [proposedDrafts, setProposedDrafts] = useState<ProposedDraft[]>([]);
   // Index kept in a ref so it's fresh synchronously after a load (selectPathTo
   // runs right after) while still triggering re-render via the `version` bump.
   const indexRef = useRef<NodeIndex>(
@@ -137,6 +146,7 @@ export function useConversation(reloadSignal: number) {
         onToken: (c: string) => void,
         onRecall: (block: RecallBlock) => void,
         onStatus: (t: string) => void,
+        onDrafts: (drafts: ProposedDraft[]) => void,
         signal: AbortSignal,
       ) => Promise<{
         id: number | null;
@@ -149,12 +159,14 @@ export function useConversation(reloadSignal: number) {
       setError(null);
       setRecall(null);
       setStatus('');
+      setProposedDrafts([]);
       setStreaming({ user: userText, reply: '' });
       try {
         const res = await stream(
           (c) => setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
           (block) => setRecall(block),
           (t) => setStatus(t),
+          (drafts) => setProposedDrafts((prev) => [...prev, ...drafts]),
           abort.signal,
         );
         // Fetch first, THEN apply + clear the overlay in one synchronous block
@@ -194,11 +206,13 @@ export function useConversation(reloadSignal: number) {
     abortRef.current?.abort();
   }, []);
 
+  const clearProposedDrafts = useCallback(() => setProposedDrafts([]), []);
+
   const send = useCallback(
     (message: string): Promise<boolean> => {
       const trimmed = message.trim();
       if (!trimmed) return Promise.resolve(true);
-      return runStream(trimmed, (onToken, onRecall, onStatus, signal) =>
+      return runStream(trimmed, (onToken, onRecall, onStatus, onDrafts, signal) =>
         api.sendMessageStream(
           // Active leaf to continue from (omit for a brand-new conversation).
           {
@@ -210,6 +224,7 @@ export function useConversation(reloadSignal: number) {
           signal,
           onRecall,
           onStatus,
+          onDrafts,
         ),
       );
     },
@@ -243,21 +258,24 @@ export function useConversation(reloadSignal: number) {
       // stream (the reload inside runStream rebuilds the index).
       const root = rootOfTurn(parentTurnId);
       const seedRootId = root?.state === 'seed' ? root.id : null;
-      const ok = await runStream(trimmed, (onToken, onRecall, onStatus, signal) =>
-        api.branchMessage(
-          {
-            parentTurnId,
-            message: trimmed,
-            paragraphIndex,
-            recall: getRecallEnabled(),
-            // "Without context" → fresh branch, no prior turns injected.
-            ...(withContext ? {} : { contextTurns: 0 }),
-          },
-          onToken,
-          signal,
-          onRecall,
-          onStatus,
-        ),
+      const ok = await runStream(
+        trimmed,
+        (onToken, onRecall, onStatus, onDrafts, signal) =>
+          api.branchMessage(
+            {
+              parentTurnId,
+              message: trimmed,
+              paragraphIndex,
+              recall: getRecallEnabled(),
+              // "Without context" → fresh branch, no prior turns injected.
+              ...(withContext ? {} : { contextTurns: 0 }),
+            },
+            onToken,
+            signal,
+            onRecall,
+            onStatus,
+            onDrafts,
+          ),
       );
       if (ok && seedRootId != null) await promote(seedRootId);
       return ok;
@@ -354,6 +372,8 @@ export function useConversation(reloadSignal: number) {
     streaming,
     recall,
     status,
+    proposedDrafts,
+    clearProposedDrafts,
     send,
     branch,
     stopGeneration,

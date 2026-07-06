@@ -1,4 +1,4 @@
-import { Maximize2, Trash2 } from 'lucide-react';
+import { Maximize2, NotebookPen, Trash2 } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import type { ConversationTree, TreeNode } from '@/domain/models';
@@ -12,6 +12,8 @@ interface TreeMapProps {
   onRename: (turnId: number, name: string) => void;
   /** "Go to conversation" — open the chat view on the selected branch. */
   onOpenConversation: () => void;
+  /** Synthesize notes from the selected tree/branch (slow, backgrounded). */
+  onSynthesize: (turnId: number, label: string) => void;
 }
 
 const COL = 40; // px between branch columns
@@ -264,6 +266,7 @@ export function TreeMap({
   onDeleteSubtree,
   onRename,
   onOpenConversation,
+  onSynthesize,
 }: TreeMapProps) {
   const [selected, setSelected] = useState<Segment | null>(null);
   const [editing, setEditing] = useState<{ rootId: number; value: string } | null>(
@@ -592,10 +595,10 @@ export function TreeMap({
             )}{' '}
             · {selected.count} {selected.count === 1 ? 'turn' : 'turns'}
           </p>
-          <div className="flex gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <Button
               variant="destructive"
-              className="flex-1 gap-2"
+              className="gap-2"
               onClick={() => {
                 const id = selected.startNodeId;
                 setSelected(null);
@@ -611,7 +614,6 @@ export function TreeMap({
             {(selected.parentColumn == null || selected.branched) && (
               <Button
                 variant="outline"
-                className="flex-1"
                 onClick={() =>
                   setEditing({
                     rootId: selected.startNodeId,
@@ -623,10 +625,19 @@ export function TreeMap({
               </Button>
             )}
             <Button
-              variant="secondary"
-              className="flex-1"
-              onClick={onOpenConversation}
+              variant="outline"
+              className="gap-2"
+              onClick={() =>
+                onSynthesize(
+                  selected.startNodeId,
+                  selected.name ?? `branch #${selected.startNodeId}`,
+                )
+              }
             >
+              <NotebookPen className="h-4 w-4" />
+              Synthesize
+            </Button>
+            <Button variant="secondary" onClick={onOpenConversation}>
               Open chat
             </Button>
           </div>

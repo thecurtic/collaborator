@@ -2,7 +2,20 @@
 
 A living document describing the core philosophy, architecture decisions, and intended behavior of Collaborator.
 
-**Last Updated:** 2026-06-29
+**Last Updated:** 2026-07-06
+
+> **Implementation status (2026-07-06):** The atomic-notes layer is underway. The
+> note file format is specified in `NOTES-FORMAT.md` (one markdown file per idea,
+> title-as-filename, app-managed frontmatter with local tags + `source_turns`
+> provenance, `[[wikilinks]]` as local graph edges; Nostr kind-1 export deferred —
+> events and their tags are constructed at signing time, all frontmatter stripped).
+> The full pipeline is implemented: `GET /api/tree/{id}/export` (turns → nested
+> JSON), `POST /api/notes/synthesize/{tree_id}` (one LLM pass via the editable
+> `synthesis-notes.md` → pending drafts), and the curation gate
+> (`/api/notes/drafts` review/edit/approve/reject; approval stamps frontmatter and
+> writes `<Title>.md` into the vault — the vault holds approved notes only).
+> Next: the notes index (embeddings/backlinks for recall + dedupe) and read-only
+> notes tools on the tool loop.
 
 > **Implementation status (2026-06-29):** Recall v1 is implemented on the backend —
 > recall runs inside the send (embed → cosine search → synthesize → stream as a

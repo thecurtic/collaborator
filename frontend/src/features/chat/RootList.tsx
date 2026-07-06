@@ -1,4 +1,4 @@
-import { Pencil, Sprout, TreePine } from 'lucide-react';
+import { NotebookPen, Pencil, Sprout, TreePine } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import type { TreeNode } from '@/domain/models';
@@ -13,6 +13,8 @@ interface RootListProps {
   onRename: (rootId: number, name: string) => void;
   /** Present on the seeds list: graduate this chat to a full conversation. */
   onPromote?: (rootId: number) => void;
+  /** Synthesize notes from this conversation (slow, backgrounded). */
+  onSynthesize?: (rootId: number, label: string) => void;
 }
 
 /** Count all turns in a subtree (shown as light row metadata). */
@@ -42,6 +44,7 @@ export function RootList({
   onOpen,
   onRename,
   onPromote,
+  onSynthesize,
 }: RootListProps) {
   const [editing, setEditing] = useState<{ rootId: number; value: string } | null>(
     null,
@@ -92,6 +95,20 @@ export function RootList({
                   </span>
                 </span>
               </button>
+              {onSynthesize && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Synthesize notes"
+                  title="Synthesize notes from this conversation"
+                  onClick={() =>
+                    onSynthesize(root.id, root.name ?? root.preview ?? 'Untitled')
+                  }
+                  className="h-9 w-9 shrink-0 text-muted-foreground"
+                >
+                  <NotebookPen className="h-4 w-4" />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"

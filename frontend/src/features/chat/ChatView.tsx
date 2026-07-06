@@ -1,4 +1,4 @@
-import { Brain, Loader2 } from 'lucide-react';
+import { Brain, Loader2, NotebookPen } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/Markdown';
 import { useModalA11y } from '@/lib/useModalA11y';
@@ -14,6 +14,8 @@ interface ChatViewProps {
   /** Shared with App so a call can fork from the same point. */
   branchTarget: BranchTarget | null;
   onBranchTargetChange: (b: BranchTarget | null) => void;
+  /** Open the drafts inbox (filtered to a run) — model-proposed notes. */
+  onReviewDrafts: (runId: string | null) => void;
 }
 
 interface BranchPoint {
@@ -62,6 +64,7 @@ export function ChatView({
   convo,
   branchTarget,
   onBranchTargetChange,
+  onReviewDrafts,
 }: ChatViewProps) {
   const {
     path,
@@ -72,6 +75,8 @@ export function ChatView({
     streaming,
     recall,
     status,
+    proposedDrafts,
+    clearProposedDrafts,
     send,
     branch,
     stopGeneration,
@@ -314,6 +319,30 @@ export function ChatView({
         <div className="border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-center text-sm text-destructive">
           {error}
         </div>
+      )}
+
+      {/* The model proposed note(s) this turn — pending drafts, never written
+          to the vault without approval. */}
+      {proposedDrafts.length > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            const runId = proposedDrafts[0]?.runId || null;
+            clearProposedDrafts();
+            onReviewDrafts(runId);
+          }}
+          className="flex items-center justify-center gap-2 border-t border-primary/30 bg-primary/5 px-4 py-2.5 text-sm text-primary hover:bg-primary/10"
+        >
+          <NotebookPen className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 truncate">
+            {proposedDrafts.length === 1
+              ? `Note proposed: “${proposedDrafts[0].title}”`
+              : `${proposedDrafts.length} notes proposed`}
+          </span>
+          <span className="shrink-0 font-medium underline underline-offset-2">
+            Review
+          </span>
+        </button>
       )}
 
       <div className="mx-auto w-full max-w-3xl">

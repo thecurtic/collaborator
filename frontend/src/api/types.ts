@@ -118,6 +118,96 @@ export interface ApiTranscription {
   text: string;
 }
 
+/** POST /api/auth/ws-ticket — short-lived single-use WS auth ticket. */
+export interface ApiWsTicket {
+  ticket: string;
+  expires_in: number;
+}
+
+// ---- Notes pipeline (drafts inbox + vault index) ----
+
+/** A semantic near-duplicate flag on a draft (vs. an existing vault note). */
+export interface ApiDuplicateRef {
+  title: string;
+  score: number;
+}
+
+/** A note draft (pending until the user approves/rejects). */
+export interface ApiNoteDraft {
+  id: number;
+  run_id: string;
+  tree_root_id: number | null;
+  title: string;
+  body: string;
+  tags?: string[];
+  links?: string[];
+  source_turns?: number[];
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
+  decided_at: string | null;
+  duplicate_of?: ApiDuplicateRef[];
+}
+
+/** GET /api/notes/drafts */
+export interface ApiDraftsResponse {
+  drafts: ApiNoteDraft[];
+  count: number;
+}
+
+/** POST /api/notes/drafts/{id}/approve */
+export interface ApiApproveResponse {
+  draft: ApiNoteDraft;
+  path: string;
+  filename: string;
+}
+
+/** POST /api/notes/synthesize/{tree_id} */
+export interface ApiSynthesisResponse {
+  run_id: string;
+  drafts: ApiNoteDraft[];
+  count: number;
+}
+
+/** Vault note metadata (list/search entries; search adds `score`). */
+export interface ApiNoteMeta {
+  filename: string;
+  title: string;
+  created?: string;
+  tags?: string[];
+  source_turns?: number[];
+  links?: string[];
+  score?: number;
+}
+
+/** GET /api/notes */
+export interface ApiNotesResponse {
+  notes: ApiNoteMeta[];
+  count: number;
+}
+
+/** GET /api/notes/search */
+export interface ApiNoteSearchResponse {
+  results: ApiNoteMeta[];
+  count: number;
+  mode: string;
+}
+
+/** GET /api/notes/{title} — full note (backlinks = titles or note objects). */
+export interface ApiNoteResponse {
+  note: ApiNoteMeta & {
+    body: string;
+    backlinks?: (string | { title: string })[];
+  };
+}
+
+/** POST /api/notes/reindex */
+export interface ApiReindexResponse {
+  added: number;
+  updated: number;
+  removed: number;
+  total: number;
+}
+
 /** Standard error envelope ({ "error": "..." }). */
 export interface ApiError {
   error: string;

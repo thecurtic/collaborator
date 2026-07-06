@@ -1,5 +1,8 @@
 import type {
   ApiHealth,
+  ApiNoteDraft,
+  ApiNoteMeta,
+  ApiNoteResponse,
   ApiRecall,
   ApiTree,
   ApiTreeNode,
@@ -9,6 +12,9 @@ import type {
 import type {
   ConversationTree,
   HealthStatus,
+  Note,
+  NoteDraft,
+  NoteMeta,
   RecallBlock,
   TreeNode,
   Turn,
@@ -111,4 +117,47 @@ export function toTurnsPage(api: ApiTurnsResponse): TurnsPage {
 
 export function toHealth(api: ApiHealth): HealthStatus {
   return { status: api.status, version: api.version };
+}
+
+export function toNoteDraft(api: ApiNoteDraft): NoteDraft {
+  return {
+    id: api.id,
+    runId: api.run_id,
+    treeRootId: api.tree_root_id ?? null,
+    title: api.title,
+    body: api.body,
+    tags: api.tags ?? [],
+    links: api.links ?? [],
+    sourceTurns: api.source_turns ?? [],
+    status: api.status,
+    createdAt: api.created_at,
+    decidedAt: api.decided_at ?? null,
+    duplicateOf: (api.duplicate_of ?? []).map((d) => ({
+      title: d.title,
+      score: d.score,
+    })),
+  };
+}
+
+export function toNoteMeta(api: ApiNoteMeta): NoteMeta {
+  return {
+    filename: api.filename,
+    title: api.title,
+    created: api.created ?? null,
+    tags: api.tags ?? [],
+    sourceTurns: api.source_turns ?? [],
+    links: api.links ?? [],
+    score: typeof api.score === 'number' ? api.score : null,
+  };
+}
+
+export function toNote(api: ApiNoteResponse['note']): Note {
+  return {
+    ...toNoteMeta(api),
+    body: api.body,
+    // Backlinks may arrive as bare titles or note objects — normalize to titles.
+    backlinks: (api.backlinks ?? [])
+      .map((b) => (typeof b === 'string' ? b : b.title))
+      .filter(Boolean),
+  };
 }

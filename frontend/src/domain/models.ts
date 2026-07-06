@@ -123,6 +123,79 @@ export interface RecallBlock {
   sources: RecallSource[];
 }
 
+// ---- Notes pipeline ----
+
+/** A semantic near-duplicate flag on a draft (vs. an existing vault note). */
+export interface DuplicateRef {
+  title: string;
+  score: number;
+}
+
+export type DraftStatus = 'pending' | 'approved' | 'rejected';
+
+/**
+ * An LLM-synthesized (or hand-written) note awaiting the user's decision.
+ * The vault only ever contains APPROVED notes — this is the curation gate.
+ */
+export interface NoteDraft {
+  id: number;
+  /** Groups one synthesis pass / one chat turn's proposals. */
+  runId: string;
+  treeRootId: number | null;
+  title: string;
+  body: string;
+  tags: string[];
+  links: string[];
+  /** Turn ids this note was distilled from (for source links). */
+  sourceTurns: number[];
+  status: DraftStatus;
+  createdAt: string;
+  decidedAt: string | null;
+  /** Near-duplicate vault notes — flagged, never dropped. */
+  duplicateOf: DuplicateRef[];
+}
+
+/** Vault note metadata (list/search rows). */
+export interface NoteMeta {
+  filename: string;
+  title: string;
+  created: string | null;
+  tags: string[];
+  sourceTurns: number[];
+  /** Outgoing [[wikilink]] targets parsed from the body. */
+  links: string[];
+  /** Search relevance, when this row came from /api/notes/search. */
+  score: number | null;
+}
+
+/** A full vault note (body + incoming links). */
+export interface Note extends NoteMeta {
+  body: string;
+  /** Titles of notes whose bodies link here. */
+  backlinks: string[];
+}
+
+/** Result of one synthesis pass over a tree/branch. */
+export interface SynthesisResult {
+  runId: string;
+  drafts: NoteDraft[];
+  count: number;
+}
+
+/** A draft the chat model proposed mid-conversation (drafts_proposed SSE). */
+export interface ProposedDraft {
+  id: number;
+  title: string;
+  runId: string;
+}
+
+export interface ReindexResult {
+  added: number;
+  updated: number;
+  removed: number;
+  total: number;
+}
+
 export interface SendMessageInput {
   message: string;
   /** Opt-in: search memory and inject a synthesized recall block into context. */
