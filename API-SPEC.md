@@ -546,10 +546,12 @@ POST /api/notes/drafts/{id}/reject
 -> 200 { "draft": {...status:"rejected"...} }
 ```
 
-Vault location: when `notes.vault_dir` is **set** it wins unconditionally — the
-single-owner setup: point it at the Obsidian-served vault on this machine (it's a
-machine path, so set it in `.config.yaml`). When unset, the vault sits next to the
-conversation DB: `users/{hash}/notes` under auth, else `backend/data/notes`.
+Vault location: vaults are **always per-user** — notes never cross passkeys, same
+isolation as the conversation DBs. `notes.vault_dir` relocates where vaults live, it
+never merges them: under auth each user's vault is `<vault_dir>/<user-hash>`;
+without auth it's the vault itself. It's a machine path — set it in `.config.yaml`
+(e.g. `/srv/vaults`, then serve `/srv/vaults/<your-hash>` from Obsidian). Unset →
+vaults sit next to each user's DB (`users/{hash}/notes`, else `backend/data/notes`).
 
 > Setup: embeddings run locally on the backend by default (`fastembed`, downloads a
 > small model once). Enable via `recall.enabled` or the per-request `recall` flag.

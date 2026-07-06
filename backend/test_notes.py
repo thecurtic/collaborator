@@ -103,23 +103,30 @@ def test_reject_never_touches_vault():
 
 
 def test_vault_dir_resolution():
-    """Explicit notes.vault_dir wins even under auth; unset -> vault next to the DB."""
+    """Vaults are ALWAYS per-user; vault_dir relocates them, never merges them."""
     c, vault = _fresh()
-    db_path = "/data/users/abc123hash/conversations.db"
+    a = "/data/users/abc123hash/conversations.db"
+    b = "/data/users/def456hash/conversations.db"
 
-    # Explicit setting wins unconditionally (single-owner Obsidian-served vault).
-    config.get_config._config["notes"]["vault_dir"] = "/srv/vault"
+    # Under auth with vault_dir set: per-user subdirectory of the configured root —
+    # two users NEVER share a vault.
+    config.get_config._config["notes"]["vault_dir"] = "/srv/vaults"
     main.auth_enabled = True
-    assert main._resolve_vault_dir(db_path) == "/srv/vault"
-    main.auth_enabled = False
-    assert main._resolve_vault_dir(db_path) == "/srv/vault"
+    assert main._resolve_vault_dir(a) == "/srv/vaults/abc123hash"
+    assert main._resolve_vault_dir(b) == "/srv/vaults/def456hash"
+    assert main._resolve_vault_dir(a) != main._resolve_vault_dir(b)
 
-    # Unset -> per-user vault next to the conversation DB.
+    # Under auth, unset -> vault next to each user's DB.
     config.get_config._config["notes"]["vault_dir"] = None
-    main.auth_enabled = True
-    assert main._resolve_vault_dir(db_path) == "/data/users/abc123hash/notes"
+    assert main._resolve_vault_dir(a) == "/data/users/abc123hash/notes"
+
+    # Auth off (single anonymous user): vault_dir IS the vault; unset -> next to DB.
     main.auth_enabled = False
-    print("✓ vault_dir: explicit setting wins under auth; unset falls back per-user")
+    config.get_config._config["notes"]["vault_dir"] = "/srv/vaults"
+    assert main._resolve_vault_dir("/x/data/conversations.db") == "/srv/vaults"
+    config.get_config._config["notes"]["vault_dir"] = None
+    assert main._resolve_vault_dir("/x/data/conversations.db") == "/x/data/notes"
+    print("✓ vault_dir: always per-user under auth; relocates, never merges")
 
 
 def test_synthesize_endpoint_creates_pending_drafts():
