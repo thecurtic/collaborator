@@ -18,11 +18,35 @@ def test_html_extraction():
     <script>alert('hi')</script></head><body>
     <h1>Heading</h1><p>First para.</p><div>Second <b>bold</b> bit.</div>
     <script>var x = 'never show this';</script></body></html>"""
-    title, text = inference._HtmlTextExtractor().extract(html)
+    title, text, links = inference._HtmlTextExtractor().extract(html)
     assert title == "My Page"
     assert "Heading" in text and "First para." in text and "bold" in text
     assert "alert" not in text and "color:red" not in text and "never show" not in text
+    assert links == []
     print("✓ extractor: title captured, scripts/styles stripped, text kept")
+
+
+def test_link_extraction():
+    html = """<body>
+    <a href="/relative/page">Relative link</a>
+    <a href="https://other.example/x#frag">Absolute with fragment</a>
+    <a href="https://other.example/x">Duplicate after defrag</a>
+    <a href="javascript:alert(1)">JS link</a>
+    <a href="mailto:a@b.c">Mail</a>
+    <a href="#section">Fragment only</a>
+    <script><a href="https://hidden.example">inside script</a></script>
+    </body>"""
+    _, _, links = inference._HtmlTextExtractor().extract(
+        html, base_url="https://site.example/dir/page", max_links=10)
+    urls = [l["url"] for l in links]
+    assert urls == ["https://site.example/relative/page", "https://other.example/x"]
+    assert links[0]["text"] == "Relative link"
+
+    # Cap respected.
+    many = "".join(f'<a href="https://e.com/{i}">L{i}</a>' for i in range(100))
+    _, _, links = inference._HtmlTextExtractor().extract(many, base_url="https://e.com", max_links=5)
+    assert len(links) == 5
+    print("✓ links: resolved absolute, defragged, deduped, js/mailto dropped, capped")
 
 
 def test_guards():
@@ -84,6 +108,65 @@ def test_fetch_html_truncation_and_types():
     print("✓ fetch: html parsed + truncated flag; pdf rejected; errors are tool-level")
 
 
+def test_fetch_budget_and_same_domain():
+    cfg = config.get_config._config
+    cfg["tools"]["fetch_url"]["max_per_turn"] = 2
+
+    def ok_resp(url):
+        class R:
+            headers = {"content-type": "text/html"}
+            encoding = "utf-8"
+            def raise_for_status(self): pass
+            def iter_content(self, n): yield b"<html><body>hi</body></html>"
+        R.url = url
+        return R()
+
+    orig = inference.requests.get
+    inference.requests.get = lambda url, **k: ok_resp(url)
+    try:
+        _, execute, state = main._build_tools(os.environ["DB_PATH"])
+        assert "error" not in json.loads(execute("fetch_url", {"url": "https://a.example/1"}))
+        assert "error" not in json.loads(execute("fetch_url", {"url": "https://b.example/2"}))
+        out = json.loads(execute("fetch_url", {"url": "https://c.example/3"}))
+        assert "budget" in out["error"]                      # third fetch refused
+        assert state["fetch_count"] == 2
+
+        # same_domain_only: second fetch must stay on the first host.
+        cfg["tools"]["fetch_url"]["same_domain_only"] = True
+        _, execute, state = main._build_tools(os.environ["DB_PATH"])
+        assert "error" not in json.loads(execute("fetch_url", {"url": "https://a.example/1"}))
+        out = json.loads(execute("fetch_url", {"url": "https://b.example/2"}))
+        assert "cross-domain" in out["error"]
+        assert "error" not in json.loads(execute("fetch_url", {"url": "https://a.example/9"}))
+    finally:
+        inference.requests.get = orig
+        cfg["tools"]["fetch_url"]["same_domain_only"] = False
+        cfg["tools"]["fetch_url"]["max_per_turn"] = 3
+    print("✓ per-turn fetch budget enforced; same_domain_only guards cross-domain hops")
+
+
+def test_proxy_passed_through():
+    cfg = config.get_config._config
+    cfg["tools"]["fetch_url"]["proxy"] = "socks5h://tor.example:9050"
+    captured = {}
+    class R:
+        url = "https://x.example"
+        headers = {"content-type": "text/plain"}
+        encoding = "utf-8"
+        def raise_for_status(self): pass
+        def iter_content(self, n): yield b"ok"
+    orig = inference.requests.get
+    inference.requests.get = lambda url, **k: captured.update(k) or R()
+    try:
+        inference.fetch_url("https://x.example")
+    finally:
+        inference.requests.get = orig
+        cfg["tools"]["fetch_url"]["proxy"] = None
+    assert captured["proxies"] == {"http": "socks5h://tor.example:9050",
+                                   "https": "socks5h://tor.example:9050"}
+    print("✓ proxy config routes fetches (privacy hook ready for Tor/VPN)")
+
+
 def test_registry_and_executor():
     schemas, execute, _ = main._build_tools(os.environ["DB_PATH"])
     assert "fetch_url" in {s["function"]["name"] for s in schemas}
@@ -100,7 +183,10 @@ def test_registry_and_executor():
 
 if __name__ == "__main__":
     test_html_extraction()
+    test_link_extraction()
     test_guards()
     test_fetch_html_truncation_and_types()
+    test_fetch_budget_and_same_domain()
+    test_proxy_passed_through()
     test_registry_and_executor()
     print("\n✓ All fetch_url tests passed!")

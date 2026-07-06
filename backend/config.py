@@ -141,6 +141,13 @@ def load_config() -> dict:
                 "max_chars": 8000,     # readable text handed to the model
                 "timeout": 20,
                 "allow_private": False,  # True to let it fetch tailnet/LAN URLs
+                "max_links": 40,       # hyperlinks returned per page (enables follow-up fetches)
+                "max_per_turn": 3,     # hard fetch budget per message
+                "same_domain_only": False,  # True: follow-up fetches stay on the first host
+                # PRIVACY: fetches go DIRECT from this box (web_search rides SearXNG's
+                # VPN; fetch_url does not). Set a proxy (http:// or socks5h://, e.g.
+                # Tor/WireGuard on the search box or this host) to route them.
+                "proxy": None,
             },
             "synthesis": {
                 "max_tokens": 256,

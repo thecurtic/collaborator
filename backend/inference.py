@@ -744,7 +744,7 @@ def web_search_searxng(query: str) -> Dict:
 # --- URL fetching (read a page the user pasted) --------------------------------
 
 class _HtmlTextExtractor:
-    """Stdlib HTML -> readable text (no extra deps, per the minimal-deps principle)."""
+    """Stdlib HTML -> readable text + hyperlinks (no extra deps)."""
 
     def __init__(self):
         from html.parser import HTMLParser
@@ -757,14 +757,18 @@ class _HtmlTextExtractor:
         class Parser(HTMLParser):
             def __init__(self):
                 super().__init__(convert_charrefs=True)
-                self.parts, self.title = [], ""
+                self.parts, self.title, self.raw_links = [], "", []
                 self._skip, self._in_title = 0, False
+                self._href, self._anchor = None, []
 
             def handle_starttag(self, tag, attrs):
                 if tag in skip_tags:
                     self._skip += 1
                 elif tag == "title":
                     self._in_title = True
+                elif tag == "a" and not self._skip:
+                    self._href = dict(attrs).get("href")
+                    self._anchor = []
                 elif tag in block_tags:
                     self.parts.append("\n")
 
@@ -773,6 +777,11 @@ class _HtmlTextExtractor:
                     self._skip -= 1
                 elif tag == "title":
                     self._in_title = False
+                elif tag == "a":
+                    if self._href:
+                        self.raw_links.append(
+                            (" ".join("".join(self._anchor).split()), self._href))
+                    self._href, self._anchor = None, []
                 elif tag in block_tags:
                     self.parts.append("\n")
 
@@ -782,18 +791,38 @@ class _HtmlTextExtractor:
                 if self._in_title:
                     self.title += data
                 else:
+                    if self._href is not None:
+                        self._anchor.append(data)
                     self.parts.append(data)
 
         self._parser = Parser()
 
-    def extract(self, html: str):
+    def extract(self, html: str, base_url: str = None, max_links: int = 40):
+        """Return (title, text, links). links = [{text, url}], absolute http(s)
+        only, deduped, capped at max_links."""
         import re
+        from urllib.parse import urljoin, urldefrag
+
         self._parser.feed(html)
         text = "".join(self._parser.parts)
         lines = [" ".join(l.split()) for l in text.splitlines()]
         text = "\n".join(l for l in lines if l)
         text = re.sub(r"\n{3,}", "\n\n", text)
-        return self._parser.title.strip(), text.strip()
+
+        links, seen = [], set()
+        for anchor, href in self._parser.raw_links:
+            if not href or href.startswith("#"):
+                continue
+            absolute = urldefrag(urljoin(base_url, href) if base_url else href)[0]
+            if not absolute.startswith(("http://", "https://")):
+                continue  # drops javascript:, mailto:, tel:, data:, relative w/o base
+            if absolute in seen:
+                continue
+            seen.add(absolute)
+            links.append({"text": anchor[:80], "url": absolute})
+            if len(links) >= max_links:
+                break
+        return self._parser.title.strip(), text.strip(), links
 
 
 def _host_is_private(host: str) -> bool:
@@ -815,12 +844,18 @@ def _host_is_private(host: str) -> bool:
 
 
 def fetch_url(url: str) -> Dict:
-    """Fetch a URL and return readable text for the model.
+    """Fetch a URL and return readable text + hyperlinks for the model.
 
-    Config: tools.fetch_url {max_chars, timeout, allow_private}. Only http(s);
-    private/internal hosts are refused unless allow_private is set (the user may
-    want tailnet docs fetchable). Static HTML / text / JSON only — JS-rendered
-    apps come back mostly empty (that would need a headless browser).
+    Config: tools.fetch_url {max_chars, timeout, allow_private, max_links, proxy}.
+    Only http(s); private/internal hosts are refused unless allow_private is set
+    (the user may want tailnet docs fetchable). Static HTML / text / JSON only —
+    JS-rendered apps come back mostly empty (that would need a headless browser).
+
+    PRIVACY NOTE: unlike web_search (whose SearXNG instance routes outbound through
+    WireGuard), fetches go DIRECT from this machine by default — every fetched page
+    sees this box's IP. Set tools.fetch_url.proxy (http:// or socks5h://, e.g. Tor
+    on the search box or this host) to route fetches through a VPN/Tor instead.
+    SOCKS proxies need the 'requests[socks]' extra (PySocks).
     """
     from urllib.parse import urlparse
 
@@ -832,12 +867,14 @@ def fetch_url(url: str) -> Dict:
         return {"error": "refusing to fetch a private/internal address "
                          "(enable tools.fetch_url.allow_private for tailnet/LAN URLs)"}
 
+    proxy = fcfg.get("proxy")
     try:
         response = requests.get(
             url,
             timeout=fcfg.get("timeout", 20),
             headers={"User-Agent": "Collaborator/0.2 (self-hosted personal assistant)"},
             stream=True,
+            proxies={"http": proxy, "https": proxy} if proxy else None,
         )
         response.raise_for_status()
 
@@ -859,10 +896,11 @@ def fetch_url(url: str) -> Dict:
         return {"error": f"unsupported content type {ctype!r} (only html/text/json)"}
 
     body = raw.decode(response.encoding or "utf-8", errors="replace")
-    title = ""
+    title, links = "", []
     if ctype in ("text/html", "application/xhtml+xml", ""):
         try:
-            title, body = _HtmlTextExtractor().extract(body)
+            title, body, links = _HtmlTextExtractor().extract(
+                body, base_url=response.url, max_links=fcfg.get("max_links", 40))
         except Exception:
             pass  # fall back to the raw text
 
@@ -873,6 +911,7 @@ def fetch_url(url: str) -> Dict:
         "title": title,
         "content": body[:max_chars],
         "truncated": truncated,
+        "links": links,
     }
 
 

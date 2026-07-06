@@ -112,6 +112,15 @@ tools:
     max_chars: 8000           # readable text handed to the model per page
     timeout: 20
     allow_private: false      # true to allow tailnet/LAN URLs (off = public web only)
+    max_links: 40             # hyperlinks returned per page (lets the model follow links)
+    max_per_turn: 3           # hard fetch budget per message (bounds link-following)
+    same_domain_only: false   # true: follow-up fetches must stay on the first page's host
+    # PRIVACY (known limitation): fetch_url goes DIRECT from this machine — every
+    # fetched page sees this box's IP. web_search is fine (SearXNG routes outbound
+    # via WireGuard), but page fetches are not. Plan: route fetches through Tor or a
+    # VPN — either via the search box (e.g. its dormant Tor SOCKS at 127.0.0.1:9050,
+    # exposed to the tailnet) or Tor on this webserver. When available, set:
+    # proxy: "socks5h://<tor-or-vpn-host>:9050"   # needs: pip install requests[socks]
   synthesis:
     max_tokens: 256
     prompts:                  # per-kind synthesis prompt files (editable/auditable)

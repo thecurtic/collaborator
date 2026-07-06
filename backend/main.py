@@ -294,7 +294,8 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
     rc = _recall_config()
     exclude_ids = exclude_ids or []
     state = {"last_matches": [], "synthesis": None, "synthesis_kind": None,
-             "chat_run_id": f"chat-{secrets.token_hex(4)}", "proposed_drafts": []}
+             "chat_run_id": f"chat-{secrets.token_hex(4)}", "proposed_drafts": [],
+             "fetch_count": 0, "first_fetch_host": None}
 
     def _search_schema(name, desc):
         return {"type": "function", "function": {
@@ -448,7 +449,24 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
         if name == "web_search":
             return json.dumps(web_search_searxng(args.get("query", "")))
         if name == "fetch_url":
-            return json.dumps(fetch_url(args.get("url", "")))
+            fcfg = tcfg.get("fetch_url", {}) or {}
+            budget = fcfg.get("max_per_turn", 3)
+            if state["fetch_count"] >= budget:
+                return json.dumps({"error": f"fetch budget for this turn is exhausted "
+                                            f"({budget} pages); answer with what you have"})
+            from urllib.parse import urlparse
+            host = urlparse(args.get("url", "")).hostname
+            if (fcfg.get("same_domain_only") and state["first_fetch_host"]
+                    and host != state["first_fetch_host"]):
+                return json.dumps({"error": "cross-domain fetches are disabled "
+                                            "(tools.fetch_url.same_domain_only); stay on "
+                                            f"{state['first_fetch_host']}"})
+            result = fetch_url(args.get("url", ""))
+            if "error" not in result:
+                state["fetch_count"] += 1
+                if state["first_fetch_host"] is None:
+                    state["first_fetch_host"] = host
+            return json.dumps(result)
         return json.dumps({"error": f"unknown tool {name}"})
 
     return schemas, execute, state
