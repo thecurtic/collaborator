@@ -63,10 +63,13 @@ recall:
     emotion: 1.1
 
 # Atomic notes (NOTES-FORMAT.md). The vault holds APPROVED notes only — drafts live
-# in the DB until you approve them. Point vault_dir at an Obsidian vault if you like.
-# With auth enabled, each user's vault sits next to their DB instead.
+# in the DB until you approve them.
+# vault_dir, when SET, wins unconditionally (single-owner setup): point it at the
+# Obsidian-served vault on this machine, e.g. "/srv/vault". Machine-specific, so it
+# belongs in .config.yaml. When unset, the vault sits next to the conversation DB
+# (users/{hash}/notes under auth, else backend/data/notes).
 notes:
-  vault_dir: "backend/data/notes"
+  # vault_dir: "/srv/vault"
   # Tree -> note-drafts synthesis (POST /api/notes/synthesize/{tree_id})
   synthesis_prompt_file: "synthesis-notes.md"  # editable/auditable prompt
   synthesis_max_tokens: 4096   # output budget for the whole batch of drafts

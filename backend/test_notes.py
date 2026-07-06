@@ -102,6 +102,26 @@ def test_reject_never_touches_vault():
     print("✓ reject keeps the vault untouched; 404s on missing drafts")
 
 
+def test_vault_dir_resolution():
+    """Explicit notes.vault_dir wins even under auth; unset -> vault next to the DB."""
+    c, vault = _fresh()
+    db_path = "/data/users/abc123hash/conversations.db"
+
+    # Explicit setting wins unconditionally (single-owner Obsidian-served vault).
+    config.get_config._config["notes"]["vault_dir"] = "/srv/vault"
+    main.auth_enabled = True
+    assert main._resolve_vault_dir(db_path) == "/srv/vault"
+    main.auth_enabled = False
+    assert main._resolve_vault_dir(db_path) == "/srv/vault"
+
+    # Unset -> per-user vault next to the conversation DB.
+    config.get_config._config["notes"]["vault_dir"] = None
+    main.auth_enabled = True
+    assert main._resolve_vault_dir(db_path) == "/data/users/abc123hash/notes"
+    main.auth_enabled = False
+    print("✓ vault_dir: explicit setting wins under auth; unset falls back per-user")
+
+
 def test_synthesize_endpoint_creates_pending_drafts():
     c, vault = _fresh()
     import sqlite3
@@ -168,6 +188,7 @@ if __name__ == "__main__":
     test_draft_lifecycle_and_vault_write()
     test_title_validation_and_collision()
     test_reject_never_touches_vault()
+    test_vault_dir_resolution()
     test_synthesize_endpoint_creates_pending_drafts()
     test_synthesize_notes_parse_fallback()
     print("\n✓ All note-draft tests passed!")

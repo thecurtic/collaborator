@@ -346,12 +346,12 @@ def _resolve_db_path(passkey: Optional[str]) -> str:
 def _resolve_vault_dir(db_path: str) -> str:
     """Resolve the notes vault directory (approved notes only, per NOTES-FORMAT.md).
 
-    With auth enabled the vault sits next to the user's DB (users/{hash}/notes) so
-    vaults are per-user. Without auth, notes.vault_dir from config (default
-    backend/data/notes).
+    An explicitly configured notes.vault_dir wins unconditionally — the single-owner
+    setup where one Obsidian-served vault on this machine is the destination for all
+    approved notes (point it at the served vault folder). When unset, the vault sits
+    next to the conversation DB: per-user users/{hash}/notes under auth, else
+    backend/data/notes.
     """
-    if auth_enabled:
-        return os.path.join(os.path.dirname(db_path), "notes")
     configured = config.get("notes", {}).get("vault_dir")
     if configured:
         return configured if os.path.isabs(configured) else resolve_path(configured)

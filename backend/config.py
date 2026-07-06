@@ -94,9 +94,11 @@ def load_config() -> dict:
             },
         },
         "notes": {
-            # Vault of APPROVED notes (markdown files, NOTES-FORMAT.md). Used when
-            # auth is disabled; with auth on, each user's vault sits next to their DB.
-            "vault_dir": "backend/data/notes",
+            # Vault of APPROVED notes (markdown files, NOTES-FORMAT.md). When SET,
+            # it wins unconditionally (single-owner: point it at the Obsidian-served
+            # vault). When None, the vault sits next to the conversation DB
+            # (users/{hash}/notes under auth, else backend/data/notes).
+            "vault_dir": None,
             # Tree -> note-drafts synthesis (POST /api/notes/synthesize/{tree_id}).
             "synthesis_prompt_file": "synthesis-notes.md",  # editable/auditable
             "synthesis_max_tokens": 4096,
