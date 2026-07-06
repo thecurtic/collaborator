@@ -40,6 +40,8 @@ function colorFor(column: number): string {
 
 interface Seg {
   startNodeId: number;
+  /** Name stored on this segment's start turn (a branch's own name). */
+  name: string | null;
   nodeIds: number[];
   count: number;
   active: boolean;
@@ -52,6 +54,7 @@ interface Seg {
 
 interface Segment {
   startNodeId: number;
+  name: string | null;
   nodeIds: number[];
   count: number;
   column: number;
@@ -105,6 +108,7 @@ function buildSeg(node: TreeNode, activeIds: Set<number>, detached: Detach[]): S
         : [];
     return {
       startNodeId: node.id,
+      name: node.name,
       nodeIds,
       count: nodeIds.length,
       active: nodeIds.some((id) => activeIds.has(id)),
@@ -165,6 +169,7 @@ function assign(
 ) {
   out.push({
     startNodeId: seg.startNodeId,
+    name: seg.name,
     nodeIds: seg.nodeIds,
     count: seg.count,
     column: col,
@@ -360,6 +365,7 @@ export function TreeMap({
     if (editing) {
       onRename(editing.rootId, editing.value); // persists + reloads the tree
       setEditing(null);
+      setSelected(null); // the reloaded tree replaces this (now stale) segment
     }
   };
 
@@ -496,6 +502,32 @@ export function TreeMap({
                           pointerEvents="none"
                         />
                       ))}
+                      {/* Branch name, rotated to run along the line. The root
+                          segment's name is the tree label above — skip it.
+                          Truncated to the segment's length (~5.5px/char at
+                          10px font, small overhang allowed) so a long name on
+                          a short branch doesn't spill across other lines. */}
+                      {seg.name && seg.parentColumn != null && (
+                        <text
+                          transform={`translate(${x + 9}, ${top + 4}) rotate(90)`}
+                          fontSize={10}
+                          fontWeight={500}
+                          fill={color}
+                          opacity={emphasized ? 1 : 0.55}
+                          pointerEvents="none"
+                          className="select-none"
+                        >
+                          {(() => {
+                            const maxChars = Math.min(
+                              24,
+                              Math.max(6, Math.floor((bottom - top + 30) / 5.5)),
+                            );
+                            return seg.name.length > maxChars
+                              ? `${seg.name.slice(0, maxChars)}…`
+                              : seg.name;
+                          })()}
+                        </text>
+                      )}
                       <line
                         x1={x}
                         y1={top - 10}
@@ -513,10 +545,10 @@ export function TreeMap({
         )}
       </div>
 
-      {/* Rename panel. */}
+      {/* Rename panel (a conversation via its root, a branch via its start). */}
       {editing && (
         <div className="border-t border-border bg-card p-4">
-          <p className="mb-2 text-sm font-medium">Rename tree</p>
+          <p className="mb-2 text-sm font-medium">Rename</p>
           <div className="flex gap-2">
             <input
               autoFocus
@@ -530,7 +562,7 @@ export function TreeMap({
                   setEditing(null);
                 }
               }}
-              placeholder="Tree name"
+              placeholder="Name"
               className="min-h-[2.5rem] flex-1 rounded-md border border-input bg-background px-3 text-base text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
             />
             <Button onClick={commitName}>Save</Button>
@@ -544,9 +576,15 @@ export function TreeMap({
       {/* Active-branch action bar. */}
       {!editing && selected && (
         <div className="border-t border-border bg-card p-4">
-          <p className="mb-3 text-sm text-muted-foreground">
-            Active branch · {selected.count}{' '}
-            {selected.count === 1 ? 'turn' : 'turns'}
+          <p className="mb-3 truncate text-sm text-muted-foreground">
+            {selected.name ? (
+              <span className="font-medium text-foreground">
+                {selected.name}
+              </span>
+            ) : (
+              'Active branch'
+            )}{' '}
+            · {selected.count} {selected.count === 1 ? 'turn' : 'turns'}
           </p>
           <div className="flex gap-2">
             <Button
@@ -559,14 +597,26 @@ export function TreeMap({
               }}
             >
               <Trash2 className="h-4 w-4" />
-              Delete branch
+              Delete
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() =>
+                setEditing({
+                  rootId: selected.startNodeId,
+                  value: selected.name ?? '',
+                })
+              }
+            >
+              Rename
             </Button>
             <Button
               variant="secondary"
               className="flex-1"
               onClick={onOpenConversation}
             >
-              Go to conversation
+              Open chat
             </Button>
           </div>
         </div>

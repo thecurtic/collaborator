@@ -249,6 +249,7 @@ export function ChatView({
                     paragraphIndex: entry.fork.paragraphIndex,
                     current: entry.fork.current,
                     total: entry.fork.total,
+                    name: entry.fork.name,
                     onPrev: () => switchFork(entry.node.id, -1),
                     onNext: () => switchFork(entry.node.id, 1),
                   }

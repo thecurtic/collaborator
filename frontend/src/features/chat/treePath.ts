@@ -85,21 +85,30 @@ export function computePath(
 /**
  * Branch switcher for a node's children: position 0 = the main line, 1..n = the
  * branches (branched children). null if there are no branches (linear turn).
+ * `name` = the selected branch's own name (stored on its branch-root turn —
+ * independent of the conversation root's name).
  */
 export function forkOf(
   children: TreeNode[],
   selId: number | undefined,
-): { current: number; total: number; paragraphIndex: number | null } | null {
+): {
+  current: number;
+  total: number;
+  paragraphIndex: number | null;
+  name: string | null;
+} | null {
   const branches = children.filter((c) => c.branched);
   if (branches.length === 0) return null;
   let current = 0; // 0 = main line
   let paragraphIndex: number | null = null;
+  let name: string | null = null;
   if (selId !== undefined && selId !== CONTINUE) {
     const bi = branches.findIndex((b) => b.id === selId);
     if (bi >= 0) {
       current = bi + 1;
       paragraphIndex = branches[bi].paragraphIndex;
+      name = branches[bi].name;
     }
   }
-  return { current, total: branches.length, paragraphIndex };
+  return { current, total: branches.length, paragraphIndex, name };
 }

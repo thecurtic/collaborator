@@ -123,11 +123,18 @@ describe('forkOf', () => {
       current: 0,
       total: 2,
       paragraphIndex: null,
+      name: null,
     });
   });
 
   it('numbers a selected branch 1..n', () => {
     expect(forkOf(children, 20)?.current).toBe(2);
+  });
+
+  it("reports the selected branch's own name, never the root's", () => {
+    const named = [node(3), { ...node(20, [], true), name: 'pricing idea' }];
+    expect(forkOf(named, 20)?.name).toBe('pricing idea');
+    expect(forkOf(named, undefined)?.name).toBeNull();
   });
 
   it('treats CONTINUE as the main-line position', () => {

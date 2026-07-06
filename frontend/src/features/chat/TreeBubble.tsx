@@ -20,6 +20,8 @@ export interface Fork {
   /** Displayed numerator: 0 = empty "continue here" slot, 1..n = branches. */
   current: number;
   total: number;
+  /** The selected branch's own name (nested under the conversation name). */
+  name: string | null;
   onPrev: () => void;
   onNext: () => void;
 }
@@ -41,28 +43,34 @@ interface TreeBubbleProps {
 function Switcher({
   current,
   total,
+  name,
   onPrev,
   onNext,
 }: Omit<Fork, 'paragraphIndex'>) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-xl border border-border bg-background px-1.5 py-1 text-[13px] font-medium text-foreground shadow-sm">
-      <GitBranch className="mx-0.5 h-4 w-4 text-primary" />
+    <span className="inline-flex max-w-full items-center gap-1 rounded-xl border border-border bg-background px-1.5 py-1 text-[13px] font-medium text-foreground shadow-sm">
+      <GitBranch className="mx-0.5 h-4 w-4 shrink-0 text-primary" />
       <button
         type="button"
         aria-label="Previous branch"
         onClick={onPrev}
-        className="rounded-md p-1.5 hover:text-primary active:scale-90"
+        className="shrink-0 rounded-md p-1.5 hover:text-primary active:scale-90"
       >
         <ChevronLeft className="h-5 w-5" />
       </button>
-      <span className="min-w-[2.4rem] text-center tabular-nums">
+      <span className="min-w-[2.4rem] shrink-0 text-center tabular-nums">
         {current} / {total}
       </span>
+      {name && (
+        <span className="max-w-[9rem] truncate text-muted-foreground">
+          {name}
+        </span>
+      )}
       <button
         type="button"
         aria-label="Next branch"
         onClick={onNext}
-        className="rounded-md p-1.5 hover:text-primary active:scale-90"
+        className="shrink-0 rounded-md p-1.5 hover:text-primary active:scale-90"
       >
         <ChevronRight className="h-5 w-5" />
       </button>
@@ -184,6 +192,7 @@ export function TreeBubble({
             <Switcher
               current={fork.current}
               total={fork.total}
+              name={fork.name}
               onPrev={fork.onPrev}
               onNext={fork.onNext}
             />
