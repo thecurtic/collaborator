@@ -97,6 +97,11 @@ def load_config() -> dict:
             # Vault of APPROVED notes (markdown files, NOTES-FORMAT.md). Used when
             # auth is disabled; with auth on, each user's vault sits next to their DB.
             "vault_dir": "backend/data/notes",
+            # Tree -> note-drafts synthesis (POST /api/notes/synthesize/{tree_id}).
+            "synthesis_prompt_file": "synthesis-notes.md",  # editable/auditable
+            "synthesis_max_tokens": 4096,
+            "synthesis_temperature": 0.3,
+            "synthesis_timeout": 300,
         },
         "tools": {
             "enabled": False,          # master switch; false = plain chat, no tools

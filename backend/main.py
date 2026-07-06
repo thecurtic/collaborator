@@ -27,7 +27,7 @@ from db import (
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
     get_embedding, embed_texts, synthesize_recall,
-    generate_with_tools, synthesize,
+    generate_with_tools, synthesize, synthesize_notes,
 )
 from export_tree import export_forest, find_tree
 from auth import validate_passkey, create_user_db
@@ -816,6 +816,61 @@ async def export_tree_endpoint(
                 detail=f"Turn {turn_id} not found (or not committed)",
             )
         return {"tree": node}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notes/synthesize/{tree_id}")
+async def synthesize_tree_notes(
+    tree_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Synthesize atomic note drafts from a conversation tree (the pipeline bridge).
+
+    User-initiated on a chosen tree: exports the subtree rooted at tree_id (root id =
+    whole conversation; any committed turn id = one branch), runs one LLM synthesis
+    pass (synthesis-notes.md), and stores the results as PENDING drafts for review.
+    Nothing touches the vault; approve each draft via /api/notes/drafts/{id}/approve.
+    """
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        conn = sqlite3.connect(db_path)
+        try:
+            roots = export_forest(conn)
+        finally:
+            conn.close()
+
+        tree = find_tree(roots, tree_id)
+        if tree is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Turn {tree_id} not found (or not committed)")
+
+        # Blocking LLM call — run off the event loop. Can take a while on big trees.
+        try:
+            notes = await asyncio.to_thread(synthesize_notes, tree)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Notes synthesis failed: {e}")
+
+        run_id = f"run-{secrets.token_hex(6)}"
+        drafts = []
+        conn = sqlite3.connect(db_path)
+        try:
+            for n in notes:
+                drafts.append(create_note_draft(
+                    conn, n["title"], n["body"],
+                    tags=n["tags"], links=n["links"],
+                    source_turns=n["source_turns"],
+                    tree_root_id=tree_id, run_id=run_id,
+                ))
+        finally:
+            conn.close()
+
+        return {"run_id": run_id, "drafts": drafts, "count": len(drafts)}
     except HTTPException:
         raise
     except Exception as e:

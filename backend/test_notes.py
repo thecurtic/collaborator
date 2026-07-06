@@ -102,8 +102,72 @@ def test_reject_never_touches_vault():
     print("✓ reject keeps the vault untouched; 404s on missing drafts")
 
 
+def test_synthesize_endpoint_creates_pending_drafts():
+    c, vault = _fresh()
+    import sqlite3
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    root = db.create_turn(conn, None, "user", "Should we use SQLite?")
+    db.create_turn(conn, None, "assistant", "SQLite is simpler.", parent_turn_id=root["id"])
+    conn.close()
+
+    captured = {}
+    def fake_synth(tree):
+        captured["tree"] = tree
+        return [
+            {"title": "SQLite fits this project", "body": "I chose SQLite because…",
+             "tags": ["decision"], "links": [], "source_turns": [root["id"]]},
+            {"title": "Is JSON querying a future risk?", "body": "Open question I hold…",
+             "tags": ["open-question"], "links": ["SQLite fits this project"],
+             "source_turns": [root["id"]]},
+        ]
+    main.synthesize_notes = fake_synth
+
+    r = c.post(f"/api/notes/synthesize/{root['id']}")
+    assert r.status_code == 200
+    out = r.json()
+    assert out["count"] == 2 and out["run_id"].startswith("run-")
+    assert captured["tree"]["id"] == root["id"]                      # got the export tree
+    assert all(d["status"] == "pending" for d in out["drafts"])      # awaiting review
+    assert all(d["tree_root_id"] == root["id"] for d in out["drafts"])
+    # They land in the review inbox, grouped by run.
+    inbox = c.get(f"/api/notes/drafts?run_id={out['run_id']}").json()
+    assert inbox["count"] == 2
+    assert not os.listdir(vault) if os.path.isdir(vault) else True   # vault untouched
+
+    # Missing tree -> 404; synthesis blow-up -> 502.
+    assert c.post("/api/notes/synthesize/99999").status_code == 404
+    def boom(tree): raise RuntimeError("model fell over")
+    main.synthesize_notes = boom
+    assert c.post(f"/api/notes/synthesize/{root['id']}").status_code == 502
+    print("✓ synthesize endpoint: export -> LLM -> pending drafts; 404/502 paths")
+
+
+def test_synthesize_notes_parse_fallback():
+    """synthesize_notes tolerates JSON wrapped in prose and drops invalid entries."""
+    import inference, json as _json
+    payload = {"notes": [
+        {"title": "Real note", "body": "Body.", "tags": [], "links": [], "source_turns": [1]},
+        {"title": "", "body": "no title -> dropped", "tags": [], "links": [], "source_turns": []},
+    ]}
+    class FakeResp:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content":
+                "Here you go:\n" + _json.dumps(payload) + "\nHope that helps!"}}]}
+    orig = inference.requests.post
+    inference.requests.post = lambda *a, **k: FakeResp()
+    try:
+        notes = inference.synthesize_notes({"id": 1, "children": []})
+    finally:
+        inference.requests.post = orig
+    assert len(notes) == 1 and notes[0]["title"] == "Real note"
+    print("✓ synthesize_notes: prose-wrapped JSON parsed, invalid entries dropped")
+
+
 if __name__ == "__main__":
     test_draft_lifecycle_and_vault_write()
     test_title_validation_and_collision()
     test_reject_never_touches_vault()
+    test_synthesize_endpoint_creates_pending_drafts()
+    test_synthesize_notes_parse_fallback()
     print("\n✓ All note-draft tests passed!")

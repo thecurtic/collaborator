@@ -582,6 +582,107 @@ def synthesize_recall(query: str, matches: List[Dict]) -> str:
         return ""
 
 
+# --- Notes synthesis (tree -> atomic note drafts) ------------------------------
+
+_NOTES_SCHEMA = {
+    "name": "note_drafts",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "notes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "body": {"type": "string"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                        "links": {"type": "array", "items": {"type": "string"}},
+                        "source_turns": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    "required": ["title", "body", "tags", "links", "source_turns"],
+                },
+            }
+        },
+        "required": ["notes"],
+    },
+}
+
+DEFAULT_NOTES_SYNTHESIS_PROMPT = (
+    "Distill this conversation tree into atomic notes: standalone, reusable ideas "
+    "phrased as declarative claims (or honest questions) in the user's first-person "
+    "voice. Weigh user turns far more heavily than assistant turns. 50-200 words per "
+    "note, no dialogue form, no metadata in bodies. Zero notes is valid."
+)
+
+
+def _notes_config() -> Dict:
+    return _get_config().get("notes", {}) or {}
+
+
+def synthesize_notes(tree: Dict) -> List[Dict]:
+    """Distill an exported conversation tree into atomic note drafts.
+
+    One blocking LLM call with structured (json_schema) output. Returns a list of
+    {title, body, tags, links, source_turns} dicts; invalid entries are dropped.
+    Raises on transport/parse failure (the endpoint surfaces it to the user).
+    """
+    import json
+
+    ncfg = _notes_config()
+    system_prompt = _load_prompt_layer(
+        ncfg, "synthesis_prompt_file", "synthesis_prompt_text",
+        DEFAULT_NOTES_SYNTHESIS_PROMPT)
+
+    payload = {
+        "model": _get_config()["inference"]["model_id"],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(tree, ensure_ascii=False)},
+        ],
+        "temperature": ncfg.get("synthesis_temperature", 0.3),
+        "max_tokens": ncfg.get("synthesis_max_tokens", 4096),
+        "stream": False,
+        "response_format": {"type": "json_schema", "json_schema": _NOTES_SCHEMA},
+    }
+
+    response = requests.post(
+        f"{_get_endpoint_url()}/chat/completions",
+        json=payload,
+        timeout=ncfg.get("synthesis_timeout", 300),
+    )
+    response.raise_for_status()
+    content = response.json()["choices"][0]["message"]["content"] or ""
+
+    try:
+        parsed = json.loads(content)
+    except Exception:
+        # Fallback: some models wrap JSON in prose/fences — extract the outer object.
+        start, end = content.find("{"), content.rfind("}")
+        if start == -1 or end <= start:
+            raise ValueError(f"Notes synthesis returned unparseable output: {content[:200]!r}")
+        parsed = json.loads(content[start:end + 1])
+
+    notes = []
+    for n in parsed.get("notes", []):
+        if not isinstance(n, dict):
+            continue
+        title = str(n.get("title") or "").strip()
+        body = str(n.get("body") or "").strip()
+        if not title or not body:
+            continue
+        notes.append({
+            "title": title,
+            "body": body,
+            "tags": [str(t) for t in (n.get("tags") or [])],
+            "links": [str(l) for l in (n.get("links") or [])],
+            "source_turns": [int(i) for i in (n.get("source_turns") or [])
+                             if isinstance(i, (int, float))],
+        })
+    return notes
+
+
 # --- Tool-calling loop -------------------------------------------------------
 
 def _tools_config() -> Dict:

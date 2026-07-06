@@ -67,6 +67,11 @@ recall:
 # With auth enabled, each user's vault sits next to their DB instead.
 notes:
   vault_dir: "backend/data/notes"
+  # Tree -> note-drafts synthesis (POST /api/notes/synthesize/{tree_id})
+  synthesis_prompt_file: "synthesis-notes.md"  # editable/auditable prompt
+  synthesis_max_tokens: 4096   # output budget for the whole batch of drafts
+  synthesis_temperature: 0.3
+  synthesis_timeout: 300       # seconds; big trees take a while on local inference
 
 # Tool-calling. When enabled, the model drives retrieval/synthesis by calling tools
 # (recall is a set of tools) and streams status notes for what it's doing. Requires a

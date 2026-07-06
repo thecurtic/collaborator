@@ -494,6 +494,19 @@ them — **the vault only ever contains approved notes**. Approval validates the
 stamps frontmatter (`created`, `tags`, `source_turns`), and writes
 `<Title>.md` into the vault.
 
+**Synthesize drafts from a conversation tree** (the pipeline bridge):
+```
+POST /api/notes/synthesize/{tree_id}
+-> 200 { "run_id": "run-abc123", "drafts": [ ...pending drafts... ], "count": 2 }
+```
+User-initiated on a chosen tree: exports the subtree rooted at `tree_id` (a root id =
+the whole conversation; any committed turn id = one branch), runs one LLM pass with
+the editable `synthesis-notes.md` prompt (structured JSON output), and stores each
+resulting note as a **pending draft** grouped under `run_id`. Zero drafts is a valid
+outcome. Nothing touches the vault. `404` unknown/uncommitted turn; `502` if the
+model call fails. Synchronous — big trees can take a while on local inference
+(`notes.synthesis_timeout`, default 300s).
+
 **Create a draft** (synthesis output or hand-written):
 ```
 POST /api/notes/drafts
