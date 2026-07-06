@@ -130,6 +130,25 @@ def ensure_conversation_schema(conn) -> None:
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
+
+    # LLM-synthesized note drafts awaiting user approval. Drafts are app state,
+    # NOT knowledge: they never touch the notes vault until approved (Obsidian
+    # indexes everything it sees, so unapproved files would leak into the graph).
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS note_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT,
+            tree_root_id INTEGER,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            tags TEXT,
+            links TEXT,
+            source_turns TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            decided_at TEXT
+        )
+    """)
     conn.commit()
 
     _migrate_turns_branching(conn)
@@ -728,3 +747,99 @@ def clear_current_recall(db) -> None:
     cursor = db.cursor()
     cursor.execute("DELETE FROM recall_blocks")
     db.commit()
+
+
+# --- Note drafts (LLM output awaiting user approval) ---------------------------
+
+NOTE_DRAFT_COLUMNS = [
+    "id", "run_id", "tree_root_id", "title", "body", "tags", "links",
+    "source_turns", "status", "created_at", "decided_at",
+]
+_DRAFT_COLS = ", ".join(NOTE_DRAFT_COLUMNS)
+
+
+def _row_to_draft(row) -> Dict:
+    d = dict(zip(NOTE_DRAFT_COLUMNS, row))
+    for key in ("tags", "links", "source_turns"):
+        try:
+            d[key] = _json.loads(d[key]) if d[key] else []
+        except Exception:
+            d[key] = []
+    return d
+
+
+def create_note_draft(db, title: str, body: str,
+                      tags: Optional[List[str]] = None,
+                      links: Optional[List[str]] = None,
+                      source_turns: Optional[List[int]] = None,
+                      tree_root_id: Optional[int] = None,
+                      run_id: Optional[str] = None) -> dict:
+    """Insert a pending note draft. Returns the created draft."""
+    cursor = db.cursor()
+    cursor.execute(
+        """
+        INSERT INTO note_drafts (run_id, tree_root_id, title, body, tags, links, source_turns)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (run_id, tree_root_id, title, body,
+         _json.dumps(tags or []), _json.dumps(links or []),
+         _json.dumps(source_turns or [])),
+    )
+    db.commit()
+    return get_note_draft(db, cursor.lastrowid)
+
+
+def get_note_draft(db, draft_id: int) -> Optional[dict]:
+    row = db.cursor().execute(
+        f"SELECT {_DRAFT_COLS} FROM note_drafts WHERE id = ?", (draft_id,)
+    ).fetchone()
+    return _row_to_draft(row) if row else None
+
+
+def list_note_drafts(db, status: Optional[str] = None,
+                     run_id: Optional[str] = None) -> List[dict]:
+    where, params = [], []
+    if status:
+        where.append("status = ?"); params.append(status)
+    if run_id:
+        where.append("run_id = ?"); params.append(run_id)
+    clause = f"WHERE {' AND '.join(where)}" if where else ""
+    rows = db.cursor().execute(
+        f"SELECT {_DRAFT_COLS} FROM note_drafts {clause} ORDER BY id ASC", params
+    ).fetchall()
+    return [_row_to_draft(r) for r in rows]
+
+
+def update_note_draft(db, draft_id: int, *, title: Optional[str] = None,
+                      body: Optional[str] = None,
+                      tags: Optional[List[str]] = None,
+                      links: Optional[List[str]] = None) -> Optional[dict]:
+    """Edit a draft during review (title/body/tags/links). Returns updated draft."""
+    if get_note_draft(db, draft_id) is None:
+        return None
+    sets, params = [], []
+    if title is not None:
+        sets.append("title = ?"); params.append(title)
+    if body is not None:
+        sets.append("body = ?"); params.append(body)
+    if tags is not None:
+        sets.append("tags = ?"); params.append(_json.dumps(tags))
+    if links is not None:
+        sets.append("links = ?"); params.append(_json.dumps(links))
+    if sets:
+        params.append(draft_id)
+        db.cursor().execute(f"UPDATE note_drafts SET {', '.join(sets)} WHERE id = ?", params)
+        db.commit()
+    return get_note_draft(db, draft_id)
+
+
+def set_note_draft_status(db, draft_id: int, status: str) -> Optional[dict]:
+    """Mark a draft approved/rejected (stamps decided_at). Returns updated draft."""
+    if get_note_draft(db, draft_id) is None:
+        return None
+    db.cursor().execute(
+        "UPDATE note_drafts SET status = ?, decided_at = datetime('now') WHERE id = ?",
+        (status, draft_id),
+    )
+    db.commit()
+    return get_note_draft(db, draft_id)

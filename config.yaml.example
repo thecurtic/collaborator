@@ -62,6 +62,12 @@ recall:
     reference: 1.4
     emotion: 1.1
 
+# Atomic notes (NOTES-FORMAT.md). The vault holds APPROVED notes only — drafts live
+# in the DB until you approve them. Point vault_dir at an Obsidian vault if you like.
+# With auth enabled, each user's vault sits next to their DB instead.
+notes:
+  vault_dir: "backend/data/notes"
+
 # Tool-calling. When enabled, the model drives retrieval/synthesis by calling tools
 # (recall is a set of tools) and streams status notes for what it's doing. Requires a
 # tool-capable chat model in LM Studio (qwen3-coder-next works). Off by default.

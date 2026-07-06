@@ -485,6 +485,58 @@ A CLI equivalent exists for offline/bulk use:
 `python backend/export_tree.py --db <conversations.db> [--tree-id N] [-o out.json]`
 (exports **all** trees as a JSON list when `--tree-id` is omitted).
 
+---
+
+### 11. Note Drafts (curation gate for atomic notes)
+
+Atomic-note drafts (see `NOTES-FORMAT.md`) live in the DB until the user approves
+them — **the vault only ever contains approved notes**. Approval validates the title,
+stamps frontmatter (`created`, `tags`, `source_turns`), and writes
+`<Title>.md` into the vault.
+
+**Create a draft** (synthesis output or hand-written):
+```
+POST /api/notes/drafts
+{ "title": "SQLite fits single-user local persistence",
+  "body": "distilled prose with [[wikilinks]]…",
+  "tags": ["databases", "decision"], "links": [],
+  "source_turns": [42, 47], "tree_root_id": 1, "run_id": "run-abc" }
+-> 200 { "draft": { "id": 1, "status": "pending", ... } }
+```
+
+**List / review:**
+```
+GET /api/notes/drafts?status=pending&run_id=run-abc
+-> 200 { "drafts": [...], "count": N }
+```
+
+**Edit during review** (pending drafts only; `409` once decided):
+```
+PATCH /api/notes/drafts/{id}
+{ "title"?: "...", "body"?: "...", "tags"?: [...], "links"?: [...] }
+```
+
+**Approve** → writes the note file, returns its location:
+```
+POST /api/notes/drafts/{id}/approve
+-> 200 { "draft": {...status:"approved"...}, "path": "...", "filename": "<Title>.md" }
+```
+- `422` if the title is empty/too long or contains `/ \ : * ? " < > | # ^ [ ]`
+- `409` if a note with that title already exists (case-insensitive) — the draft stays
+  pending; rename via PATCH and re-approve.
+- Tags are normalized to lowercase-hyphenated; a duplicate leading `# H1` in the body
+  is dropped (the file gets exactly one H1 = the title).
+
+**Reject** (kept in the table for audit; never touches the vault):
+```
+POST /api/notes/drafts/{id}/reject
+-> 200 { "draft": {...status:"rejected"...} }
+```
+
+Vault location: `notes.vault_dir` (default `backend/data/notes`; point it at an
+Obsidian vault if desired). With auth enabled, each user's vault sits next to their
+DB (`users/{hash}/notes`).
+
 > Setup: embeddings run locally on the backend by default (`fastembed`, downloads a
 > small model once). Enable via `recall.enabled` or the per-request `recall` flag.
 > Synthesis uses the LM Studio chat model. Set `recall.embedding_backend: lmstudio`

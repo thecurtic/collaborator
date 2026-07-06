@@ -21,6 +21,8 @@ from db import (
     search_similar_turns, search_keyword_turns, set_turn_embedding, update_turn_tags,
     update_turn_name, update_subtree_state, set_current_recall, get_current_recall,
     set_turn_recall, get_turns_missing_embeddings,
+    create_note_draft, get_note_draft, list_note_drafts, update_note_draft,
+    set_note_draft_status,
 )
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
@@ -121,6 +123,23 @@ class NameRequest(BaseModel):
 
 class StateRequest(BaseModel):
     state: str
+
+
+class NoteDraftCreate(BaseModel):
+    title: str
+    body: str
+    tags: List[str] = []
+    links: List[str] = []
+    source_turns: List[int] = []
+    tree_root_id: Optional[int] = None
+    run_id: Optional[str] = None
+
+
+class NoteDraftUpdate(BaseModel):
+    title: Optional[str] = None
+    body: Optional[str] = None
+    tags: Optional[List[str]] = None
+    links: Optional[List[str]] = None
 
 
 def get_passkey_from_header(passkey: Optional[str] = Header(None, alias="X-Passkey")) -> str:
@@ -322,6 +341,87 @@ def _resolve_db_path(passkey: Optional[str]) -> str:
     if db_path_config and not os.path.isabs(db_path_config):
         return resolve_path(db_path_config)
     return db_path_config
+
+
+def _resolve_vault_dir(db_path: str) -> str:
+    """Resolve the notes vault directory (approved notes only, per NOTES-FORMAT.md).
+
+    With auth enabled the vault sits next to the user's DB (users/{hash}/notes) so
+    vaults are per-user. Without auth, notes.vault_dir from config (default
+    backend/data/notes).
+    """
+    if auth_enabled:
+        return os.path.join(os.path.dirname(db_path), "notes")
+    configured = config.get("notes", {}).get("vault_dir")
+    if configured:
+        return configured if os.path.isabs(configured) else resolve_path(configured)
+    return os.path.join(os.path.dirname(db_path), "notes")
+
+
+# Characters that break filesystems or Obsidian [[wikilinks]] (NOTES-FORMAT.md).
+_TITLE_FORBIDDEN = set('/\\:*?"<>|#^[]')
+
+
+def _validate_note_title(title: str) -> str:
+    """Validate + normalize a note title (it becomes the filename). Returns it."""
+    title = " ".join((title or "").split())
+    if not title:
+        raise HTTPException(status_code=422, detail="Note title must not be empty")
+    if title.startswith("."):
+        raise HTTPException(status_code=422, detail="Note title must not start with '.'")
+    bad = sorted(set(title) & _TITLE_FORBIDDEN)
+    if bad:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Note title contains forbidden characters: {' '.join(bad)}",
+        )
+    if len(title) > 180:
+        raise HTTPException(status_code=422, detail="Note title too long (max 180 chars)")
+    return title
+
+
+def _normalize_tag(tag: str) -> str:
+    """Lowercase, hyphenated tag per NOTES-FORMAT.md ('Open Question' -> 'open-question')."""
+    import re
+    return re.sub(r"[^a-z0-9-]+", "-", str(tag).lower()).strip("-")
+
+
+def _write_note_file(vault_dir: str, title: str, body: str,
+                     tags: List[str], source_turns: List[int]) -> str:
+    """Write an approved note into the vault. Returns the file path.
+
+    Frontmatter is app-stamped here (the curation hook) — the LLM never emits it.
+    """
+    os.makedirs(vault_dir, exist_ok=True)
+    filename = f"{title}.md"
+
+    # Uniqueness is case-insensitive (macOS/Windows filesystems are).
+    existing = {f.lower() for f in os.listdir(vault_dir)}
+    if filename.lower() in existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A note titled \"{title}\" already exists; adjust the title",
+        )
+
+    # Tolerate a body that starts with a duplicate H1 (drop it; we write our own).
+    lines = (body or "").strip().splitlines()
+    if lines and lines[0].strip().startswith("# "):
+        lines = lines[1:]
+    clean_body = "\n".join(lines).strip()
+
+    front = ["---", f"created: {time.strftime('%Y-%m-%d')}"]
+    norm_tags = [t for t in (_normalize_tag(t) for t in tags) if t]
+    if norm_tags:
+        front.append(f"tags: [{', '.join(norm_tags)}]")
+    if source_turns:
+        front.append(f"source_turns: [{', '.join(str(i) for i in source_turns)}]")
+    front.append("---")
+
+    content = "\n".join(front) + f"\n\n# {title}\n\n{clean_body}\n"
+    path = os.path.join(vault_dir, filename)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return path
 
 
 def _split_paragraphs(text: str) -> List[str]:
@@ -716,6 +816,143 @@ async def export_tree_endpoint(
                 detail=f"Turn {turn_id} not found (or not committed)",
             )
         return {"tree": node}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notes/drafts")
+async def create_draft(
+    request: NoteDraftCreate,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Create a pending note draft (LLM synthesis output, or hand-written).
+
+    Drafts are app state awaiting review — nothing touches the vault until approval.
+    """
+    _require_auth(passkey)
+    if not request.title.strip() or not request.body.strip():
+        raise HTTPException(status_code=422, detail="Draft needs a title and a body")
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            draft = create_note_draft(
+                conn, request.title.strip(), request.body,
+                tags=request.tags, links=request.links,
+                source_turns=request.source_turns,
+                tree_root_id=request.tree_root_id, run_id=request.run_id,
+            )
+        finally:
+            conn.close()
+        return {"draft": draft}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/notes/drafts")
+async def get_drafts(
+    status: Optional[str] = None,
+    run_id: Optional[str] = None,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """List note drafts, optionally filtered by status (pending/approved/rejected) or run."""
+    _require_auth(passkey)
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            drafts = list_note_drafts(conn, status=status, run_id=run_id)
+        finally:
+            conn.close()
+        return {"drafts": drafts, "count": len(drafts)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/notes/drafts/{draft_id}")
+async def edit_draft(
+    draft_id: int,
+    request: NoteDraftUpdate,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Edit a pending draft during review (title/body/tags/links)."""
+    _require_auth(passkey)
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            draft = get_note_draft(conn, draft_id)
+            if draft is None:
+                raise HTTPException(status_code=404, detail=f"Draft {draft_id} not found")
+            if draft["status"] != "pending":
+                raise HTTPException(status_code=409, detail=f"Draft {draft_id} is {draft['status']}, not editable")
+            draft = update_note_draft(
+                conn, draft_id, title=request.title, body=request.body,
+                tags=request.tags, links=request.links,
+            )
+        finally:
+            conn.close()
+        return {"draft": draft}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notes/drafts/{draft_id}/approve")
+async def approve_draft(
+    draft_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Approve a pending draft: validate the title, write the note file into the
+    vault with app-stamped frontmatter, and mark the draft approved."""
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        conn = sqlite3.connect(db_path)
+        try:
+            draft = get_note_draft(conn, draft_id)
+            if draft is None:
+                raise HTTPException(status_code=404, detail=f"Draft {draft_id} not found")
+            if draft["status"] != "pending":
+                raise HTTPException(status_code=409, detail=f"Draft {draft_id} is already {draft['status']}")
+
+            title = _validate_note_title(draft["title"])
+            vault = _resolve_vault_dir(db_path)
+            path = _write_note_file(vault, title, draft["body"],
+                                    draft["tags"], draft["source_turns"])
+            draft = set_note_draft_status(conn, draft_id, "approved")
+        finally:
+            conn.close()
+        return {"draft": draft, "path": path, "filename": os.path.basename(path)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notes/drafts/{draft_id}/reject")
+async def reject_draft(
+    draft_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Reject a pending draft (kept in the table for audit; never touches the vault)."""
+    _require_auth(passkey)
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            draft = get_note_draft(conn, draft_id)
+            if draft is None:
+                raise HTTPException(status_code=404, detail=f"Draft {draft_id} not found")
+            if draft["status"] != "pending":
+                raise HTTPException(status_code=409, detail=f"Draft {draft_id} is already {draft['status']}")
+            draft = set_note_draft_status(conn, draft_id, "rejected")
+        finally:
+            conn.close()
+        return {"draft": draft}
     except HTTPException:
         raise
     except Exception as e:

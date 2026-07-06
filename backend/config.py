@@ -93,6 +93,11 @@ def load_config() -> dict:
                 "emotion": 1.1,
             },
         },
+        "notes": {
+            # Vault of APPROVED notes (markdown files, NOTES-FORMAT.md). Used when
+            # auth is disabled; with auth on, each user's vault sits next to their DB.
+            "vault_dir": "backend/data/notes",
+        },
         "tools": {
             "enabled": False,          # master switch; false = plain chat, no tools
             "status_notes": True,      # emit a short "what it's doing" per tool step

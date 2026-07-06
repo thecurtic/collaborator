@@ -37,12 +37,16 @@ specified separately (`synthesis-notes.md` prompt, later).
 
 ### Title style
 
-The title is a **declarative claim**, not a topic label:
+The title is a **declarative claim or an honest question**, never a topic label:
 
 - ✅ `SQLite fits single-user local persistence`
+- ✅ `Is Postgres's JSON support worth the ops cost?`
 - ❌ `Database notes`, `Thoughts on SQLite`
 
-Claims are what make notes atomic, linkable, and arguable.
+Claims (and genuinely held questions) are what make notes atomic, linkable, and
+arguable. Definitions are claims too ("A context boundary marks where conversation
+memory resets") — no noun-phrase titles. The note's *kind* (decision, open-question,
+concept…) is carried by tags, not by the title shape or a `type` field.
 
 ---
 
@@ -84,8 +88,13 @@ frontmatter. v1 keys:
 
 - First line: `# <Title>` — identical to the filename (minus `.md`).
 - Then distilled prose. Requirements:
+  - **Written in the user's first-person voice.** The note reads as the user's own
+    thought, not an assistant's summary of a conversation.
   - **Self-contained**: understandable with zero conversation context.
-  - **No raw quotes, no speaker tags**, no "the user said / the assistant replied".
+  - **No dialogue form, no speaker tags** — never "the user said / the assistant
+    replied". **Direct quotes are allowed sparingly**, and only of the *user's own
+    words*, when the original phrasing is itself the value. Assistant phrasing is
+    absorbed into the prose, never quoted as a speaker.
   - **No confidence scores, internal ids, or technical metadata** of any kind.
   - `[[Wikilinks]]` inline where natural. Links to **not-yet-existing notes are
     valid** (Obsidian's unresolved links = potential notes). `[[Title|alias]]` allowed.
@@ -105,6 +114,28 @@ The synthesis stage produces **drafts**, one per atomic idea, containing only:
 The LLM must never: write files, emit frontmatter, emit ids/confidence/metadata, or
 publish anywhere. The app renders drafts for review; on approval it writes the file
 (title-named) with app-generated frontmatter into the vault.
+
+**Draft storage:** drafts live in the per-user SQLite DB (`note_drafts` table), never
+in the vault — Obsidian indexes everything it sees, so unapproved content on disk
+would leak into search/graph/links and defeat the approval gate. The vault contains
+approved notes only.
+
+### Synthesis weighting (agreed principles; full process spec comes with the prompt)
+
+- **What counts as an idea** — anything passing three gates: *standalone*
+  (understandable without the conversation), *assertable* (phrasable as a claim the
+  user would endorse, or a question they actually hold), *reusable* (could matter
+  outside the conversation that produced it).
+- **User turns weigh far heavier than assistant turns.** Assistant contributions
+  become note-worthy only when the user ratified them in conversation — endorsement
+  transfers ownership, and the note then speaks the idea in the user's voice.
+- Tree structure marks idea-dense spots: branch points (`paragraph_index` points at
+  the paragraph that spawned a thought), sibling branches (comparison ideas), leaves
+  of exhausted branches (resolutions or open questions), names/tags/context-resets
+  (explicit user-attention signals).
+- **Granularity:** fewer, stronger notes — review attention is the scarce resource.
+  Drafts in one batch dedupe against each other (later: against the vault, proposing
+  links instead of duplicates).
 
 ---
 

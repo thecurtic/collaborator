@@ -82,5 +82,9 @@ backend/data/users/*/conversations.db
 # Authentication database (per-machine)
 backend/data/authentication/passkeys.db
 
+# Notes vaults (personal content, never committed)
+backend/data/notes/
+backend/data/users/*/notes/
+
 # Worktrees (keep hidden)
 .worktrees/
