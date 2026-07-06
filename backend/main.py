@@ -233,6 +233,14 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                        "literal match."),
     "synthesize": ("Synthesize retrieved items into a concise block. Call after a search "
                    "tool to produce a memory block for the user."),
+    "search_notes": ("Search the user's atomic notes (their curated knowledge base) by "
+                     "meaning or keyword. Use when the user refers to their notes or when "
+                     "curated knowledge would ground the answer better than raw history."),
+    "get_note": ("Fetch one note by exact title: full body plus backlinks (notes that "
+                 "link to it). Use after search_notes to read or traverse the graph."),
+    "propose_note": ("Propose a new atomic note. Creates a PENDING DRAFT the user must "
+                     "review and approve — it never publishes. Use when the user asks to "
+                     "note something down, or an idea clearly worth keeping emerges."),
 }
 
 
@@ -278,7 +286,8 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
     avail = tcfg.get("available", {}) or {}
     rc = _recall_config()
     exclude_ids = exclude_ids or []
-    state = {"last_matches": [], "synthesis": None, "synthesis_kind": None}
+    state = {"last_matches": [], "synthesis": None, "synthesis_kind": None,
+             "chat_run_id": f"chat-{secrets.token_hex(4)}", "proposed_drafts": []}
 
     def _search_schema(name, desc):
         return {"type": "function", "function": {
@@ -303,6 +312,37 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "items": {"type": "array", "items": {"type": "string"},
                           "description": "the text snippets to synthesize"}},
                 "required": ["kind", "items"]}}})
+    if avail.get("search_notes", True):
+        schemas.append({"type": "function", "function": {
+            "name": "search_notes",
+            "description": descs["search_notes"],
+            "parameters": {"type": "object", "properties": {
+                "query": {"type": "string", "description": "what to search for"},
+                "mode": {"type": "string", "enum": ["semantic", "keyword"],
+                         "description": "retrieval strategy (default semantic)"}},
+                "required": ["query"]}}})
+    if avail.get("get_note", True):
+        schemas.append({"type": "function", "function": {
+            "name": "get_note",
+            "description": descs["get_note"],
+            "parameters": {"type": "object", "properties": {
+                "title": {"type": "string", "description": "exact note title"}},
+                "required": ["title"]}}})
+    if avail.get("propose_note", True):
+        schemas.append({"type": "function", "function": {
+            "name": "propose_note",
+            "description": descs["propose_note"],
+            "parameters": {"type": "object", "properties": {
+                "title": {"type": "string",
+                          "description": "declarative claim or honest question"},
+                "body": {"type": "string",
+                         "description": "50-200 words, user's first-person voice, "
+                                        "self-contained, [[wikilinks]] allowed"},
+                "tags": {"type": "array", "items": {"type": "string"},
+                         "description": "1-4 lowercase-hyphenated tags"},
+                "links": {"type": "array", "items": {"type": "string"},
+                          "description": "titles of related notes"}},
+                "required": ["title", "body"]}}})
 
     def execute(name, args):
         if name in ("recall_semantic", "recall_keyword"):
@@ -329,6 +369,57 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             state["synthesis"] = block
             state["synthesis_kind"] = args.get("kind", "memory")
             return block or "(no synthesis produced)"
+        if name == "search_notes":
+            query = args.get("query", "")
+            conn = sqlite3.connect(db_path)
+            try:
+                if args.get("mode") == "keyword":
+                    results = notes_index.search_notes_keyword(conn, query, limit=8)
+                else:
+                    vec = get_embedding(query)
+                    results = (notes_index.search_notes_semantic(conn, vec, limit=8)
+                               if vec else notes_index.search_notes_keyword(conn, query, limit=8))
+            finally:
+                conn.close()
+            return json.dumps([{
+                "title": n["title"], "tags": n["tags"], "links": n["links"],
+                "score": round(n.get("score", 0), 4),
+                "preview": (n.get("body") or "")[:300],
+            } for n in results])
+        if name == "get_note":
+            conn = sqlite3.connect(db_path)
+            try:
+                note = notes_index.get_note_by_title(conn, args.get("title", ""))
+                if note is None:
+                    return json.dumps({"error": f"no note titled {args.get('title', '')!r}"})
+                backlinks = [b["title"] for b in notes_index.get_backlinks(conn, note["title"])]
+            finally:
+                conn.close()
+            return json.dumps({
+                "title": note["title"], "body": note["body"], "tags": note["tags"],
+                "links": note["links"], "backlinks": backlinks,
+                "created": note["created"],
+            })
+        if name == "propose_note":
+            title = (args.get("title") or "").strip()
+            body = (args.get("body") or "").strip()
+            if not title or not body:
+                return json.dumps({"error": "propose_note needs a title and a body"})
+            conn = sqlite3.connect(db_path)
+            try:
+                draft = create_note_draft(
+                    conn, title, body,
+                    tags=[str(t) for t in (args.get("tags") or [])],
+                    links=[str(l) for l in (args.get("links") or [])],
+                    run_id=state["chat_run_id"],
+                )
+            finally:
+                conn.close()
+            state.setdefault("proposed_drafts", []).append(
+                {"id": draft["id"], "title": draft["title"], "run_id": draft["run_id"]})
+            return json.dumps({"draft_id": draft["id"], "status": "pending",
+                               "note": "Draft created; awaiting the user's review. Tell "
+                                       "the user it's in their drafts inbox."})
         return json.dumps({"error": f"unknown tool {name}"})
 
     return schemas, execute, state
@@ -580,6 +671,10 @@ def _stream_turn_response(
             synthesis_block = tool_state.get("synthesis") or None
             if synthesis_block:
                 synthesis_sources = _recall_sources(tool_state.get("last_matches") or [])
+            # Surface any propose_note results so the UI can offer "review drafts".
+            proposed = tool_state.get("proposed_drafts") or []
+            if proposed:
+                yield f"data: {json.dumps({'type': 'drafts_proposed', 'drafts': proposed})}\n\n"
         else:
             try:
                 for content in stream_llm_tokens(message, context_list, mode=mode):

@@ -93,6 +93,9 @@ tools:
     recall_semantic: true     # semantic (embedding) search over turns
     recall_keyword: true      # lexical keyword search over turns
     synthesize: true          # synthesize retrieved items into a block
+    search_notes: true        # search the notes vault (curated knowledge)
+    get_note: true            # read one note in full (body + backlinks)
+    propose_note: true        # propose a note -> PENDING draft only (user approves)
     web_search: false         # (later)
   synthesis:
     max_tokens: 256

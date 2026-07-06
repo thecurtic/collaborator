@@ -752,6 +752,14 @@ def _tool_status_label(name: str, args: Dict) -> str:
         return f"Searching memory (keyword){f' for “{q[:40]}”' if q else ''}…"
     if name == "synthesize":
         return f"Synthesizing {args.get('kind', 'results')}…"
+    if name == "search_notes":
+        return f"Searching notes{f' for “{q[:40]}”' if q else ''}…"
+    if name == "get_note":
+        t = (args.get("title") or "").strip()
+        return f"Reading note{f' “{t[:40]}”' if t else ''}…"
+    if name == "propose_note":
+        t = (args.get("title") or "").strip()
+        return f"Proposing note{f' “{t[:40]}”' if t else ''} (draft for your review)…"
     if name == "web_search":
         return f"Searching the web{f' for “{q[:40]}”' if q else ''}…"
     return f"Running {name}…"

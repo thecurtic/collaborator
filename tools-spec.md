@@ -26,3 +26,24 @@ recall/search tool when you want to present the user with a clean summary of wha
 found. The result is shown to the user and saved with the turn as its recall block.
 Argument `kind` selects the synthesis style (e.g. "memory"); `items` is the list of
 snippets to synthesize.
+
+## search_notes
+Search the user's atomic notes — their curated, user-approved knowledge base — by
+meaning (default) or exact keyword. Notes are higher-signal than raw conversation
+history: they are ideas the user chose to keep. Use this when the user refers to their
+notes, or when a question touches something they may have already distilled. Returns
+titles, tags, link edges, and a body preview.
+
+## get_note
+Fetch one note by its exact title: the full body, tags, outgoing [[wikilinks]], and
+backlinks (which notes link to it). Use after search_notes to read a note in full or
+to traverse the note graph one hop at a time.
+
+## propose_note
+Propose a new atomic note distilled from this conversation. This creates a PENDING
+DRAFT in the user's review inbox — it never writes to their vault and never publishes;
+the user approves or rejects it. Use when the user asks you to note something down, or
+when an idea clearly worth keeping emerges and the user has invited suggestions.
+Follow the note rules: title is a declarative claim or honest question; body is 50–200
+words in the user's first-person voice, self-contained, no dialogue form. After
+calling it, tell the user the draft is awaiting their review.

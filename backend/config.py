@@ -119,6 +119,9 @@ def load_config() -> dict:
                 "recall_semantic": True,
                 "recall_keyword": True,
                 "synthesize": True,
+                "search_notes": True,
+                "get_note": True,
+                "propose_note": True,  # only ever creates PENDING drafts
                 "web_search": False,   # later
             },
             "synthesis": {

@@ -117,6 +117,20 @@ data: {"type":"done", ...}
   recall block (see `node.recall` in `GET /api/tree`).
 - The old single `recall` event is **removed** — recall is now tool-driven.
 
+**Available tools** (each gated in `tools.available`): `recall_semantic`,
+`recall_keyword` (turn history), `synthesize`, `search_notes`, `get_note` (the notes
+vault — read-only; `get_note` includes backlinks for graph traversal), and
+`propose_note` — which **only ever creates a pending draft** in the review inbox
+(never the vault; the user approves/rejects as usual).
+
+**`drafts_proposed` SSE event** — emitted after the answer streams when the model
+called `propose_note` during the turn:
+```
+data: {"type":"drafts_proposed","drafts":[{"id":7,"title":"…","run_id":"chat-a1b2c3d4"}]}
+```
+Use it to surface a "review drafts" affordance; fetch details via
+`GET /api/notes/drafts?run_id=chat-…`.
+
 > Branch model: every continuation should send `parent_turn_id` = the active branch's
 > leaf turn. To fork from a mid-conversation turn or a specific paragraph, use
 > `POST /api/branches/{id}` instead. The `done` event echoes `parent_turn_id` and
