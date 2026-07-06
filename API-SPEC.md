@@ -441,6 +441,50 @@ to **`tree`** when they become real conversations. Filter the tree by stage with
 > just provides this endpoint — call it whenever your UX decides a seed has become a
 > real conversation.
 
+---
+
+### 10. Export a Conversation Tree (notes-pipeline preprocessing)
+```
+GET /api/tree/{turn_id}/export
+X-Passkey: <your-passkey>
+```
+
+Exports a conversation as one nested JSON tree, shaped for downstream LLM synthesis
+into atomic notes (pure data reshaping — no LLM call). Pass a **root** turn id for a
+whole conversation, or any committed turn id for just that **subtree** (e.g. one
+branch). This is the user-initiated preprocessing step: export only the trees you
+choose.
+
+**Response (200 OK)**
+```json
+{
+  "tree": {
+    "id": 1, "parent_turn_id": null,
+    "role": "user", "content": "…",
+    "created_at": "2026-07-06T10:00:00Z",
+    "committed": true, "context_turns": 20,
+    "branched": false, "paragraph_index": null,
+    "model_name": null, "name": "Database planning", "state": "tree",
+    "tags": ["decision"],
+    "sibling_index": 0, "sibling_count": 1,
+    "children": [ { "…": "nested nodes, same shape" } ]
+  }
+}
+```
+
+Rules:
+- **Uncommitted turns are pruned**; their committed descendants are reattached to the
+  nearest committed ancestor (`parent_turn_id` on each node is the *effective*,
+  post-prune parent).
+- **Recall blocks and embeddings are excluded** (derivative content).
+- Orphaned turns (broken parent links — only possible via manual DB edits) are
+  skipped along with their subtrees.
+- `404` if the turn doesn't exist or is uncommitted.
+
+A CLI equivalent exists for offline/bulk use:
+`python backend/export_tree.py --db <conversations.db> [--tree-id N] [-o out.json]`
+(exports **all** trees as a JSON list when `--tree-id` is omitted).
+
 > Setup: embeddings run locally on the backend by default (`fastembed`, downloads a
 > small model once). Enable via `recall.enabled` or the per-request `recall` flag.
 > Synthesis uses the LM Studio chat model. Set `recall.embedding_backend: lmstudio`

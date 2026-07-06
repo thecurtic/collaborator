@@ -27,6 +27,7 @@ from inference import (
     get_embedding, embed_texts, synthesize_recall,
     generate_with_tools, synthesize,
 )
+from export_tree import export_forest, find_tree
 from auth import validate_passkey, create_user_db
 
 app = FastAPI()
@@ -680,6 +681,41 @@ async def get_tree(
             # Default window size: how many recent turns feed the next message.
             "context_turns": _default_context_window(),
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tree/{turn_id}/export")
+async def export_tree_endpoint(
+    turn_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Export a conversation subtree as nested JSON for LLM synthesis (notes pipeline).
+
+    Pass a root turn id to export a whole conversation, or any committed turn id to
+    export just that subtree (e.g. one branch). Uncommitted turns are pruned (their
+    committed descendants reattach to the nearest committed ancestor); recall blocks
+    and embeddings are excluded. This is the preprocessing step the user triggers on
+    trees they choose — no LLM is involved here.
+    """
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        conn = sqlite3.connect(db_path)
+        try:
+            roots = export_forest(conn)
+        finally:
+            conn.close()
+
+        node = find_tree(roots, turn_id)
+        if node is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Turn {turn_id} not found (or not committed)",
+            )
+        return {"tree": node}
     except HTTPException:
         raise
     except Exception as e:
