@@ -62,6 +62,8 @@ interface Segment {
   parentColumn: number | null;
   forkRow: number | null;
   active: boolean;
+  /** True when this segment starts at an explicit branch root. */
+  branched: boolean;
 }
 
 interface TreeLayout {
@@ -177,6 +179,7 @@ function assign(
     parentColumn,
     forkRow,
     active: seg.active,
+    branched: seg.branched,
   });
   const myFork = startRow + seg.count - 1;
   for (const c of seg.children) {
@@ -502,12 +505,15 @@ export function TreeMap({
                           pointerEvents="none"
                         />
                       ))}
-                      {/* Branch name, rotated to run along the line. The root
-                          segment's name is the tree label above — skip it.
+                      {/* Branch name, rotated to run along the line. Only
+                          explicit branch roots are nameable — the trunk is one
+                          singular line (its name = the tree label above), and
+                          trunk continuation segments are rendering artifacts
+                          whose boundaries shift as forks are added.
                           Truncated to the segment's length (~5.5px/char at
                           10px font, small overhang allowed) so a long name on
                           a short branch doesn't spill across other lines. */}
-                      {seg.name && seg.parentColumn != null && (
+                      {seg.name && seg.branched && seg.parentColumn != null && (
                         <text
                           transform={`translate(${x + 9}, ${top + 4}) rotate(90)`}
                           fontSize={10}
@@ -599,18 +605,23 @@ export function TreeMap({
               <Trash2 className="h-4 w-4" />
               Delete
             </Button>
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={() =>
-                setEditing({
-                  rootId: selected.startNodeId,
-                  value: selected.name ?? '',
-                })
-              }
-            >
-              Rename
-            </Button>
+            {/* Only stable anchors are nameable: the tree root (= the
+                conversation) and explicit branch roots. Trunk continuation
+                segments are not entities — the trunk is one singular line. */}
+            {(selected.parentColumn == null || selected.branched) && (
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() =>
+                  setEditing({
+                    rootId: selected.startNodeId,
+                    value: selected.name ?? '',
+                  })
+                }
+              >
+                Rename
+              </Button>
+            )}
             <Button
               variant="secondary"
               className="flex-1"
