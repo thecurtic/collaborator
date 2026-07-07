@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '@/api/collaborator';
+import { api, type StreamHandlers } from '@/api/collaborator';
 import type {
   ConversationTree,
   ProposedDraft,
@@ -68,6 +68,10 @@ export function useConversation(reloadSignal: number) {
   // inbox). Kept after the stream so the chat can offer a "review" link;
   // cleared on the next send or when the user follows the link.
   const [proposedDrafts, setProposedDrafts] = useState<ProposedDraft[]>([]);
+  // Links the model wanted to read but couldn't (per-turn fetch budget hit).
+  // Kept after the stream for one-tap follow-ups; a new send clears them
+  // (each user message starts a fresh budget).
+  const [unfollowedLinks, setUnfollowedLinks] = useState<string[]>([]);
   // Index kept in a ref so it's fresh synchronously after a load (selectPathTo
   // runs right after) while still triggering re-render via the `version` bump.
   const indexRef = useRef<NodeIndex>(
@@ -143,10 +147,7 @@ export function useConversation(reloadSignal: number) {
     async (
       userText: string,
       stream: (
-        onToken: (c: string) => void,
-        onRecall: (block: RecallBlock) => void,
-        onStatus: (t: string) => void,
-        onDrafts: (drafts: ProposedDraft[]) => void,
+        handlers: StreamHandlers,
         signal: AbortSignal,
       ) => Promise<{
         id: number | null;
@@ -160,13 +161,19 @@ export function useConversation(reloadSignal: number) {
       setRecall(null);
       setStatus('');
       setProposedDrafts([]);
+      setUnfollowedLinks([]);
       setStreaming({ user: userText, reply: '' });
       try {
         const res = await stream(
-          (c) => setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
-          (block) => setRecall(block),
-          (t) => setStatus(t),
-          (drafts) => setProposedDrafts((prev) => [...prev, ...drafts]),
+          {
+            onToken: (c) =>
+              setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
+            onRecall: (block) => setRecall(block),
+            onStatus: (t) => setStatus(t),
+            onDrafts: (drafts) =>
+              setProposedDrafts((prev) => [...prev, ...drafts]),
+            onUnfollowedLinks: (links) => setUnfollowedLinks(links),
+          },
           abort.signal,
         );
         // Fetch first, THEN apply + clear the overlay in one synchronous block
@@ -212,7 +219,7 @@ export function useConversation(reloadSignal: number) {
     (message: string): Promise<boolean> => {
       const trimmed = message.trim();
       if (!trimmed) return Promise.resolve(true);
-      return runStream(trimmed, (onToken, onRecall, onStatus, onDrafts, signal) =>
+      return runStream(trimmed, (handlers, signal) =>
         api.sendMessageStream(
           // Active leaf to continue from (omit for a brand-new conversation).
           {
@@ -220,11 +227,8 @@ export function useConversation(reloadSignal: number) {
             parentTurnId: leafRef.current ?? undefined,
             recall: getRecallEnabled(),
           },
-          onToken,
+          handlers,
           signal,
-          onRecall,
-          onStatus,
-          onDrafts,
         ),
       );
     },
@@ -258,24 +262,19 @@ export function useConversation(reloadSignal: number) {
       // stream (the reload inside runStream rebuilds the index).
       const root = rootOfTurn(parentTurnId);
       const seedRootId = root?.state === 'seed' ? root.id : null;
-      const ok = await runStream(
-        trimmed,
-        (onToken, onRecall, onStatus, onDrafts, signal) =>
-          api.branchMessage(
-            {
-              parentTurnId,
-              message: trimmed,
-              paragraphIndex,
-              recall: getRecallEnabled(),
-              // "Without context" → fresh branch, no prior turns injected.
-              ...(withContext ? {} : { contextTurns: 0 }),
-            },
-            onToken,
-            signal,
-            onRecall,
-            onStatus,
-            onDrafts,
-          ),
+      const ok = await runStream(trimmed, (handlers, signal) =>
+        api.branchMessage(
+          {
+            parentTurnId,
+            message: trimmed,
+            paragraphIndex,
+            recall: getRecallEnabled(),
+            // "Without context" → fresh branch, no prior turns injected.
+            ...(withContext ? {} : { contextTurns: 0 }),
+          },
+          handlers,
+          signal,
+        ),
       );
       if (ok && seedRootId != null) await promote(seedRootId);
       return ok;
@@ -374,6 +373,7 @@ export function useConversation(reloadSignal: number) {
     status,
     proposedDrafts,
     clearProposedDrafts,
+    unfollowedLinks,
     send,
     branch,
     stopGeneration,

@@ -90,6 +90,20 @@ function firstString(evt: Record<string, unknown>, keys: string[]): string {
   return '';
 }
 
+/** Callbacks for SSE events during a streamed send/branch. */
+export interface StreamHandlers {
+  /** Each incremental response chunk. */
+  onToken: (chunk: string) => void;
+  /** Synthesized recall block injected into context. */
+  onRecall?: (block: RecallBlock) => void;
+  /** Live tool-activity line ("Searching the web…"). */
+  onStatus?: (text: string) => void;
+  /** Drafts the model proposed via propose_note (pending in the inbox). */
+  onDrafts?: (drafts: ProposedDraft[]) => void;
+  /** Links the model wanted to read but couldn't (per-turn fetch budget). */
+  onUnfollowedLinks?: (links: string[]) => void;
+}
+
 /** Parse a drafts_proposed SSE event into ProposedDraft[] (defensively). */
 function toProposedDrafts(evt: Record<string, unknown>): ProposedDraft[] {
   const raw = Array.isArray(evt.drafts) ? evt.drafts : [];
@@ -109,11 +123,9 @@ function toProposedDrafts(evt: Record<string, unknown>): ProposedDraft[] {
 
 async function consumeStream(
   res: Response,
-  onToken: (chunk: string) => void,
-  onRecall?: (block: RecallBlock) => void,
-  onStatus?: (text: string) => void,
-  onDrafts?: (drafts: ProposedDraft[]) => void,
+  handlers: StreamHandlers,
 ): Promise<{ text: string; done: Record<string, unknown> }> {
+  const { onToken, onRecall, onStatus, onDrafts, onUnfollowedLinks } = handlers;
   const contentType = res.headers.get('content-type') ?? '';
   if (!contentType.includes('text/event-stream')) {
     const data = (await res.json()) as ApiSendMessageResponse;
@@ -156,6 +168,12 @@ async function consumeStream(
           // review in the inbox (it can never write the vault directly).
           const drafts = toProposedDrafts(evt);
           if (drafts.length) onDrafts?.(drafts);
+        } else if (evt.type === 'unfollowed_links') {
+          // Fetch budget hit with links left over — offer one-tap follow-ups.
+          const links = Array.isArray(evt.links)
+            ? evt.links.filter((l): l is string => typeof l === 'string')
+            : [];
+          if (links.length) onUnfollowedLinks?.(links);
         } else if (evt.type === 'done') {
           done = evt;
         } else if (evt.type === 'error') {
@@ -194,26 +212,20 @@ export interface CollaboratorApi {
   verifyAuth(): Promise<void>;
   listTurns(params?: ListTurnsParams): Promise<TurnsPage>;
   /**
-   * Send a message and stream the assistant response (SSE). `onToken` fires for
-   * each incremental chunk; the promise resolves with final metadata once the
-   * `done` event arrives. Pass a signal to cancel mid-stream.
+   * Send a message and stream the assistant response (SSE). `handlers.onToken`
+   * fires per chunk; the promise resolves with final metadata once the `done`
+   * event arrives. Pass a signal to cancel mid-stream.
    */
   sendMessageStream(
     input: SendMessageInput,
-    onToken: (chunk: string) => void,
+    handlers: StreamHandlers,
     signal?: AbortSignal,
-    onRecall?: (block: RecallBlock) => void,
-    onStatus?: (text: string) => void,
-    onDrafts?: (drafts: ProposedDraft[]) => void,
   ): Promise<SendStreamResult>;
   /** Branch from a turn (or paragraph), streaming the reply like sendMessageStream. */
   branchMessage(
     input: BranchInput,
-    onToken: (chunk: string) => void,
+    handlers: StreamHandlers,
     signal?: AbortSignal,
-    onRecall?: (block: RecallBlock) => void,
-    onStatus?: (text: string) => void,
-    onDrafts?: (drafts: ProposedDraft[]) => void,
   ): Promise<BranchStreamResult>;
   /** Full conversation tree (for branch navigation / metro map). */
   getTree(): Promise<ConversationTree>;
@@ -297,11 +309,8 @@ class HttpCollaboratorApi implements CollaboratorApi {
 
   async sendMessageStream(
     input: SendMessageInput,
-    onToken: (chunk: string) => void,
+    handlers: StreamHandlers,
     signal?: AbortSignal,
-    onRecall?: (block: RecallBlock) => void,
-    onStatus?: (text: string) => void,
-    onDrafts?: (drafts: ProposedDraft[]) => void,
   ): Promise<SendStreamResult> {
     const res = await requestStream('/api/messages', {
       method: 'POST',
@@ -317,13 +326,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
       }),
       signal,
     });
-    const { text, done } = await consumeStream(
-      res,
-      onToken,
-      onRecall,
-      onStatus,
-      onDrafts,
-    );
+    const { text, done } = await consumeStream(res, handlers);
     return {
       id: numOrNull(done.id),
       contextWindow: numOrNull(done.context_turns_used),
@@ -333,11 +336,8 @@ class HttpCollaboratorApi implements CollaboratorApi {
 
   async branchMessage(
     input: BranchInput,
-    onToken: (chunk: string) => void,
+    handlers: StreamHandlers,
     signal?: AbortSignal,
-    onRecall?: (block: RecallBlock) => void,
-    onStatus?: (text: string) => void,
-    onDrafts?: (drafts: ProposedDraft[]) => void,
   ): Promise<BranchStreamResult> {
     const res = await requestStream(`/api/branches/${input.parentTurnId}`, {
       method: 'POST',
@@ -351,13 +351,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
       }),
       signal,
     });
-    const { text, done } = await consumeStream(
-      res,
-      onToken,
-      onRecall,
-      onStatus,
-      onDrafts,
-    );
+    const { text, done } = await consumeStream(res, handlers);
     return {
       id: numOrNull(done.id),
       userTurnId: numOrNull(done.user_turn_id),

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
 import {
   getEndWord,
+  getRecallEnabled,
   getStopWord,
   getSttEngine,
 } from '@/features/settings/uiPrefs';
@@ -331,9 +332,11 @@ export function useCall(
               paragraphIndex: pb.paragraphIndex,
               commit: true,
               mode: 'voice',
+              // Tools (web/notes/recall) on voice turns — same toggle as text.
+              recall: getRecallEnabled(),
               ...(pb.withContext ? {} : { contextTurns: 0 }),
             },
-            onToken,
+            { onToken },
             streamAbort.signal,
           );
           if (res.id != null) leafId = res.id; // continue off the new branch
@@ -346,8 +349,12 @@ export function useCall(
               parentTurnId: leafId ?? undefined, // continue the in-view branch
               commit: true,
               mode: 'voice',
+              // Tools (web/notes/recall) on voice turns — same toggle as text.
+              recall: getRecallEnabled(),
             },
-            onToken,
+            // Voice-specific rendering of tool events is handled server-side
+            // (spoken citations, drafts announced verbally) — tokens suffice.
+            { onToken },
             streamAbort.signal,
           );
           if (res.id != null) leafId = res.id;

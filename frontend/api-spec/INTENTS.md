@@ -560,6 +560,24 @@ context:
 
 ---
 
+## Known Limitation: Web-Fetch Privacy
+
+`web_search` is privacy-respecting (the SearXNG instance routes outbound through
+WireGuard), but **`fetch_url` goes direct from the collaborator box** — every page
+the model fetches (including any link it follows) sees this machine's real IP. This
+is a known, accepted limitation for now.
+
+Planned fix: route fetches through Tor or a VPN via `tools.fetch_url.proxy` —
+either through the search box (its Tor SOCKS proxy is provisioned but dormant at
+`127.0.0.1:9050`; would need exposing to the tailnet) or by putting Tor on the
+webserver itself. The proxy hook is already implemented; this is an ops task, not a
+code task. (SOCKS proxies need `pip install requests[socks]`.)
+
+Related injection containment for link-following: per-turn fetch budget
+(`tools.fetch_url.max_per_turn`), SSRF guard on every hop, optional
+`same_domain_only`, tiny write surface (only `propose_note` → pending draft), and
+every fetched URL is shown live to the user as a status event.
+
 ## Future Considerations (User-Defined)
 
 - [ ] Priority levels for recall

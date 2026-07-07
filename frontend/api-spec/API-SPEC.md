@@ -122,10 +122,12 @@ data: {"type":"done", ...}
 vault — read-only; `get_note` includes backlinks for graph traversal),
 `propose_note` — which **only ever creates a pending draft** in the review inbox
 (never the vault; the user approves/rejects as usual; near-duplicates of existing
-notes are flagged in the result and on the draft) — and `web_search`, which queries
+notes are flagged in the result and on the draft) — `web_search`, which queries
 the private SearXNG instance (`tools.web_search.url`; the tool is offered to the
 model only when that URL is configured, and SearXNG must have the `json` format
-enabled in its settings.yml).
+enabled in its settings.yml) — and `fetch_url`, which reads a specific web page
+(pasted links; readable text extraction, `tools.fetch_url.max_chars` cap;
+private/tailnet addresses refused unless `tools.fetch_url.allow_private`).
 
 **`drafts_proposed` SSE event** — emitted after the answer streams when the model
 called `propose_note` during the turn:
@@ -134,6 +136,18 @@ data: {"type":"drafts_proposed","drafts":[{"id":7,"title":"…","run_id":"chat-a
 ```
 Use it to surface a "review drafts" affordance; fetch details via
 `GET /api/notes/drafts?run_id=chat-…`.
+
+**`unfollowed_links` SSE event** — emitted after the answer when the model wanted to
+fetch more pages than the per-turn budget allowed (`tools.fetch_url.max_per_turn`):
+```
+data: {"type":"unfollowed_links","links":["https://…","https://…"]}
+```
+The model also lists these in its prose and asks whether to continue. Use the event
+to render one-tap follow-ups (a new message = a fresh fetch budget).
+
+**Voice / call mode:** tools are not gated by `mode` — send `recall: true` on voice
+turns too and the model can search the web, read pages, recall, and propose note
+drafts mid-call (spoken citations by site name; drafts announced verbally).
 
 > Branch model: every continuation should send `parent_turn_id` = the active branch's
 > leaf turn. To fork from a mid-conversation turn or a specific paragraph, use

@@ -1,4 +1,4 @@
-import { Brain, Loader2, NotebookPen } from 'lucide-react';
+import { Brain, Link as LinkIcon, Loader2, NotebookPen } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/Markdown';
 import { useModalA11y } from '@/lib/useModalA11y';
@@ -77,6 +77,7 @@ export function ChatView({
     status,
     proposedDrafts,
     clearProposedDrafts,
+    unfollowedLinks,
     send,
     branch,
     stopGeneration,
@@ -318,6 +319,53 @@ export function ChatView({
       {error && (
         <div className="border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-center text-sm text-destructive">
           {error}
+        </div>
+      )}
+
+      {/* The model hit its per-turn fetch budget with links left unread —
+          one-tap follow-ups (a new message starts a fresh budget). */}
+      {unfollowedLinks.length > 0 && !sending && (
+        <div className="border-t border-border bg-muted/40 px-4 py-2">
+          <p className="mb-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <LinkIcon className="h-3.5 w-3.5 shrink-0" />
+            {unfollowedLinks.length === 1
+              ? 'One link left unread'
+              : `${unfollowedLinks.length} links left unread`}
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {unfollowedLinks.slice(0, 4).map((url) => {
+              let host = url;
+              try {
+                host = new URL(url).hostname.replace(/^www\./, '');
+              } catch {
+                /* keep raw */
+              }
+              return (
+                <button
+                  key={url}
+                  type="button"
+                  title={url}
+                  onClick={() => void send(`Please read ${url}`)}
+                  className="max-w-[12rem] truncate rounded-full border border-border bg-background px-2.5 py-1 text-xs text-foreground hover:border-primary/50"
+                >
+                  {host}
+                </button>
+              );
+            })}
+            {unfollowedLinks.length > 1 && (
+              <button
+                type="button"
+                onClick={() =>
+                  void send(
+                    `Yes — please read the remaining links:\n${unfollowedLinks.join('\n')}`,
+                  )
+                }
+                className="rounded-full bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                Read all
+              </button>
+            )}
+          </div>
         </div>
       )}
 
