@@ -129,7 +129,9 @@ def test_fetch_budget_and_same_domain():
         assert "error" not in json.loads(execute("fetch_url", {"url": "https://b.example/2"}))
         out = json.loads(execute("fetch_url", {"url": "https://c.example/3"}))
         assert "budget" in out["error"]                      # third fetch refused
+        assert "listing" in out["instruction"]               # model told to report links
         assert state["fetch_count"] == 2
+        assert state["denied_fetches"] == ["https://c.example/3"]   # recorded for the UI
 
         # same_domain_only: second fetch must stay on the first host.
         cfg["tools"]["fetch_url"]["same_domain_only"] = True
@@ -181,6 +183,93 @@ def test_registry_and_executor():
     print("✓ registry gating + executor path")
 
 
+def _scripted(rounds):
+    """Fake inference._iter_stream_events driven by per-round delta lists."""
+    calls = {"i": 0}
+    def fake(payload):
+        deltas = rounds[calls["i"]] if calls["i"] < len(rounds) else []
+        calls["i"] += 1
+        for d in deltas:
+            yield ({}, d)
+    return fake
+
+
+def _tool_call(idx_id, name, arguments):
+    return [{"tool_calls": [{"index": 0, "id": idx_id, "type": "function",
+                             "function": {"name": name, "arguments": ""}}]},
+            {"tool_calls": [{"index": 0, "function": {"arguments": arguments}}]}]
+
+
+def test_unfollowed_links_sse_event():
+    """Budget-denied links surface as an unfollowed_links SSE event."""
+    from starlette.testclient import TestClient
+    cfg = config.get_config._config
+    cfg["tools"]["enabled"] = True
+    cfg["tools"]["fetch_url"]["max_per_turn"] = 1
+
+    def ok_resp(url):
+        class R:
+            headers = {"content-type": "text/html"}
+            encoding = "utf-8"
+            def raise_for_status(self): pass
+            def iter_content(self, n): yield b"<html><body>page</body></html>"
+        R.url = url
+        return R()
+
+    rounds = [
+        _tool_call("1", "fetch_url", json.dumps({"url": "https://a.example/1"})),
+        _tool_call("2", "fetch_url", json.dumps({"url": "https://b.example/2"})),   # denied
+        [{"content": "Done — I couldn't read b.example, continue?"}],
+    ]
+    orig_stream, orig_get = inference._iter_stream_events, inference.requests.get
+    inference._iter_stream_events = _scripted(rounds)
+    inference.requests.get = lambda url, **k: ok_resp(url)
+    try:
+        c = TestClient(main.app)
+        r = c.post("/api/messages", json={"message": "read these", "recall": True})
+    finally:
+        inference._iter_stream_events = orig_stream
+        inference.requests.get = orig_get
+        cfg["tools"]["enabled"] = False
+        cfg["tools"]["fetch_url"]["max_per_turn"] = 3
+
+    events = [json.loads(l[6:]) for l in r.text.splitlines() if l.startswith("data: ")]
+    ev = next(e for e in events if e["type"] == "unfollowed_links")
+    assert ev["links"] == ["https://b.example/2"]
+    assert any(e["type"] == "done" for e in events)
+    print("✓ unfollowed_links SSE event carries budget-denied URLs")
+
+
+def test_tools_work_in_voice_mode():
+    """mode='voice' does not gate tools: search + answer flow works."""
+    from starlette.testclient import TestClient
+    cfg = config.get_config._config
+    cfg["tools"]["enabled"] = True
+
+    rounds = [
+        _tool_call("1", "recall_keyword", json.dumps({"query": "anything"})),
+        [{"content": "Spoken answer, plain prose."}],
+    ]
+    orig = inference._iter_stream_events
+    inference._iter_stream_events = _scripted(rounds)
+    try:
+        c = TestClient(main.app)
+        r = c.post("/api/messages", json={"message": "what did we decide?",
+                                          "mode": "voice", "recall": True})
+    finally:
+        inference._iter_stream_events = orig
+        cfg["tools"]["enabled"] = False
+
+    events = [json.loads(l[6:]) for l in r.text.splitlines() if l.startswith("data: ")]
+    types = [e["type"] for e in events]
+    assert "status" in types and "token" in types and "done" in types
+    # And the voice layer rides along with tools active.
+    msgs = inference._build_messages("x", mode="voice", include_tools_guidance=True)
+    system = msgs[0]["content"].lower()
+    assert "voice mode" in system and "tools" in system
+    print("✓ tools run in voice mode; voice layer + tools guidance coexist")
+
+
 if __name__ == "__main__":
     test_html_extraction()
     test_link_extraction()
@@ -189,4 +278,6 @@ if __name__ == "__main__":
     test_fetch_budget_and_same_domain()
     test_proxy_passed_through()
     test_registry_and_executor()
+    test_unfollowed_links_sse_event()
+    test_tools_work_in_voice_mode()
     print("\n✓ All fetch_url tests passed!")

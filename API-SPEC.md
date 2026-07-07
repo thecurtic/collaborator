@@ -137,6 +137,18 @@ data: {"type":"drafts_proposed","drafts":[{"id":7,"title":"…","run_id":"chat-a
 Use it to surface a "review drafts" affordance; fetch details via
 `GET /api/notes/drafts?run_id=chat-…`.
 
+**`unfollowed_links` SSE event** — emitted after the answer when the model wanted to
+fetch more pages than the per-turn budget allowed (`tools.fetch_url.max_per_turn`):
+```
+data: {"type":"unfollowed_links","links":["https://…","https://…"]}
+```
+The model also lists these in its prose and asks whether to continue. Use the event
+to render one-tap follow-ups (a new message = a fresh fetch budget).
+
+**Voice / call mode:** tools are not gated by `mode` — send `recall: true` on voice
+turns too and the model can search the web, read pages, recall, and propose note
+drafts mid-call (spoken citations by site name; drafts announced verbally).
+
 > Branch model: every continuation should send `parent_turn_id` = the active branch's
 > leaf turn. To fork from a mid-conversation turn or a specific paragraph, use
 > `POST /api/branches/{id}` instead. The `done` event echoes `parent_turn_id` and

@@ -295,7 +295,7 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
     exclude_ids = exclude_ids or []
     state = {"last_matches": [], "synthesis": None, "synthesis_kind": None,
              "chat_run_id": f"chat-{secrets.token_hex(4)}", "proposed_drafts": [],
-             "fetch_count": 0, "first_fetch_host": None}
+             "fetch_count": 0, "first_fetch_host": None, "denied_fetches": []}
 
     def _search_schema(name, desc):
         return {"type": "function", "function": {
@@ -452,8 +452,16 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             fcfg = tcfg.get("fetch_url", {}) or {}
             budget = fcfg.get("max_per_turn", 3)
             if state["fetch_count"] >= budget:
-                return json.dumps({"error": f"fetch budget for this turn is exhausted "
-                                            f"({budget} pages); answer with what you have"})
+                denied_url = (args.get("url") or "").strip()
+                if denied_url:
+                    state["denied_fetches"].append(denied_url)
+                return json.dumps({
+                    "error": f"fetch budget for this turn is exhausted ({budget} pages)",
+                    "instruction": "Finish your answer with what you already have. Then "
+                                   "end your reply by listing this and any other links "
+                                   "you wanted to follow (title and URL) and ask the "
+                                   "user whether to continue with them.",
+                })
             from urllib.parse import urlparse
             host = urlparse(args.get("url", "")).hostname
             if (fcfg.get("same_domain_only") and state["first_fetch_host"]
@@ -767,6 +775,11 @@ def _stream_turn_response(
             proposed = tool_state.get("proposed_drafts") or []
             if proposed:
                 yield f"data: {json.dumps({'type': 'drafts_proposed', 'drafts': proposed})}\n\n"
+            # Links the model wanted but couldn't fetch (budget) — so the UI can
+            # offer one-tap "continue with these" follow-ups.
+            denied = list(dict.fromkeys(tool_state.get("denied_fetches") or []))
+            if denied:
+                yield f"data: {json.dumps({'type': 'unfollowed_links', 'links': denied})}\n\n"
         else:
             try:
                 for content in stream_llm_tokens(message, context_list, mode=mode):
