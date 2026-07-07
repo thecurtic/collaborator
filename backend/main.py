@@ -838,7 +838,7 @@ def _stream_turn_response(
 @app.get("/api/health")
 async def health_check():
     """Basic health check endpoint."""
-    return {"status": "healthy", "version": "0.2.0"}
+    return {"status": "healthy", "version": "0.3.0"}
 
 
 @app.post("/api/messages")
