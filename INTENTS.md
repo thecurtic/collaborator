@@ -560,11 +560,18 @@ context:
 
 ---
 
-## Planned: In-App Prompt Editing (user intent, not yet built)
+## Prompt Exposure: Viewability SHIPPED, Editability SHELVED
 
 **Intent (2026-07-07):** expose ALL prompt material / building blocks to the
-frontend for editing from within the app — consistent with Full Visibility / Full
-Editability. The current inventory of editable prompt files (all at repo root):
+frontend — consistent with Full Visibility / Full Editability.
+
+**Status (2026-07-08):** read-only visibility is live — `GET /api/prompts` (+
+`/api/prompts/{name}`) returns every building block *as the runtime resolves it*,
+with provenance (file / config / built-in default) and caveat notes. **Editing is
+deliberately shelved** until the issues below are addressed; they are the
+prerequisites for the write path, not blockers for viewing.
+
+The current inventory of prompt files (all at repo root):
 
 - `system-prompt.md` — base system prompt
 - `paragraph-style.md` — one-idea-per-block layer (always appended)

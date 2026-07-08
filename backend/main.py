@@ -28,6 +28,9 @@ from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
     get_embedding, embed_texts, synthesize_recall,
     generate_with_tools, synthesize, synthesize_notes, web_search_searxng, fetch_url,
+    resolve_prompt_layer, DEFAULT_PARAGRAPH_STYLE, DEFAULT_VOICE_STYLE,
+    DEFAULT_TOOLS_GUIDANCE, DEFAULT_RECALL_SYNTHESIS_PROMPT,
+    DEFAULT_NOTES_SYNTHESIS_PROMPT,
 )
 from export_tree import export_forest, find_tree
 import notes_index
@@ -1334,6 +1337,126 @@ async def get_vault_note(
         finally:
             conn.close()
         return {"note": note}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _prompt_inventory() -> List[dict]:
+    """Every prompt building block as the runtime resolves it RIGHT NOW.
+
+    Read-only visibility (editability is deliberately shelved — see INTENTS.md).
+    Each entry: {name, description, applies, source: file|config|default,
+    file: path|null, content, note?}.
+    """
+    sp = config.get("system_prompt", {}) or {}
+    tools_cfg = config.get("tools", {}) or {}
+    ncfg = config.get("notes", {}) or {}
+    rc = config.get("recall", {}) or {}
+    items = []
+
+    # Base system prompt — special: folded into the config cache at startup.
+    items.append({
+        "name": "system",
+        "description": "Base system prompt (the model's identity and role)",
+        "applies": "every turn",
+        "source": "file" if sp.get("file_path") else "config",
+        "file": sp.get("file_path"),
+        "content": sp.get("text", ""),
+        "note": "Cached at startup — file edits need a backend restart to apply "
+                "(unlike every other layer, which is read fresh).",
+    })
+
+    for name, cfg_section, fkey, tkey, default, desc, applies in [
+        ("paragraph-style", sp, "paragraph_file", "paragraph_text",
+         DEFAULT_PARAGRAPH_STYLE,
+         "One-idea-per-block layer (makes paragraph branching meaningful)",
+         "every turn"),
+        ("voice-style", sp, "voice_file", "voice_text", DEFAULT_VOICE_STYLE,
+         "Spoken-style layer for call mode", "voice turns"),
+        ("tools-guidance", tools_cfg, "guidance_file", "guidance_text",
+         DEFAULT_TOOLS_GUIDANCE,
+         "When/how to reach for tools (incl. untrusted-web + citation rules)",
+         "turns with tools enabled"),
+    ]:
+        content, source, path = resolve_prompt_layer(cfg_section, fkey, tkey, default)
+        items.append({"name": name, "description": desc, "applies": applies,
+                      "source": source, "file": path, "content": content})
+
+    # Per-tool descriptions the model sees (## tool_name sections).
+    spec_file = tools_cfg.get("spec_file")
+    spec_content, spec_source = None, "default"
+    if spec_file:
+        try:
+            with open(resolve_path(spec_file), "r", encoding="utf-8") as f:
+                spec_content, spec_source = f.read().strip(), "file"
+        except IOError:
+            pass
+    if spec_content is None:
+        spec_content = "\n\n".join(
+            f"## {n}\n{d}" for n, d in DEFAULT_TOOL_DESCRIPTIONS.items())
+    items.append({
+        "name": "tools-spec",
+        "description": "Per-tool descriptions the model sees (the tool schemas)",
+        "applies": "turns with tools enabled",
+        "source": spec_source, "file": spec_file if spec_source == "file" else None,
+        "content": spec_content,
+        "note": "Parsed by '## tool_name' sections; missing sections fall back to "
+                "built-in defaults.",
+    })
+
+    # Synthesis prompts: one per configured kind, plus the notes pipeline.
+    kind_defaults = {"memory": DEFAULT_RECALL_SYNTHESIS_PROMPT}
+    for kind, path in ((tools_cfg.get("synthesis") or {}).get("prompts") or {}).items():
+        default = kind_defaults.get(
+            kind, f"You synthesize {kind} results into a concise, well-organized "
+                  "block. Use only the provided items; do not invent facts.")
+        content, source, fpath = resolve_prompt_layer(
+            {"f": path}, "f", "_none", default)
+        items.append({
+            "name": f"synthesis-{kind}",
+            "description": f"Prompt for the synthesize tool with kind '{kind}'",
+            "applies": f"synthesize(kind={kind!r}) calls",
+            "source": source, "file": fpath, "content": content,
+        })
+    content, source, fpath = resolve_prompt_layer(
+        ncfg, "synthesis_prompt_file", "synthesis_prompt_text",
+        DEFAULT_NOTES_SYNTHESIS_PROMPT)
+    items.append({
+        "name": "synthesis-notes",
+        "description": "Tree -> atomic-note-drafts synthesis prompt",
+        "applies": "POST /api/notes/synthesize/{tree_id}",
+        "source": source, "file": fpath, "content": content,
+    })
+    return items
+
+
+@app.get("/api/prompts")
+async def list_prompts(
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """All prompt building blocks as the runtime resolves them (read-only)."""
+    _require_auth(passkey)
+    try:
+        prompts = _prompt_inventory()
+        return {"prompts": prompts, "count": len(prompts)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/prompts/{name}")
+async def get_prompt(
+    name: str,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """One prompt building block by name (see GET /api/prompts for names)."""
+    _require_auth(passkey)
+    try:
+        for item in _prompt_inventory():
+            if item["name"] == name:
+                return {"prompt": item}
+        raise HTTPException(status_code=404, detail=f"No prompt named {name!r}")
     except HTTPException:
         raise
     except Exception as e:

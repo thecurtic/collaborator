@@ -635,6 +635,33 @@ GET /api/notes/search?q=…&mode=semantic|keyword&limit=10
 `semantic` uses the local embedder (same as recall); `keyword` is lexical over
 title/body/tags.
 
+---
+
+### 13. Prompt Visibility (read-only)
+
+Every prompt building block, **as the runtime resolves it right now** — content plus
+provenance. Editing is deliberately not exposed (see INTENTS.md).
+
+```
+GET /api/prompts            -> { "prompts": [ ... ], "count": N }
+GET /api/prompts/{name}     -> { "prompt": { ... } }   (404 if unknown)
+```
+
+Entry shape:
+```json
+{ "name": "tools-guidance",
+  "description": "When/how to reach for tools (incl. untrusted-web + citation rules)",
+  "applies": "turns with tools enabled",
+  "source": "file",                 // file | config | default
+  "file": "tools-guidance.md",      // null unless source=file
+  "content": "…the exact text the model receives…",
+  "note": "optional caveat (e.g. the system prompt is cached until restart)" }
+```
+
+Names: `system`, `paragraph-style`, `voice-style`, `tools-guidance`, `tools-spec`,
+`synthesis-memory`, `synthesis-web`, `synthesis-notes` (synthesis kinds follow the
+config, so new kinds appear automatically).
+
 > Setup: embeddings run locally on the backend by default (`fastembed`, downloads a
 > small model once). Enable via `recall.enabled` or the per-request `recall` flag.
 > Synthesis uses the LM Studio chat model. Set `recall.embedding_backend: lmstudio`

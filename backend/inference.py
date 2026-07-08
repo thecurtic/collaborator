@@ -87,11 +87,13 @@ DEFAULT_VOICE_STYLE = (
 )
 
 
-def _load_prompt_layer(cfg: Dict, file_key: str, text_key: str, default: str) -> str:
-    """Resolve a system-prompt layer: markdown file -> inline config string -> default.
+def resolve_prompt_layer(cfg: Dict, file_key: str, text_key: str, default: str):
+    """Resolve a prompt layer and report its provenance.
 
-    Read fresh each call so edits to the layer files take effect without a restart
-    (unlike system-prompt.md, which config caches at startup).
+    Returns (content, source, file_path) with source in {"file", "config",
+    "default"}. Precedence: markdown file -> inline config string -> built-in
+    default. Read fresh each call so file edits apply without a restart (the base
+    system prompt is the exception — config caches it at startup).
     """
     file_path = cfg.get(file_key)
     if file_path:
@@ -99,10 +101,16 @@ def _load_prompt_layer(cfg: Dict, file_key: str, text_key: str, default: str) ->
             with open(resolve_path(file_path), "r", encoding="utf-8") as f:
                 text = f.read().strip()
                 if text:
-                    return text
+                    return text, "file", file_path
         except IOError:
             pass
-    return cfg.get(text_key) or default
+    if cfg.get(text_key):
+        return cfg[text_key], "config", None
+    return default, "default", None
+
+
+def _load_prompt_layer(cfg: Dict, file_key: str, text_key: str, default: str) -> str:
+    return resolve_prompt_layer(cfg, file_key, text_key, default)[0]
 
 
 def _build_messages(
