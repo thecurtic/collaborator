@@ -10,6 +10,19 @@ describe('quoteForReply', () => {
     expect(quoteForReply('line one\nline  two')).toBe('> line one line two');
   });
 
+  it('strips markdown markers from the quoted text', () => {
+    expect(
+      quoteForReply('**Bold claim** with `code` and a [link](http://x).'),
+    ).toBe('> Bold claim with code and a link.');
+  });
+
+  it('strips list bullets and headers', () => {
+    expect(quoteForReply('- first item\n- second item')).toBe(
+      '> first item second item',
+    );
+    expect(quoteForReply('## A heading idea')).toBe('> A heading idea');
+  });
+
   it('truncates long text on a word boundary with an ellipsis', () => {
     const long = `${'word '.repeat(40)}end`;
     const q = quoteForReply(long, 50);

@@ -1,11 +1,14 @@
+import { sanitizeForSpeech } from '@/features/voice/speechUtils';
+
 /**
- * Build a composer-ready quote for replying to a paragraph. Truncated on a
- * word boundary — the model has the full turn in context, so a distinctive
- * prefix is enough to bind the answer to its referent (and saves tokens vs.
- * quoting whole paragraphs).
+ * Build a composer-ready quote for replying to a paragraph. Markdown markers
+ * are stripped (same rules TTS uses — bold/list/code symbols read as noise in
+ * a quote too) and the text is truncated on a word boundary — the model has
+ * the full turn in context, so a distinctive prefix is enough to bind the
+ * answer to its referent (and saves tokens vs. quoting whole paragraphs).
  */
 export function quoteForReply(text: string, maxChars = 140): string {
-  const collapsed = text.replace(/\s+/g, ' ').trim();
+  const collapsed = sanitizeForSpeech(text).replace(/\s+/g, ' ').trim();
   if (collapsed.length <= maxChars) return `> ${collapsed}`;
   const cut = collapsed.slice(0, maxChars);
   const lastSpace = cut.lastIndexOf(' ');
