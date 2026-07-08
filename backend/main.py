@@ -26,7 +26,7 @@ from db import (
 )
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
-    get_embedding, embed_texts, synthesize_recall,
+    get_embedding, embed_texts, synthesize_recall, get_available_models,
     generate_with_tools, synthesize, synthesize_notes, web_search_searxng, fetch_url,
     resolve_prompt_layer, DEFAULT_PARAGRAPH_STYLE, DEFAULT_VOICE_STYLE,
     DEFAULT_TOOLS_GUIDANCE, DEFAULT_RECALL_SYNTHESIS_PROMPT,
@@ -144,6 +144,19 @@ class NoteDraftUpdate(BaseModel):
     body: Optional[str] = None
     tags: Optional[List[str]] = None
     links: Optional[List[str]] = None
+
+
+class ModelRequest(BaseModel):
+    model_id: str
+    # Set true to accept a model id that isn't in the endpoint's available list
+    # (e.g. LM Studio was unreachable during validation).
+    force: bool = False
+
+
+class NoteEditRequest(BaseModel):
+    title: Optional[str] = None   # rename (rewrites inbound [[links]])
+    body: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 
 def get_passkey_from_header(passkey: Optional[str] = Header(None, alias="X-Passkey")) -> str:
@@ -1337,6 +1350,158 @@ async def get_vault_note(
         finally:
             conn.close()
         return {"note": note}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/notes/{title}")
+async def edit_vault_note(
+    title: str,
+    request: NoteEditRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Edit an approved note in the vault: body, tags, and/or title (rename).
+
+    Renames rewrite inbound [[wikilinks]] across the vault (the Obsidian-parity
+    obligation from NOTES-FORMAT.md). Unknown frontmatter keys are preserved; the
+    edited note (and any rewritten linkers) are reindexed immediately.
+    """
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        vault = _resolve_vault_dir(db_path)
+        conn = sqlite3.connect(db_path)
+        try:
+            note = notes_index.get_note_by_title(conn, title)
+            if note is None:
+                raise HTTPException(status_code=404, detail=f"Note \"{title}\" not found")
+
+            old_title = note["title"]
+            old_path = os.path.join(vault, note["filename"])
+            parsed = notes_index.parse_note_file(old_path)
+            front = dict(parsed.get("front") or {})
+
+            new_body = request.body if request.body is not None else parsed["body"]
+            if request.tags is not None:
+                front["tags"] = [t for t in (_normalize_tag(t) for t in request.tags) if t]
+
+            new_title = " ".join((request.title or old_title).split())
+            renamed = new_title != old_title
+            if renamed:
+                new_title = _validate_note_title(new_title)
+                existing = {f.lower() for f in os.listdir(vault)} - {note["filename"].lower()}
+                if f"{new_title}.md".lower() in existing:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"A note titled \"{new_title}\" already exists")
+
+            # Gather linkers BEFORE the index changes (backlinks come from the index).
+            linkers = notes_index.get_backlinks(conn, old_title) if renamed else []
+
+            new_path = os.path.join(vault, f"{new_title}.md")
+            with open(new_path, "w", encoding="utf-8") as f:
+                f.write(notes_index.compose_note_file(front, new_title, new_body))
+            if renamed:
+                if os.path.exists(old_path) and old_path != new_path:
+                    os.remove(old_path)
+                conn.cursor().execute("DELETE FROM notes_index WHERE filename = ?",
+                                      (note["filename"],))
+                conn.commit()
+            notes_index.index_note_file(conn, new_path, embed_fn=embed_texts)
+
+            links_rewritten = []
+            for linker in linkers:
+                lpath = os.path.join(vault, linker["filename"])
+                try:
+                    with open(lpath, "r", encoding="utf-8") as f:
+                        raw = f.read()
+                    updated = notes_index.rewrite_wikilinks(raw, old_title, new_title)
+                    if updated != raw:
+                        with open(lpath, "w", encoding="utf-8") as f:
+                            f.write(updated)
+                        notes_index.index_note_file(conn, lpath, embed_fn=embed_texts)
+                        links_rewritten.append(linker["title"])
+                except IOError:
+                    continue
+
+            result = notes_index.get_note_by_title(conn, new_title)
+            result["backlinks"] = notes_index.get_backlinks(conn, new_title)
+        finally:
+            conn.close()
+        return {"note": result, "renamed": renamed, "links_rewritten": links_rewritten}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _dot_config_path() -> str:
+    """Path of the machine-specific config overrides (gitignored)."""
+    return resolve_path(".config.yaml")
+
+
+def _persist_config_override(section: str, key: str, value) -> None:
+    """Persist one setting into .config.yaml so it survives restarts.
+
+    Never touches the tracked config.yaml — machine overrides only, so in-app
+    settings and git deploys can't collide.
+    """
+    import yaml
+    path = _dot_config_path()
+    existing = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = yaml.safe_load(f) or {}
+        except Exception:
+            existing = {}
+    existing.setdefault(section, {})[key] = value
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(existing, f)
+
+
+@app.get("/api/models")
+async def list_models(
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Models available at the inference endpoint, plus the active one."""
+    _require_auth(passkey)
+    try:
+        return {
+            "current": config.get("inference", {}).get("model_id"),
+            "available": get_available_models(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/model")
+async def set_model(
+    request: ModelRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Switch the active chat model. Applies immediately (no restart) and persists
+    to .config.yaml. NOTE: the model is per-install — this changes it for all users.
+    """
+    _require_auth(passkey)
+    model_id = request.model_id.strip()
+    if not model_id:
+        raise HTTPException(status_code=422, detail="model_id must not be empty")
+    try:
+        available = get_available_models()
+        if model_id not in available and not request.force:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Model {model_id!r} not offered by the inference endpoint; "
+                       f"pass force=true to set it anyway. Available: {available}",
+            )
+        # Mutate the live config dict in place: main, inference, and the config
+        # singleton all share this object, so the switch applies immediately.
+        config.setdefault("inference", {})["model_id"] = model_id
+        _persist_config_override("inference", "model_id", model_id)
+        return {"model_id": model_id, "persisted": True}
     except HTTPException:
         raise
     except Exception as e:
