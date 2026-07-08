@@ -121,6 +121,31 @@ def test_system_prompt_layers_from_files():
     print("✓ system prompt layers load from files (paragraph always, voice in voice mode)")
 
 
+def test_datetime_grounding_in_system_prompt():
+    """Every turn's system prompt carries today's date + the don't-argue rule."""
+    import time as _time
+    import inference
+
+    system = inference._build_messages("hi")[0]["content"]
+    assert _time.strftime("%Y-%m-%d") in system          # today's actual date, filled in
+    assert "ground truth" in system.lower()
+    assert "{now}" not in system                          # placeholder substituted
+
+    # Inline config override respected, with substitution.
+    import config
+    cfg = config.get_config._config if hasattr(config.get_config, "_config") else None
+    inference._get_config._config = dict(inference._get_config())
+    inference._get_config._config["system_prompt"] = dict(
+        inference._get_config._config.get("system_prompt", {}))
+    inference._get_config._config["system_prompt"]["datetime_text"] = "It is {now}, trust me."
+    try:
+        system = inference._build_messages("hi")[0]["content"]
+        assert "trust me" in system and _time.strftime("%Y-%m-%d") in system
+    finally:
+        del inference._get_config._config
+    print("✓ datetime grounding: injected every turn, substituted, overridable")
+
+
 def test_available_models():
     """Test getting available models."""
     mock_response = {
@@ -176,6 +201,8 @@ if __name__ == "__main__":
     print("✓ utf-8 streaming test passed")
 
     test_system_prompt_layers_from_files()
+
+    test_datetime_grounding_in_system_prompt()
 
     test_available_models()
     print("✓ available models test passed")

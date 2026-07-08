@@ -5,6 +5,7 @@ and context-aware messaging. Supports both streaming and non-streaming modes.
 """
 
 import os
+import time
 import requests
 from typing import List, Dict, Optional, AsyncGenerator, Tuple
 from functools import lru_cache
@@ -45,6 +46,17 @@ class StreamingResponse:
     def __init__(self, text: str = "", metadata: Dict = None):
         self.text = text
         self.metadata = metadata or {}
+
+
+# Appended to every system prompt with {now} filled in, so the model is grounded
+# in the present instead of its training cutoff (it will otherwise insist on stale
+# facts — who holds an office, what year it is — and argue with the user).
+DEFAULT_DATETIME_TEXT = (
+    "Current date and time: {now}. Your training data predates this moment — treat "
+    "this timestamp as ground truth and never dispute the user about the current "
+    "date or who currently holds a position. For time-sensitive or recent facts, "
+    "verify with your tools (web search) instead of relying on memory."
+)
 
 
 # Appended to every system prompt so distinct ideas land in separate paragraphs.
@@ -131,6 +143,12 @@ def _build_messages(
     config = _get_config()
     system_prompt = config.get("system_prompt", {})
     system_content = system_prompt.get("text", "You are Collaborator, a helpful assistant.")
+
+    # Ground the model in the present — every turn, filled at send time.
+    datetime_text = _load_prompt_layer(
+        system_prompt, "datetime_file", "datetime_text", DEFAULT_DATETIME_TEXT)
+    now = time.strftime("%A, %Y-%m-%d %H:%M %Z")
+    system_content = f"{system_content}\n\n{datetime_text.replace('{now}', now)}"
 
     # Tell the model how to use its tools (only when tools are active this turn).
     if include_tools_guidance:

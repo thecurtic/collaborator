@@ -36,6 +36,10 @@ system_prompt:
   # Inline string fallbacks if you prefer not to use files (file takes precedence):
   # paragraph_text: "Put each distinct idea in its own blank-line-separated block."
   # voice_text: "Speak in plain conversational prose with no markdown or symbols."
+  # Date/time grounding: appended every turn with {now} filled in (server local
+  # time), so the model doesn't insist on training-cutoff facts. Override if desired:
+  # datetime_text: "Current date and time: {now}. Trust this over your memory."
+  # datetime_file: "datetime-line.md"   # or keep it in a file like the other layers
 
 # Speech-to-text (faster-whisper / CTranslate2). Defaults: CPU, int8, 'base' model.
 # For a GPU box use device: cuda and compute_type: float16.

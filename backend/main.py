@@ -30,7 +30,7 @@ from inference import (
     generate_with_tools, synthesize, synthesize_notes, web_search_searxng, fetch_url,
     resolve_prompt_layer, DEFAULT_PARAGRAPH_STYLE, DEFAULT_VOICE_STYLE,
     DEFAULT_TOOLS_GUIDANCE, DEFAULT_RECALL_SYNTHESIS_PROMPT,
-    DEFAULT_NOTES_SYNTHESIS_PROMPT,
+    DEFAULT_NOTES_SYNTHESIS_PROMPT, DEFAULT_DATETIME_TEXT,
 )
 from export_tree import export_forest, find_tree
 import notes_index
@@ -1366,6 +1366,19 @@ def _prompt_inventory() -> List[dict]:
         "content": sp.get("text", ""),
         "note": "Cached at startup — file edits need a backend restart to apply "
                 "(unlike every other layer, which is read fresh).",
+    })
+
+    # Date/time grounding line — dynamic: {now} is filled at send time.
+    dt_content, dt_source, dt_path = resolve_prompt_layer(
+        sp, "datetime_file", "datetime_text", DEFAULT_DATETIME_TEXT)
+    items.append({
+        "name": "datetime",
+        "description": "Current date/time line (grounds the model in the present, "
+                       "so it doesn't insist on training-cutoff facts)",
+        "applies": "every turn",
+        "source": dt_source, "file": dt_path, "content": dt_content,
+        "note": "{now} is replaced with the server's current date and time on "
+                "every turn.",
     })
 
     for name, cfg_section, fkey, tkey, default, desc, applies in [

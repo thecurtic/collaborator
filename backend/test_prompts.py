@@ -12,7 +12,7 @@ importlib.reload(db)
 importlib.reload(main)
 from starlette.testclient import TestClient
 
-EXPECTED = {"system", "paragraph-style", "voice-style", "tools-guidance",
+EXPECTED = {"system", "datetime", "paragraph-style", "voice-style", "tools-guidance",
             "tools-spec", "synthesis-memory", "synthesis-web", "synthesis-notes"}
 
 
