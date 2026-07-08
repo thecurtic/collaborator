@@ -203,6 +203,24 @@ export interface ApiReindexResponse {
   total: number;
 }
 
+/** GET /api/prompts entry — a prompt building block as the runtime resolves it. */
+export interface ApiPromptEntry {
+  name: string;
+  description?: string;
+  applies?: string;
+  /** Provenance: file | config | default. */
+  source?: string;
+  file?: string | null;
+  content?: string;
+  note?: string | null;
+}
+
+/** GET /api/prompts (read-only by design — editability is shelved). */
+export interface ApiPromptsResponse {
+  prompts: ApiPromptEntry[];
+  count: number;
+}
+
 /** Standard error envelope ({ "error": "..." }). */
 export interface ApiError {
   error: string;

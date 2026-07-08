@@ -3,6 +3,7 @@ import type {
   ApiNoteDraft,
   ApiNoteMeta,
   ApiNoteResponse,
+  ApiPromptEntry,
   ApiRecall,
   ApiTree,
   ApiTreeNode,
@@ -15,6 +16,7 @@ import type {
   Note,
   NoteDraft,
   NoteMeta,
+  PromptInfo,
   RecallBlock,
   TreeNode,
   Turn,
@@ -148,6 +150,19 @@ export function toNoteMeta(api: ApiNoteMeta): NoteMeta {
     sourceTurns: api.source_turns ?? [],
     links: api.links ?? [],
     score: typeof api.score === 'number' ? api.score : null,
+  };
+}
+
+export function toPromptInfo(api: ApiPromptEntry): PromptInfo {
+  return {
+    name: api.name,
+    description: api.description ?? '',
+    applies: api.applies ?? '',
+    source:
+      api.source === 'file' || api.source === 'config' ? api.source : 'default',
+    file: api.file ?? null,
+    content: api.content ?? '',
+    note: api.note ?? null,
   };
 }
 

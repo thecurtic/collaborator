@@ -2,7 +2,7 @@
 
 A living document describing the core philosophy, architecture decisions, and intended behavior of Collaborator.
 
-**Last Updated:** 2026-07-06
+**Last Updated:** 2026-07-07
 
 > **Implementation status (2026-07-06):** The atomic-notes layer is underway. The
 > note file format is specified in `NOTES-FORMAT.md` (one markdown file per idea,
@@ -559,6 +559,58 @@ context:
    - Next turn will use this revised recall block
 
 ---
+
+## Prompt Exposure: Viewability SHIPPED, Editability SHELVED
+
+**Intent (2026-07-07):** expose ALL prompt material / building blocks to the
+frontend — consistent with Full Visibility / Full Editability.
+
+**Status (2026-07-08):** read-only visibility is live — `GET /api/prompts` (+
+`/api/prompts/{name}`) returns every building block *as the runtime resolves it*,
+with provenance (file / config / built-in default) and caveat notes. **Editing is
+deliberately shelved** until the issues below are addressed; they are the
+prerequisites for the write path, not blockers for viewing.
+
+The current inventory of prompt files (all at repo root):
+
+- `system-prompt.md` — base system prompt
+- `paragraph-style.md` — one-idea-per-block layer (always appended)
+- `voice-style.md` — call-mode layer
+- `tools-guidance.md` — when/how to reach for tools (incl. untrusted-web rules)
+- `tools-spec.md` — per-tool descriptions the model sees (parsed by `## tool` section)
+- `recall-synthesis-prompt.md` — synthesize kind `memory`
+- `synthesis-web.md` — synthesize kind `web`
+- `synthesis-notes.md` — tree → note-drafts synthesis
+
+### Known issues to solve before building it
+
+1. **Caching inconsistency.** Most layers are read fresh each turn/call, but
+   `system-prompt.md` is loaded through the config cache at startup — an in-app edit
+   to it would silently do nothing until a backend restart. Must move the base
+   prompt to fresh-read (or add a reload hook) first, or the editor will feel broken.
+2. **Multi-user blast radius.** Prompt files are per-install, but the API is
+   per-passkey. A prompt-editing endpoint would let ANY passkey holder rewrite
+   prompts for ALL users. Needs an admin gate or per-user prompt overrides.
+3. **Path safety.** The endpoint must expose a fixed whitelist of named prompts —
+   never accept file paths from the client.
+4. **Git-pull collisions (the operational trap).** These files are tracked in the
+   repo; in-app edits on the server dirty the working tree, and the next
+   `git pull` deploy will conflict with or clobber them. Likely fix: gitignored
+   override files (the `.config.yaml` pattern — e.g. `prompts/*.local.md` wins over
+   the tracked default), so deploys and edits never fight.
+5. **Guardrail erosion.** `tools-guidance.md` carries safety-relevant rules
+   (untrusted web content, propose-only drafts). Editing UI should show the
+   built-in default alongside, offer one-click "reset to default" (code fallbacks
+   already exist), and ideally a diff.
+6. **Format validation.** `tools-spec.md` is structured (`## tool_name` sections);
+   malformed edits currently fall back silently to defaults — the UI needs to
+   surface parse results, not fail quietly.
+7. **Not everything is a file yet.** Some model-facing text still lives in code:
+   the DEFAULT_* fallback strings, tool *parameter* descriptions in the schemas,
+   the recall-block wrapper line, and the synthesize/notes user-prompt templates.
+   "All building blocks" means extracting these too — inventory them when building.
+8. **No history.** In-app edits have no undo; either commit-on-edit (git as
+   history) or store versions alongside.
 
 ## Known Limitation: Web-Fetch Privacy
 

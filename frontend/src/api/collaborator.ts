@@ -5,6 +5,7 @@ import type {
   Note,
   NoteDraft,
   NoteMeta,
+  PromptInfo,
   ProposedDraft,
   RecallBlock,
   ReindexResult,
@@ -17,6 +18,7 @@ import {
   toNote,
   toNoteDraft,
   toNoteMeta,
+  toPromptInfo,
   toRecallBlock,
   toTree,
   toTurnsPage,
@@ -29,6 +31,7 @@ import type {
   ApiNoteResponse,
   ApiNoteSearchResponse,
   ApiNotesResponse,
+  ApiPromptsResponse,
   ApiRecall,
   ApiReindexResponse,
   ApiSendMessageResponse,
@@ -270,6 +273,12 @@ export interface CollaboratorApi {
   /** Reconcile the index with the vault (after external Obsidian edits). */
   reindexNotes(): Promise<ReindexResult>;
 
+  /**
+   * Prompt building blocks as the runtime resolves them (References viewer).
+   * READ-ONLY — editability is shelved backend-side; don't add edit UI.
+   */
+  listPrompts(): Promise<PromptInfo[]>;
+
   // --- Roadmap (INTENTS.md "API Extensions Needed", not yet served) ---
   // editRecall(input): Promise<RecallSynthesis>;
   // setTurnTags(turnId, { add, remove }): Promise<string[]>;
@@ -456,6 +465,11 @@ class HttpCollaboratorApi implements CollaboratorApi {
 
   async reindexNotes(): Promise<ReindexResult> {
     return request<ApiReindexResponse>('/api/notes/reindex', { method: 'POST' });
+  }
+
+  async listPrompts(): Promise<PromptInfo[]> {
+    const res = await request<ApiPromptsResponse>('/api/prompts');
+    return (res.prompts ?? []).map(toPromptInfo);
   }
 }
 

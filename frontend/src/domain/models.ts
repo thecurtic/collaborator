@@ -196,6 +196,26 @@ export interface ReindexResult {
   total: number;
 }
 
+/**
+ * A prompt building block as the backend runtime resolves it (References
+ * viewer). READ-ONLY by design — the backend shelved editability, so the UI
+ * must not grow edit affordances yet.
+ */
+export interface PromptInfo {
+  name: string;
+  description: string;
+  /** Which turns this applies to (subtitle). */
+  applies: string;
+  /** Provenance of the text the model actually receives. */
+  source: 'file' | 'config' | 'default';
+  /** Backing filename when source === 'file'. */
+  file: string | null;
+  /** The exact (markdown) text the model receives. */
+  content: string;
+  /** Caveat worth surfacing (e.g. "cached until restart"). */
+  note: string | null;
+}
+
 export interface SendMessageInput {
   message: string;
   /** Opt-in: search memory and inject a synthesized recall block into context. */
