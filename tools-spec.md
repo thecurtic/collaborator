@@ -4,7 +4,8 @@ This file is the editable source of truth for the **tool descriptions the model
 sees** — i.e. the `description` field of each function/tool passed to the LLM. Edit
 the text under each `## tool_name` heading to change how the model understands and
 decides to use a tool. It is read fresh each turn (no restart needed). Any tool not
-listed here falls back to a built-in default.
+listed here falls back to a built-in default. The placeholder `{today}` is replaced
+with the current date (YYYY-MM-DD) when the descriptions are sent to the model.
 
 (This is separate from `tools-guidance.md`, which is the higher-level "when to reach
 for tools at all" instruction appended to the system prompt.)
@@ -42,9 +43,11 @@ to traverse the note graph one hop at a time.
 ## web_search
 Search the web through the user's private SearXNG instance. Use for current events,
 facts outside your knowledge, or anything the user asks you to look up. Returns result
-titles, URLs, snippets, and sometimes direct answers/infoboxes. Ground what you tell
-the user in these results and cite sources by domain; if you want to present a clean
-summary, call synthesize with kind "web" on the snippets.
+titles, URLs, snippets, and sometimes direct answers/infoboxes. Today is {today}: when
+a query is time-sensitive, use THIS date/year — never a year remembered from your
+training data (writing a stale year into the query buries the current results). Ground
+what you tell the user in these results and cite sources by domain; if you want to
+present a clean summary, call synthesize with kind "web" on the snippets.
 
 ## fetch_url
 Fetch and read one specific web page. ALWAYS call this when the user pastes or

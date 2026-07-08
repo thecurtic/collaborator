@@ -259,7 +259,9 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                      "note something down, or an idea clearly worth keeping emerges."),
     "web_search": ("Search the web via the user's private SearXNG instance. Use for "
                    "current events, facts you don't know, or anything the user asks you "
-                   "to look up. Returns result titles, URLs, and snippets."),
+                   "to look up. Returns result titles, URLs, and snippets. Today is "
+                   "{today}: when a query is time-sensitive, use THIS date/year — never "
+                   "a year remembered from your training data."),
     "fetch_url": ("Fetch and read a specific web page. ALWAYS use this when the user "
                   "pastes or references a URL — read it before discussing it. Also "
                   "useful to open a promising web_search result. Returns the page "
@@ -272,31 +274,37 @@ def _load_tool_descriptions() -> dict:
 
     Format: a `## tool_name` heading followed by that tool's description. Read fresh
     each turn (edits apply without a restart); missing sections fall back to defaults.
+    A `{today}` placeholder in any description is replaced with the current date —
+    grounding time-sensitive tools (web_search) at the point of use, since models
+    otherwise write their training-era year into queries.
     """
     descriptions = dict(DEFAULT_TOOL_DESCRIPTIONS)
     spec_file = _tools_settings().get("spec_file")
-    if not spec_file:
-        return descriptions
-    try:
-        with open(resolve_path(spec_file), "r", encoding="utf-8") as f:
-            text = f.read()
-    except IOError:
-        return descriptions
+    text = None
+    if spec_file:
+        try:
+            with open(resolve_path(spec_file), "r", encoding="utf-8") as f:
+                text = f.read()
+        except IOError:
+            pass
 
-    current, buf = None, []
-    def _flush():
-        if current and buf:
-            body = "\n".join(buf).strip()
-            if body:
-                descriptions[current] = body
-    for line in text.splitlines():
-        if line.startswith("## "):
-            _flush()
-            current, buf = line[3:].strip(), []
-        elif current is not None:
-            buf.append(line)
-    _flush()
-    return descriptions
+    if text is not None:
+        current, buf = None, []
+        def _flush():
+            if current and buf:
+                body = "\n".join(buf).strip()
+                if body:
+                    descriptions[current] = body
+        for line in text.splitlines():
+            if line.startswith("## "):
+                _flush()
+                current, buf = line[3:].strip(), []
+            elif current is not None:
+                buf.append(line)
+        _flush()
+
+    today = time.strftime("%Y-%m-%d")
+    return {k: v.replace("{today}", today) for k, v in descriptions.items()}
 
 
 def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):

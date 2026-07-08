@@ -764,6 +764,17 @@ def web_search_searxng(query: str) -> Dict:
             "title": i.get("infobox"),
             "content": (i.get("content") or "")[:300],
         } for i in data["infoboxes"][:1]]
+
+    # SearXNG reports per-engine failures (rate limits, CAPTCHAs) in-band with a
+    # 200 and an empty results list. Zero results with every engine down is a
+    # FAILURE, not "no results" — say so, or the model tells the user the web has
+    # nothing on the topic.
+    unresponsive = [e for e in (data.get("unresponsive_engines") or [])
+                    if isinstance(e, (list, tuple)) and e]
+    if unresponsive and not out["results"] and not data.get("answers"):
+        detail = "; ".join(f"{e[0]}: {e[1] if len(e) > 1 else 'failed'}"
+                           for e in unresponsive[:6])
+        return {"error": f"web search failed — no engines responded ({detail})"}
     return out
 
 
@@ -1026,6 +1037,104 @@ def _tool_status_label(name: str, args: Dict) -> str:
     return f"Running {name}…"
 
 
+def _tool_status_fields(name: str, args: Dict) -> Dict:
+    """Structured fields for the status SSE event (frontend renders these directly,
+    instead of parsing the human-readable label)."""
+    fields = {}
+    q = (args.get("query") or "").strip()
+    if q:
+        fields["query"] = q
+    if name == "fetch_url" and (args.get("url") or "").strip():
+        fields["url"] = args["url"].strip()
+    if name == "get_note" and (args.get("title") or "").strip():
+        fields["title"] = args["title"].strip()
+    return fields
+
+
+def _tool_outcome_event(name: str, result: str) -> Optional[Dict]:
+    """A follow-up status event reporting what a tool call actually produced, so
+    the user can tell 'searched and found nothing' from 'search failed' from
+    'never searched'. Returns None for tools where an outcome note adds nothing."""
+    import json as _json
+    try:
+        data = _json.loads(result)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("error"):
+        return {"type": "status", "tool": name, "outcome": "error",
+                "error": str(data["error"])[:200],
+                "label": f"{name} failed: {str(data['error'])[:120]}"}
+    if name == "web_search":
+        n = len(data.get("results") or [])
+        if n == 0:
+            return {"type": "status", "tool": name, "outcome": "empty", "count": 0,
+                    "label": "Web search returned no results."}
+        return {"type": "status", "tool": name, "outcome": "ok", "count": n,
+                "label": f"Web search returned {n} result{'s' if n != 1 else ''}."}
+    if name == "fetch_url":
+        title = (data.get("title") or "").strip()
+        return {"type": "status", "tool": name, "outcome": "ok",
+                "label": f"Read page{f': “{title[:60]}”' if title else ''}."}
+    return None
+
+
+def _parse_textual_tool_calls(text: str, known_names) -> List[Dict]:
+    """Recover tool calls the model wrote as plain text instead of structured
+    tool_calls deltas (some models occasionally do this). Accepts bare JSON,
+    ```json fences, <tool_call> wrappers, and qwen's XML-style
+    <function=name><parameter=key>value</parameter></function> format. Returns
+    [{"name", "args"}, ...] or [] when the text is not a recognizable tool call."""
+    import json as _json
+    import re as _re
+    s = (text or "").strip()
+    s = _re.sub(r"^```(?:json)?\s*|\s*```$", "", s).strip()
+    s = _re.sub(r"^<tool_call>\s*|\s*</tool_call>$", "", s).strip()
+
+    # qwen3-style XML tool call.
+    if s.startswith("<function="):
+        calls = []
+        for m in _re.finditer(r"<function=([\w.-]+)>(.*?)(?:</function>|$)", s, _re.S):
+            name = m.group(1)
+            if name not in known_names:
+                return []
+            args = {k: v.strip() for k, v in
+                    _re.findall(r"<parameter=([\w.-]+)>\s*(.*?)\s*</parameter>",
+                                m.group(2), _re.S)}
+            calls.append({"name": name, "args": args})
+        return calls
+
+    if not s.startswith(("{", "[")):
+        return []
+    try:
+        obj = _json.loads(s)
+    except Exception:
+        return []
+    if isinstance(obj, list):
+        candidates = obj
+    elif isinstance(obj, dict):
+        candidates = obj["tool_calls"] if isinstance(obj.get("tool_calls"), list) else [obj]
+    else:
+        return []
+    calls = []
+    for c in candidates:
+        if not isinstance(c, dict):
+            return []
+        fn = c.get("function") if isinstance(c.get("function"), dict) else c
+        name = fn.get("name")
+        if name not in known_names:
+            return []
+        args = fn.get("arguments") or fn.get("parameters") or fn.get("args") or {}
+        if isinstance(args, str):
+            try:
+                args = _json.loads(args)
+            except Exception:
+                args = {}
+        calls.append({"name": name, "args": args if isinstance(args, dict) else {}})
+    return calls
+
+
 def _iter_stream_events(payload: Dict):
     """Yield (choice, delta) pairs from a streaming chat completion (byte-safe)."""
     import json
@@ -1072,23 +1181,52 @@ def generate_with_tools(
     # default, so run the loop at a configurable tools temperature.
     tools_temp = _tools_config().get("temperature", 0.3)
 
+    known_names = {s["function"]["name"] for s in tool_schemas}
+
     for round_index in range(max_rounds + 1):
         # Last iteration: drop tools so the model must produce a final answer.
         use_tools = tool_schemas and round_index < max_rounds
+        if tool_schemas and not use_tools:
+            # The model can no longer call tools this turn; without this nudge it
+            # tends to emit the tool-call JSON it *wanted* to send as its answer.
+            messages.append({"role": "system", "content": (
+                "Tool calls are no longer available this turn. Answer the user now "
+                "in plain prose from the information already gathered. Do not "
+                "output JSON or tool-call syntax.")})
         payload = _build_payload(messages, stream=True)
         payload["temperature"] = tools_temp
         if use_tools:
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
 
+        # Some models occasionally write their tool call as plain text ("{...}")
+        # instead of a structured tool_calls delta. Streaming that JSON to the user
+        # is the "reply is one raw JSON blob" bug — so hold back content that looks
+        # like it might be one, and decide at end of round: execute it as a tool
+        # call if it parses as one, otherwise flush it as normal tokens.
         content_parts: List[str] = []
+        held: List[str] = []          # tokens held back pending the JSON check
+        holding = None                # None = undecided, True = holding, False = passthrough
         tool_calls: Dict[int, Dict] = {}
         try:
             for choice, delta in _iter_stream_events(payload):
                 content = delta.get("content")
                 if content:
                     content_parts.append(content)
-                    yield {"type": "token", "content": content}
+                    if holding is None:
+                        lead = ("".join(held) + content).lstrip()
+                        if not lead:
+                            held.append(content)
+                            continue
+                        holding = lead.startswith(("{", "[", "```", "<tool_call", "<function"))
+                        if not holding:
+                            for h in held:
+                                yield {"type": "token", "content": h}
+                            held = []
+                    if holding:
+                        held.append(content)
+                    else:
+                        yield {"type": "token", "content": content}
                 for tc in (delta.get("tool_calls") or []):
                     slot = tool_calls.setdefault(tc.get("index", 0), {"id": None, "name": "", "args": ""})
                     if tc.get("id"):
@@ -1105,14 +1243,40 @@ def generate_with_tools(
             yield {"type": "error", "detail": f"Error during generation: {e}"}
             return
 
-        if not tool_calls:
+        held_text = "".join(held)
+        recovered = (_parse_textual_tool_calls(held_text, known_names)
+                     if (holding and held_text) else [])
+
+        if not tool_calls and recovered and not use_tools:
+            # Final forced round and the model STILL answered with a tool call.
+            # Never show the raw blob; admit the situation honestly instead.
+            yield {"type": "token", "content": (
+                "I ran out of tool calls this turn before reaching a definitive "
+                "answer. Ask me to continue and I'll pick up from here.")}
+            return
+
+        if not tool_calls and not recovered:
+            if held_text:
+                # Held-back content turned out not to be a tool call — deliver it.
+                yield {"type": "token", "content": held_text}
             return  # final answer already streamed as token events
 
+        if tool_calls:
+            if held_text and not recovered:
+                yield {"type": "token", "content": held_text}
+            ordered = [tool_calls[i] for i in sorted(tool_calls)]
+            assistant_content = "".join(content_parts) or None
+        else:
+            # The model wrote its tool call as plain text; execute it instead of
+            # showing the raw JSON to the user.
+            ordered = [{"id": None, "name": c["name"], "args": json.dumps(c["args"])}
+                       for c in recovered]
+            assistant_content = None
+
         # Record the assistant's tool-call message, then execute each call.
-        ordered = [tool_calls[i] for i in sorted(tool_calls)]
         messages.append({
             "role": "assistant",
-            "content": "".join(content_parts) or None,
+            "content": assistant_content,
             "tool_calls": [{
                 "id": s["id"] or str(i), "type": "function",
                 "function": {"name": s["name"], "arguments": s["args"]},
@@ -1124,7 +1288,9 @@ def generate_with_tools(
             except Exception:
                 args = {}
             if emit_status:
-                yield {"type": "status", "tool": s["name"], "label": _tool_status_label(s["name"], args)}
+                yield {"type": "status", "tool": s["name"],
+                       "label": _tool_status_label(s["name"], args),
+                       **_tool_status_fields(s["name"], args)}
             try:
                 result = execute_tool(s["name"], args)
             except Exception as e:
@@ -1133,6 +1299,10 @@ def generate_with_tools(
                 result = json.dumps(result)
             if emit_results:
                 yield {"type": "tool_result", "tool": s["name"], "result": result}
+            if emit_status:
+                outcome = _tool_outcome_event(s["name"], result)
+                if outcome:
+                    yield outcome
             messages.append({
                 "role": "tool", "tool_call_id": s["id"] or str(i), "content": result,
             })
