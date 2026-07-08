@@ -113,11 +113,6 @@ export interface ApiSendMessageResponse {
   agents_md_content?: string;
 }
 
-/** POST /api/transcribe response. */
-export interface ApiTranscription {
-  text: string;
-}
-
 /** POST /api/auth/ws-ticket — short-lived single-use WS auth ticket. */
 export interface ApiWsTicket {
   ticket: string;

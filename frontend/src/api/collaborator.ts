@@ -33,17 +33,10 @@ import type {
   ApiReindexResponse,
   ApiSendMessageResponse,
   ApiSynthesisResponse,
-  ApiTranscription,
   ApiTree,
   ApiTurnsResponse,
   ApiWsTicket,
 } from './types';
-
-export interface TranscribeOptions {
-  language?: string;
-  /** Filename hint (extension helps the backend pick a demuxer). */
-  filename?: string;
-}
 
 export interface ListTurnsParams {
   limit?: number;
@@ -242,9 +235,6 @@ export interface CollaboratorApi {
    */
   setTurnState(turnId: number, state: 'seed' | 'tree'): Promise<void>;
 
-  /** Transcribe recorded audio to text (Whisper, backend). */
-  transcribe(audio: Blob, opts?: TranscribeOptions): Promise<string>;
-
   /** Short-lived single-use ticket for WS auth (fetch right before opening). */
   getWsTicket(): Promise<string>;
 
@@ -383,17 +373,6 @@ class HttpCollaboratorApi implements CollaboratorApi {
       method: 'PATCH',
       body: JSON.stringify({ state }),
     });
-  }
-
-  async transcribe(audio: Blob, opts: TranscribeOptions = {}): Promise<string> {
-    const form = new FormData();
-    form.append('audio', audio, opts.filename ?? 'recording.webm');
-    if (opts.language) form.append('language', opts.language);
-    const res = await request<ApiTranscription>('/api/transcribe', {
-      method: 'POST',
-      body: form,
-    });
-    return res.text;
   }
 
   async getWsTicket(): Promise<string> {

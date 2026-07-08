@@ -6,11 +6,8 @@ import {
   useRef,
   useState,
 } from 'react';
-import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
-import { getSttEngine } from '@/features/settings/uiPrefs';
-import { transcribeBlobOnDevice } from '@/features/voice/deviceTranscriber';
-import { useRecorder } from '@/features/voice/useRecorder';
+import { useDictation } from '@/features/voice/useDictation';
 import { useWakeLock } from '@/features/voice/useWakeLock';
 
 interface ComposerProps {
@@ -34,17 +31,22 @@ export function Composer({
   onCancelBranch,
 }: ComposerProps) {
   const [value, setValue] = useState('');
-  const [transcribing, setTranscribing] = useState(false);
-  const [voiceError, setVoiceError] = useState<string | null>(null);
-  const { status: recStatus, error: recError, supported, start, stop, cancel } =
-    useRecorder();
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  // Streaming dictation: transcribes WHILE you speak (live partial below the
+  // input), so the final text lands near-instantly when you tap stop.
+  const {
+    status: dictation,
+    partial,
+    error: dictationError,
+    supported,
+    start,
+    stop,
+  } = useDictation();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const recording = recStatus === 'recording';
-  useWakeLock(recording || transcribing); // keep screen on while capturing
-
-  // Release the mic if we unmount mid-recording.
-  useEffect(() => () => cancel(), [cancel]);
+  const recording = dictation === 'listening';
+  const busyMic = dictation === 'starting' || dictation === 'finishing';
+  useWakeLock(dictation !== 'idle'); // keep screen on while capturing
 
   // Grow with the content (up to max-h-40), shrink when cleared.
   useEffect(() => {
@@ -78,31 +80,17 @@ export function Composer({
   }
 
   async function handleMic() {
-    setVoiceError(null);
+    setVoiceNotice(null);
     if (recording) {
-      const result = await stop();
-      if (!result) return;
-      setTranscribing(true);
-      try {
-        const text = (
-          getSttEngine() === 'device'
-            ? await transcribeBlobOnDevice(result.blob)
-            : await api.transcribe(result.blob, { filename: result.filename })
-        ).trim();
-        if (text) setValue((v) => (v ? `${v.trimEnd()} ${text}` : text));
-      } catch (err) {
-        setVoiceError(
-          err instanceof Error ? err.message : 'Transcription failed.',
-        );
-      } finally {
-        setTranscribing(false);
-      }
+      const text = await stop();
+      if (text) setValue((v) => (v ? `${v.trimEnd()} ${text}` : text));
+      else setVoiceNotice('Didn’t catch anything — try again.');
     } else {
       await start();
     }
   }
 
-  const error = voiceError ?? recError;
+  const error = dictationError ?? voiceNotice;
 
   return (
     <div className="px-safe pb-safe border-t border-border bg-background">
@@ -125,10 +113,15 @@ export function Composer({
       {error && (
         <p className="px-4 pt-2 text-xs text-destructive">{error}</p>
       )}
-      {recording && (
-        <p className="flex items-center gap-2 px-4 pt-2 text-xs text-muted-foreground">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-destructive" />
-          Recording… tap the stop button when you’re done.
+      {(recording || dictation === 'starting') && (
+        <p className="flex items-start gap-2 px-4 pt-2 text-xs text-muted-foreground">
+          <span className="mt-1 h-2 w-2 shrink-0 animate-pulse rounded-full bg-destructive" />
+          <span className="line-clamp-2 min-w-0">
+            {partial ||
+              (recording
+                ? 'Listening… tap the stop button when you’re done.'
+                : 'Connecting…')}
+          </span>
         </p>
       )}
       <form onSubmit={handleSubmit} className="flex items-end gap-2 p-3 sm:p-4">
@@ -138,12 +131,12 @@ export function Composer({
             variant={recording ? 'destructive' : 'ghost'}
             size="icon"
             onClick={() => void handleMic()}
-            disabled={disabled || transcribing}
-            aria-label={recording ? 'Stop recording' : 'Record voice'}
-            title={recording ? 'Stop recording' : 'Record voice'}
+            disabled={disabled || busyMic}
+            aria-label={recording ? 'Stop dictation' : 'Dictate'}
+            title={recording ? 'Stop dictation' : 'Dictate'}
             className="h-11 w-11 shrink-0 rounded-xl sm:h-10 sm:w-10 sm:rounded-md"
           >
-            {transcribing ? (
+            {busyMic ? (
               <Loader2 className="h-5 w-5 animate-spin" />
             ) : recording ? (
               <Square className="h-4 w-4" />
@@ -159,7 +152,9 @@ export function Composer({
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
           rows={1}
-          placeholder={transcribing ? 'Transcribing…' : 'Message Collaborator…'}
+          placeholder={
+            dictation === 'finishing' ? 'Transcribing…' : 'Message Collaborator…'
+          }
           // text-base (16px) on mobile prevents iOS from auto-zooming on focus.
           className="max-h-40 min-h-[2.75rem] flex-1 resize-none rounded-xl border border-input bg-card px-3.5 py-3 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:rounded-md sm:py-2.5 sm:text-sm"
         />
