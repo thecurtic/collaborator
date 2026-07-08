@@ -80,7 +80,32 @@ def parse_note_file(path: str) -> dict:
         "body": body,
         "content_hash": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         "mtime": os.path.getmtime(path),
+        # Full frontmatter dict (incl. unknown keys) — NOT indexed; used by editing
+        # so tooling preserves keys it doesn't understand (NOTES-FORMAT.md rule).
+        "front": front,
     }
+
+
+def compose_note_file(front: dict, title: str, body: str) -> str:
+    """Render a note file: YAML frontmatter (all keys preserved) + H1 + body."""
+    lines = (body or "").strip().splitlines()
+    if lines and lines[0].strip().startswith("# "):
+        lines = lines[1:]  # never double the H1
+    clean_body = "\n".join(lines).strip()
+
+    parts = []
+    if front:
+        parts += ["---", yaml.safe_dump(front, default_flow_style=None,
+                                        sort_keys=False, allow_unicode=True).strip(), "---", ""]
+    parts += [f"# {title}", "", clean_body]
+    return "\n".join(parts) + "\n"
+
+
+def rewrite_wikilinks(content: str, old_title: str, new_title: str) -> str:
+    """Rewrite [[Old]] / [[Old|alias]] / [[Old#heading]] references to a new title."""
+    pattern = re.compile(r"\[\[\s*" + re.escape(old_title) + r"\s*(?=[\]|#])",
+                         re.IGNORECASE)
+    return pattern.sub("[[" + new_title, content)
 
 
 def _row_to_note(row) -> dict:
