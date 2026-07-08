@@ -5,6 +5,7 @@ import {
   Copy,
   GitBranch,
   Loader2,
+  RefreshCw,
   Reply,
   Share2,
   Square,
@@ -46,6 +47,11 @@ interface TreeBubbleProps {
   onQuote?: (text: string) => void;
   /** Share this turn or the current context window (assistant turns). */
   onShare?: (scope: ShareScope) => void;
+  /**
+   * Regenerate: prefill the composer with the user message for edit-and-
+   * resend (replaces this reply). Only passed on the leaf exchange.
+   */
+  onRegenerate?: () => void;
   /** When set, this node is a fork — highlight the source paragraph + switcher. */
   fork?: Fork;
   /** False → this turn is outside the next message's context window (lighter). */
@@ -204,6 +210,7 @@ export function TreeBubble({
   onDelete,
   onQuote,
   onShare,
+  onRegenerate,
   fork,
   inContext = true,
 }: TreeBubbleProps) {
@@ -354,6 +361,18 @@ export function TreeBubble({
                 ) : (
                   <Volume2 className="h-4 w-4" />
                 )}
+              </Button>
+            )}
+            {!isUser && onRegenerate && (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Regenerate (edit and resend)"
+                title="Regenerate — edit your message and resend; replaces this reply"
+                onClick={onRegenerate}
+                className="-my-1 h-9 w-9 opacity-70 hover:opacity-100"
+              >
+                <RefreshCw className="h-4 w-4" />
               </Button>
             )}
             {!isUser && <CopyButton text={node.content} />}

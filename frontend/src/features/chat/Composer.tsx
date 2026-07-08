@@ -22,10 +22,12 @@ import { useDictation } from '@/features/voice/useDictation';
 import { useWakeLock } from '@/features/voice/useWakeLock';
 import { appendQuoteToDraft } from './quote';
 
-/** Imperative surface for quote-replies (paragraph Reply buttons). */
+/** Imperative surface for quote-replies and edit-and-resend prefills. */
 export interface ComposerHandle {
   /** Append a quote block to the draft, leaving the cursor area below it. */
   appendQuote: (quote: string) => void;
+  /** Replace the draft (regenerate / edit-and-resend prefill). */
+  setDraft: (text: string) => void;
 }
 
 interface ComposerProps {
@@ -79,6 +81,7 @@ export function Composer({
     () => ({
       appendQuote: (quote: string) =>
         setValue((v) => appendQuoteToDraft(v, quote)),
+      setDraft: (text: string) => setValue(text),
     }),
     [],
   );

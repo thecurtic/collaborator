@@ -322,6 +322,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
         user_id: input.userId,
         mode: input.mode,
         recall: input.recall,
+        state: input.state,
       }),
       signal,
     });

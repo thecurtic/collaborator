@@ -95,12 +95,17 @@ export function ChatView({
     unfollowedLinks,
     send,
     branch,
+    editResend,
     stopGeneration,
     cycleFork,
     remove,
   } = convo;
   // Pending branch point awaiting a with/without-context choice.
   const [branchChoice, setBranchChoice] = useState<BranchPoint | null>(null);
+  // Regenerate: the leaf reply to replace — the next send deletes the old
+  // exchange and resends the (possibly edited) draft. Nothing is deleted
+  // until the user actually sends, so cancelling is free.
+  const [editTarget, setEditTarget] = useState<number | null>(null);
   // Transient feedback (e.g. "Copied to clipboard" when share falls back).
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -156,8 +161,20 @@ export function ChatView({
     cycleFork(parentId, dir);
   };
 
+  // Regenerate: prefill the composer with the user message for editing.
+  const startEdit = (assistantId: number, userText: string) => {
+    onBranchTargetChange(null); // regenerate and branch are mutually exclusive
+    setEditTarget(assistantId);
+    composerRef.current?.setDraft(userText);
+  };
+
   // Resolves false on failure so the composer can restore the lost draft.
   const handleSend = (message: string): Promise<boolean> => {
+    if (editTarget != null) {
+      const target = editTarget;
+      setEditTarget(null);
+      return editResend(target, message);
+    }
     if (branchTarget) {
       const result = branch(
         branchTarget.turnId,
@@ -183,6 +200,7 @@ export function ChatView({
   const chooseContext = (withContext: boolean) => {
     if (branchChoice) onBranchTargetChange({ ...branchChoice, withContext });
     setBranchChoice(null);
+    setEditTarget(null); // branch and regenerate are mutually exclusive
   };
 
   const handleDelete = (turnId: number) => {
@@ -294,6 +312,15 @@ export function ChatView({
             </div>
           ) : (
             displayPath.map((entry, i) => {
+              // Regenerate is leaf-exchange only: the reply has no children
+              // and its user turn has no other branches — otherwise deleting
+              // the pair would destroy downstream turns.
+              const prev = i > 0 ? displayPath[i - 1] : undefined;
+              const canRegenerate =
+                entry.node.role === 'assistant' &&
+                entry.node.children.length === 0 &&
+                prev?.node.role === 'user' &&
+                prev.node.children.length === 1;
               // The switcher (incl. the empty "continue here" slot) is computed
               // per node in useConversation; highlight its source paragraph.
               const fork = entry.fork
@@ -318,6 +345,11 @@ export function ChatView({
                     onDelete={handleDelete}
                     onQuote={handleQuote}
                     onShare={(scope) => void handleShare(entry.node, scope)}
+                    onRegenerate={
+                      canRegenerate && prev
+                        ? () => startEdit(entry.node.id, prev.node.content)
+                        : undefined
+                    }
                     fork={fork}
                     inContext={i >= inCtxStart}
                   />
@@ -453,11 +485,16 @@ export function ChatView({
           onStop={stopGeneration}
           onStartCall={onStartCall}
           branchLabel={
-            branchTarget
-              ? `${branchTarget.label}${branchTarget.withContext ? '' : ' · no context'}`
-              : null
+            editTarget != null
+              ? 'Regenerating — edit your message (or send as-is); replaces the current reply'
+              : branchTarget
+                ? `${branchTarget.label}${branchTarget.withContext ? '' : ' · no context'}`
+                : null
           }
-          onCancelBranch={() => onBranchTargetChange(null)}
+          onCancelBranch={() => {
+            if (editTarget != null) setEditTarget(null);
+            else onBranchTargetChange(null);
+          }}
         />
       </div>
     </div>

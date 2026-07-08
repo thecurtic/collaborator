@@ -231,5 +231,7 @@ export interface SendMessageInput {
   userId?: string;
   /** "voice" for call mode so the backend can adjust the system prompt. */
   mode?: 'voice' | 'text';
+  /** New-root only: conversation stage (used when a root is re-created). */
+  state?: ConversationState;
 }
 

@@ -282,6 +282,93 @@ export function useConversation(reloadSignal: number) {
     [runStream, rootOfTurn, promote],
   );
 
+  /**
+   * Regenerate / edit-and-resend a leaf exchange: delete the assistant reply
+   * and its user turn, then resend `message` (possibly edited) from the same
+   * spot. Topology-aware so the exchange keeps its character:
+   *   - branch roots are resent via /api/branches (same paragraph, and
+   *     contextTurns:0 for without-context branches),
+   *   - re-created conversation roots inherit the old state (no tree → seed
+   *     demotion) and get their name restored.
+   * DESTRUCTIVE by design (the old reply leaves the tree and recall) — the
+   * UI must only offer it on a leaf exchange.
+   */
+  const editResend = useCallback(
+    async (assistantId: number, message: string): Promise<boolean> => {
+      const trimmed = message.trim();
+      if (!trimmed) return true;
+      const { byId, parentOf } = indexRef.current;
+      const a = byId.get(assistantId);
+      const uId = parentOf.get(assistantId);
+      const u = uId != null && uId !== VIRTUAL_ROOT ? byId.get(uId) : undefined;
+      if (!a || !u) {
+        setError('That exchange no longer exists — reload and try again.');
+        return false;
+      }
+      // Leaf-exchange guard (belt and braces with the UI-side check).
+      if (a.children.length > 0 || u.children.length !== 1) {
+        setError('Only the last exchange can be regenerated.');
+        return false;
+      }
+      const parentId = parentOf.get(u.id); // VIRTUAL_ROOT for conversation roots
+      const isRoot = parentId === VIRTUAL_ROOT;
+      const keepName = u.name; // conversation name (root) or branch name
+      const keepState = isRoot ? u.state : null;
+
+      setError(null);
+      try {
+        await api.deleteTurn(a.id, true); // the reply (leaf — no descendants)
+        await api.deleteTurn(u.id); // the user turn, now childless
+      } catch (err) {
+        setError(errMessage(err));
+        return false;
+      }
+
+      const ok = await runStream(trimmed, (handlers, signal) =>
+        u.branched && parentId != null && parentId !== VIRTUAL_ROOT
+          ? api.branchMessage(
+              {
+                parentTurnId: parentId,
+                message: trimmed,
+                paragraphIndex: u.paragraphIndex ?? undefined,
+                recall: getRecallEnabled(),
+                ...(u.contextBoundary ? { contextTurns: 0 } : {}),
+              },
+              handlers,
+              signal,
+            )
+          : api.sendMessageStream(
+              {
+                message: trimmed,
+                parentTurnId: isRoot ? undefined : (parentId ?? undefined),
+                recall: getRecallEnabled(),
+                ...(keepState ? { state: keepState } : {}),
+              },
+              handlers,
+              signal,
+            ),
+      );
+
+      // Restore the name onto the re-created root/branch-root (the new user
+      // turn = parent of the streamed assistant turn in the fresh index).
+      if (ok && keepName && leafRef.current != null) {
+        const fresh = indexRef.current;
+        const newUserId = fresh.parentOf.get(leafRef.current);
+        if (newUserId != null && newUserId !== VIRTUAL_ROOT) {
+          try {
+            // Direct call (not renameTurn) — must not trigger seed promotion.
+            await api.renameTurn(newUserId, keepName);
+            await load();
+          } catch {
+            /* name restore is best-effort */
+          }
+        }
+      }
+      return ok;
+    },
+    [runStream, load],
+  );
+
   const remove = useCallback(
     async (turnId: number, subtree = false) => {
       setError(null);
@@ -376,6 +463,7 @@ export function useConversation(reloadSignal: number) {
     unfollowedLinks,
     send,
     branch,
+    editResend,
     stopGeneration,
     cycleFork,
     selectPathTo,
