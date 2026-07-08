@@ -92,7 +92,7 @@ tools:
   enabled: false
   status_notes: true          # stream a short "what it's doing" note per tool step
   show_step_results: false    # also stream each tool's raw results
-  max_rounds: 5               # max tool rounds before forcing an answer
+  max_rounds: 12              # max tool rounds before forcing an answer (binds crawl depth too)
   temperature: 0.3            # tool-loop temperature (lower = more reliable tool calls)
   guidance_file: "tools-guidance.md"  # editable "when to use tools" instruction (system prompt)
   spec_file: "tools-spec.md"          # editable per-tool descriptions the model sees (the tool schemas)
@@ -117,7 +117,7 @@ tools:
     timeout: 20
     allow_private: false      # true to allow tailnet/LAN URLs (off = public web only)
     max_links: 40             # hyperlinks returned per page (lets the model follow links)
-    max_per_turn: 3           # hard fetch budget per message (bounds link-following)
+    max_per_turn: 10          # hard fetch budget per message (bounds link-following)
     same_domain_only: false   # true: follow-up fetches must stay on the first page's host
     # PRIVACY (known limitation): fetch_url goes DIRECT from this machine — every
     # fetched page sees this box's IP. web_search is fine (SearXNG routes outbound

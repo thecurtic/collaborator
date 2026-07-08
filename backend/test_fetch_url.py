@@ -110,6 +110,7 @@ def test_fetch_html_truncation_and_types():
 
 def test_fetch_budget_and_same_domain():
     cfg = config.get_config._config
+    orig_budget = cfg["tools"]["fetch_url"]["max_per_turn"]
     cfg["tools"]["fetch_url"]["max_per_turn"] = 2
 
     def ok_resp(url):
@@ -143,7 +144,7 @@ def test_fetch_budget_and_same_domain():
     finally:
         inference.requests.get = orig
         cfg["tools"]["fetch_url"]["same_domain_only"] = False
-        cfg["tools"]["fetch_url"]["max_per_turn"] = 3
+        cfg["tools"]["fetch_url"]["max_per_turn"] = orig_budget
     print("✓ per-turn fetch budget enforced; same_domain_only guards cross-domain hops")
 
 
@@ -205,6 +206,7 @@ def test_unfollowed_links_sse_event():
     from starlette.testclient import TestClient
     cfg = config.get_config._config
     cfg["tools"]["enabled"] = True
+    orig_budget = cfg["tools"]["fetch_url"]["max_per_turn"]
     cfg["tools"]["fetch_url"]["max_per_turn"] = 1
 
     def ok_resp(url):
@@ -231,7 +233,7 @@ def test_unfollowed_links_sse_event():
         inference._iter_stream_events = orig_stream
         inference.requests.get = orig_get
         cfg["tools"]["enabled"] = False
-        cfg["tools"]["fetch_url"]["max_per_turn"] = 3
+        cfg["tools"]["fetch_url"]["max_per_turn"] = orig_budget
 
     events = [json.loads(l[6:]) for l in r.text.splitlines() if l.startswith("data: ")]
     ev = next(e for e in events if e["type"] == "unfollowed_links")

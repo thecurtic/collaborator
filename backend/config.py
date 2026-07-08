@@ -115,7 +115,7 @@ def load_config() -> dict:
             "enabled": False,          # master switch; false = plain chat, no tools
             "status_notes": True,      # emit a short "what it's doing" per tool step
             "show_step_results": False,  # also emit each tool's raw results
-            "max_rounds": 5,
+            "max_rounds": 12,
             "temperature": 0.3,        # lower temp -> more reliable tool calls
             "guidance_file": "tools-guidance.md",  # editable "when to use tools" instruction
             "spec_file": "tools-spec.md",          # editable per-tool descriptions the model sees
@@ -142,7 +142,7 @@ def load_config() -> dict:
                 "timeout": 20,
                 "allow_private": False,  # True to let it fetch tailnet/LAN URLs
                 "max_links": 40,       # hyperlinks returned per page (enables follow-up fetches)
-                "max_per_turn": 3,     # hard fetch budget per message
+                "max_per_turn": 10,    # hard fetch budget per message
                 "same_domain_only": False,  # True: follow-up fetches stay on the first host
                 # PRIVACY: fetches go DIRECT from this box (web_search rides SearXNG's
                 # VPN; fetch_url does not). Set a proxy (http:// or socks5h://, e.g.
