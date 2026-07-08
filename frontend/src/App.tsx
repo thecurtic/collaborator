@@ -4,6 +4,7 @@ import {
   Loader2,
   NotebookPen,
   NotebookText,
+  Pencil,
   Plus,
   Sprout,
   TreePine,
@@ -20,9 +21,12 @@ import {
 import { api } from '@/api/collaborator';
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
 import { PasskeyScreen } from '@/auth/PasskeyScreen';
+import { ActionSheet, type SheetAction } from '@/components/ActionSheet';
 import { AppMenu } from '@/components/AppMenu';
 import { Button } from '@/components/ui/button';
+import { RenameSheet } from '@/components/RenameSheet';
 import { ReferencesView } from '@/features/reference/ReferencesView';
+import { useLongPress } from '@/lib/useLongPress';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
 import { RootList } from '@/features/chat/RootList';
@@ -107,6 +111,9 @@ function AppShell() {
   const [referencesOpen, setReferencesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [callOpen, setCallOpen] = useState(false);
+  // Tap-and-hold on the chat title → conversation actions.
+  const [titleMenuOpen, setTitleMenuOpen] = useState(false);
+  const [titleRenameOpen, setTitleRenameOpen] = useState(false);
   // A pending branch is shared so a call can fork from it too (not just typing).
   const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
   // One backgrounded notes-synthesis run at a time (banner above the screen).
@@ -226,6 +233,34 @@ function AppShell() {
       : 'New chat'
     : null;
 
+  // Hold the chat title for conversation actions (rename/promote/synthesize).
+  const titlePress = useLongPress(() => {
+    if (chatOpen && activeRoot) setTitleMenuOpen(true);
+  });
+  const titleActions: SheetAction[] = activeRoot
+    ? [
+        { label: 'Rename', icon: Pencil, onSelect: () => setTitleRenameOpen(true) },
+        ...(activeRoot.state === 'seed'
+          ? [
+              {
+                label: 'Promote to conversation',
+                icon: TreePine,
+                onSelect: () => void convo.promote(activeRoot.id),
+              },
+            ]
+          : []),
+        {
+          label: 'Synthesize notes',
+          icon: NotebookPen,
+          onSelect: () =>
+            startSynthesis(
+              activeRoot.id,
+              activeRoot.name ?? activeRoot.preview ?? 'this chat',
+            ),
+        },
+      ]
+    : [];
+
   return (
     <div className="flex h-full flex-col">
       <header className="pt-safe px-safe border-b border-border">
@@ -259,38 +294,15 @@ function AppShell() {
               {activeRoot?.state === 'seed' && (
                 <Sprout className="h-4 w-4 shrink-0 text-primary/70" />
               )}
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+              {/* Hold for rename / promote / synthesize. */}
+              <button
+                type="button"
+                {...titlePress}
+                title="Hold for options"
+                className="min-w-0 flex-1 select-none truncate text-left text-sm font-medium [-webkit-touch-callout:none]"
+              >
                 {chatTitle}
-              </span>
-              {activeRoot?.state === 'seed' && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void convo.promote(activeRoot.id)}
-                  title="Promote to a full conversation"
-                  className="h-8 shrink-0 gap-1.5 px-2.5 text-primary"
-                >
-                  <TreePine className="h-4 w-4" />
-                  Promote
-                </Button>
-              )}
-              {activeRoot && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Synthesize notes from this conversation"
-                  title="Synthesize notes from this conversation"
-                  onClick={() =>
-                    startSynthesis(
-                      activeRoot.id,
-                      activeRoot.name ?? activeRoot.preview ?? 'this chat',
-                    )
-                  }
-                  className="h-8 w-8 shrink-0"
-                >
-                  <NotebookPen className="h-4 w-4" />
-                </Button>
-              )}
+              </button>
             </>
           ) : (
             <div className="flex min-w-0 flex-1 items-center px-2">
@@ -390,6 +402,22 @@ function AppShell() {
       />
       {/* After CallScreen so it stacks on top when opened mid-call. */}
       <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+      {/* Chat-title hold menu (+ its rename sheet). */}
+      <ActionSheet
+        open={titleMenuOpen}
+        title={chatTitle ?? undefined}
+        actions={titleActions}
+        onClose={() => setTitleMenuOpen(false)}
+      />
+      <RenameSheet
+        open={titleRenameOpen}
+        initial={activeRoot?.name ?? ''}
+        onSave={(name) => {
+          if (activeRoot) void convo.renameTurn(activeRoot.id, name);
+        }}
+        onClose={() => setTitleRenameOpen(false)}
+      />
 
       <main className="min-h-0 flex-1">
         {gate === 'checking' ? (
