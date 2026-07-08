@@ -635,6 +635,21 @@ GET /api/notes/search?q=…&mode=semantic|keyword&limit=10
 `semantic` uses the local embedder (same as recall); `keyword` is lexical over
 title/body/tags.
 
+**Edit a note** (body, tags, and/or rename):
+```
+PATCH /api/notes/{title}
+{ "title"?: "New title", "body"?: "new body…", "tags"?: ["decision"] }
+-> 200 { "note": { ...updated, with backlinks... },
+         "renamed": true, "links_rewritten": ["Alpha"] }
+```
+- **Rename rewrites inbound `[[wikilinks]]`** across the vault (including
+  `[[Old|alias]]` and `[[Old#heading]]` forms) — `links_rewritten` lists the notes
+  that were updated. Obsidian-parity per NOTES-FORMAT.md.
+- Unknown frontmatter keys and provenance (`created`, `source_turns`) are preserved;
+  tags are normalized to lowercase-hyphenated; the note (and rewritten linkers) are
+  reindexed immediately.
+- `404` unknown note; `422` invalid new title; `409` title collision.
+
 ---
 
 ### 13. Prompt Visibility (read-only)
@@ -661,6 +676,24 @@ Entry shape:
 Names: `system`, `paragraph-style`, `voice-style`, `tools-guidance`, `tools-spec`,
 `synthesis-memory`, `synthesis-web`, `synthesis-notes` (synthesis kinds follow the
 config, so new kinds appear automatically).
+
+---
+
+### 14. Model Selection
+
+```
+GET /api/models   -> { "current": "qwen/qwen3-coder-next", "available": ["…", "…"] }
+PUT /api/model    { "model_id": "qwen/qwen3-30b-a3b", "force"?: false }
+                  -> { "model_id": "…", "persisted": true }
+```
+
+- `available` is fetched live from the inference endpoint (LM Studio `/v1/models`).
+- The switch **applies immediately** (no restart) and **persists** to the gitignored
+  `.config.yaml` (machine overrides — never the tracked `config.yaml`), so it
+  survives restarts and never collides with git deploys.
+- `422` if `model_id` isn't in `available` (the error includes the list); pass
+  `force: true` to set it anyway (e.g. the endpoint was momentarily unreachable).
+- ⚠️ The model is **per-install**, not per-user: switching changes it for everyone.
 
 > Setup: embeddings run locally on the backend by default (`fastembed`, downloads a
 > small model once). Enable via `recall.enabled` or the per-request `recall` flag.

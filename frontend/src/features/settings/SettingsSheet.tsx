@@ -1,4 +1,7 @@
-import { X } from 'lucide-react';
+import { Loader2, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { api } from '@/api/collaborator';
+import { ApiRequestError } from '@/api/http';
 import { Button } from '@/components/ui/button';
 import { useModalA11y } from '@/lib/useModalA11y';
 import { KEYWORD_OPTIONS } from '@/features/voice/keywordSpotter';
@@ -25,6 +28,112 @@ import {
 interface SettingsSheetProps {
   open: boolean;
   onClose: () => void;
+}
+
+/**
+ * Chat-model picker (server-backed, unlike the localStorage prefs below).
+ * Mounted only while the sheet is open, so the fetch happens per open.
+ */
+function ModelPicker() {
+  const [models, setModels] = useState<{
+    current: string;
+    available: string[];
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // A 422 target the user may push through with force (advanced action).
+  const [forceable, setForceable] = useState<string | null>(null);
+
+  const load = async () => {
+    setError(null);
+    try {
+      setModels(await api.getModels());
+    } catch (err) {
+      // LM Studio may be down — the list endpoint 500s in that case.
+      setError(err instanceof Error ? err.message : 'Could not load models');
+      setModels({ current: '', available: [] });
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const switchTo = async (id: string, force = false) => {
+    if (!id || !models || id === models.current) return;
+    setBusy(true);
+    setError(null);
+    setForceable(null);
+    try {
+      await api.setModel(id, force);
+      setModels({ ...models, current: id });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not switch model');
+      if (err instanceof ApiRequestError && err.status === 422) setForceable(id);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Keep the current model selectable even if LM Studio doesn't list it.
+  const options =
+    models && models.current && !models.available.includes(models.current)
+      ? [models.current, ...models.available]
+      : (models?.available ?? []);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm font-medium">Model</p>
+      {models === null ? (
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading models…
+        </p>
+      ) : (
+        <>
+          <select
+            value={models.current}
+            disabled={busy || options.length === 0}
+            onChange={(e) => void switchTo(e.target.value)}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {options.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          {error && (
+            <p className="text-xs text-destructive">
+              {error}
+              {forceable && (
+                <button
+                  type="button"
+                  onClick={() => void switchTo(forceable, true)}
+                  className="ml-2 underline underline-offset-2"
+                >
+                  Switch anyway
+                </button>
+              )}
+              {!forceable && (
+                <button
+                  type="button"
+                  onClick={() => void load()}
+                  className="ml-2 underline underline-offset-2"
+                >
+                  Retry
+                </button>
+              )}
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Applies to the very next message and persists. Note: this is
+            per-install — it changes the model for every user, not just you.
+          </p>
+        </>
+      )}
+    </div>
+  );
 }
 
 export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
@@ -69,8 +178,11 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
           </Button>
         </div>
 
+        {/* Chat model (server-backed; applies immediately). */}
+        <ModelPicker />
+
         {/* Voice commands — on-device keyword spotting (fixed vocabulary). */}
-        <div className="space-y-3">
+        <div className="mt-5 space-y-3 border-t border-border pt-4">
           <p className="text-sm font-medium">Voice commands</p>
           <p className="text-xs text-muted-foreground">
             Spoken on-device. Limited to recognizable command words. Note: the

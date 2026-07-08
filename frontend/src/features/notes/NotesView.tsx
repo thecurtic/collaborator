@@ -1,10 +1,13 @@
 import {
+  Check,
   ChevronLeft,
   Inbox,
   Loader2,
   MessageSquare,
+  Pencil,
   RefreshCw,
   Search,
+  X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
@@ -39,23 +42,45 @@ function NoteScreen({
   onBack,
   onOpenNote,
   onOpenTurn,
+  onRetitle,
 }: {
   title: string;
   onBack: () => void;
   onOpenNote: (title: string) => void;
   onOpenTurn: (turnId: number) => void;
+  /** A rename went through — repoint this screen at the new title. */
+  onRetitle: (newTitle: string) => void;
 }) {
   const [note, setNote] = useState<Note | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Edit mode (approved notes are editable since backend aa86110).
+  const [draft, setDraft] = useState<{
+    title: string;
+    body: string;
+    tagsText: string;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  // Which title the current `note` belongs to — after a rename we repoint the
+  // screen without refetching (the PATCH response is fresher, and a refetch
+  // would wipe the links-rewritten notice).
+  const loadedTitle = useRef<string | null>(null);
 
   useEffect(() => {
+    if (loadedTitle.current === title) return;
     let cancelled = false;
     setNote(null);
     setError(null);
+    setDraft(null);
+    setNotice(null);
     api
       .getNote(title)
       .then((n) => {
-        if (!cancelled) setNote(n);
+        if (!cancelled) {
+          loadedTitle.current = title;
+          setNote(n);
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(errMessage(err));
@@ -64,6 +89,44 @@ function NoteScreen({
       cancelled = true;
     };
   }, [title]);
+
+  const save = async () => {
+    if (!note || !draft) return;
+    // Send only what changed (all PATCH fields are optional).
+    const tags = draft.tagsText
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const patch: { title?: string; body?: string; tags?: string[] } = {};
+    if (draft.title.trim() !== note.title) patch.title = draft.title.trim();
+    if (draft.body !== note.body) patch.body = draft.body;
+    if (tags.join(',') !== note.tags.join(',')) patch.tags = tags;
+    if (Object.keys(patch).length === 0) {
+      setDraft(null);
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await api.updateNote(note.title, patch);
+      loadedTitle.current = res.note.title;
+      setNote(res.note);
+      setDraft(null);
+      if (res.linksRewritten.length > 0) {
+        setNotice(
+          `Also updated ${res.linksRewritten.length} linking ${
+            res.linksRewritten.length === 1 ? 'note' : 'notes'
+          }: ${res.linksRewritten.join(', ')}`,
+        );
+      }
+      if (res.renamed) onRetitle(res.note.title);
+    } catch (err) {
+      // 409 collision / 422 invalid title — keep editing so it can be fixed.
+      setSaveError(errMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -78,6 +141,54 @@ function NoteScreen({
           <ChevronLeft className="h-5 w-5" />
         </Button>
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{title}</h2>
+        {note && !draft && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Edit note"
+            title="Edit note"
+            onClick={() =>
+              setDraft({
+                title: note.title,
+                body: note.body,
+                tagsText: note.tags.join(', '),
+              })
+            }
+            className="h-8 w-8 text-muted-foreground"
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+        )}
+        {draft && (
+          <>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Cancel edit"
+              onClick={() => {
+                setDraft(null);
+                setSaveError(null);
+              }}
+              disabled={saving}
+              className="h-8 w-8 text-muted-foreground"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void save()}
+              disabled={saving || !draft.title.trim()}
+              className="h-8 gap-1.5 px-2.5"
+            >
+              {saving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              Save
+            </Button>
+          </>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto max-w-3xl px-4 py-4">
@@ -91,8 +202,45 @@ function NoteScreen({
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading note…
             </div>
+          ) : draft ? (
+            <div className="space-y-2">
+              <input
+                value={draft.title}
+                onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                aria-label="Note title"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-base font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
+              />
+              <input
+                value={draft.tagsText}
+                onChange={(e) =>
+                  setDraft({ ...draft, tagsText: e.target.value })
+                }
+                placeholder="tags, comma, separated"
+                aria-label="Tags"
+                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <textarea
+                value={draft.body}
+                onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+                rows={14}
+                aria-label="Note body"
+                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              {saveError && (
+                <p className="text-xs text-destructive">{saveError}</p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Renaming is safe — notes that link here get their links
+                rewritten automatically.
+              </p>
+            </div>
           ) : (
             <>
+              {notice && (
+                <p className="mb-3 rounded-md bg-primary/10 px-3 py-2 text-xs text-primary">
+                  {notice}
+                </p>
+              )}
               {note.tags.length > 0 && (
                 <div className="mb-3 flex flex-wrap gap-1.5">
                   {note.tags.map((t) => (
@@ -245,6 +393,7 @@ export function NotesView({
         onBack={() => setScreen({ kind: 'list' })}
         onOpenNote={openNote}
         onOpenTurn={onOpenTurn}
+        onRetitle={(t) => setScreen({ kind: 'note', title: t })}
       />
     );
   }

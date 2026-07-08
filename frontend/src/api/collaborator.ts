@@ -28,11 +28,14 @@ import type {
   ApiApproveResponse,
   ApiDraftsResponse,
   ApiHealth,
+  ApiModelsResponse,
   ApiNoteResponse,
   ApiNoteSearchResponse,
+  ApiNoteUpdateResponse,
   ApiNotesResponse,
   ApiPromptsResponse,
   ApiRecall,
+  ApiSetModelResponse,
   ApiReindexResponse,
   ApiSendMessageResponse,
   ApiSynthesisResponse,
@@ -274,10 +277,30 @@ export interface CollaboratorApi {
   reindexNotes(): Promise<ReindexResult>;
 
   /**
+   * Edit an approved vault note (all fields optional — send what changed).
+   * Rename is safe: the backend rewrites inbound wikilinks vault-wide and
+   * reports the touched titles. Throws 404/422/409 (title problems).
+   */
+  updateNote(
+    title: string,
+    patch: { title?: string; body?: string; tags?: string[] },
+  ): Promise<{ note: Note; renamed: boolean; linksRewritten: string[] }>;
+
+  /**
    * Prompt building blocks as the runtime resolves them (References viewer).
    * READ-ONLY — editability is shelved backend-side; don't add edit UI.
    */
   listPrompts(): Promise<PromptInfo[]>;
+
+  /** Current + available chat models (live from LM Studio; GET may 500). */
+  getModels(): Promise<{ current: string; available: string[] }>;
+  /**
+   * Switch the chat model — applies to the very next message and persists.
+   * PER-INSTALL: changes the model for every user, not just this passkey.
+   * 422 = not in the available list; retry with force only as an advanced
+   * user action.
+   */
+  setModel(modelId: string, force?: boolean): Promise<void>;
 
   // --- Roadmap (INTENTS.md "API Extensions Needed", not yet served) ---
   // editRecall(input): Promise<RecallSynthesis>;
@@ -471,6 +494,33 @@ class HttpCollaboratorApi implements CollaboratorApi {
   async listPrompts(): Promise<PromptInfo[]> {
     const res = await request<ApiPromptsResponse>('/api/prompts');
     return (res.prompts ?? []).map(toPromptInfo);
+  }
+
+  async updateNote(
+    title: string,
+    patch: { title?: string; body?: string; tags?: string[] },
+  ): Promise<{ note: Note; renamed: boolean; linksRewritten: string[] }> {
+    const res = await request<ApiNoteUpdateResponse>(
+      `/api/notes/${encodeURIComponent(title)}`,
+      { method: 'PATCH', body: JSON.stringify(patch) },
+    );
+    return {
+      note: toNote(res.note),
+      renamed: res.renamed === true,
+      linksRewritten: res.links_rewritten ?? [],
+    };
+  }
+
+  async getModels(): Promise<{ current: string; available: string[] }> {
+    const res = await request<ApiModelsResponse>('/api/models');
+    return { current: res.current, available: res.available ?? [] };
+  }
+
+  async setModel(modelId: string, force = false): Promise<void> {
+    await request<ApiSetModelResponse>('/api/model', {
+      method: 'PUT',
+      body: JSON.stringify({ model_id: modelId, ...(force ? { force } : {}) }),
+    });
   }
 }
 

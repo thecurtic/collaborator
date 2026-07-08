@@ -221,6 +221,26 @@ export interface ApiPromptsResponse {
   count: number;
 }
 
+/** GET /api/models — live from LM Studio (may 500 if the box is down). */
+export interface ApiModelsResponse {
+  current: string;
+  available: string[];
+}
+
+/** PUT /api/model — applies to the next message and persists. */
+export interface ApiSetModelResponse {
+  model_id: string;
+  persisted: boolean;
+}
+
+/** PATCH /api/notes/{title} — edit an approved vault note. */
+export interface ApiNoteUpdateResponse {
+  note: ApiNoteResponse['note'];
+  renamed?: boolean;
+  /** Titles of notes whose inbound [[wikilinks]] were rewritten on rename. */
+  links_rewritten?: string[];
+}
+
 /** Standard error envelope ({ "error": "..." }). */
 export interface ApiError {
   error: string;
