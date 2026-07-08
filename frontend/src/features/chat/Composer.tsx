@@ -1,4 +1,13 @@
-import { GitBranch, Loader2, Mic, SendHorizontal, Square, X } from 'lucide-react';
+import {
+  GitBranch,
+  Loader2,
+  Mic,
+  Phone,
+  Plus,
+  SendHorizontal,
+  Square,
+  X,
+} from 'lucide-react';
 import {
   type FormEvent,
   type KeyboardEvent,
@@ -25,6 +34,8 @@ interface ComposerProps {
   onSend: (message: string) => Promise<boolean>;
   /** Abort the in-flight response stream (shown as a stop button). */
   onStop?: () => void;
+  /** Start a voice call (the call button lives here, not the header). */
+  onStartCall?: () => void;
   /** When set, the next send branches from this point (shown as a chip). */
   branchLabel?: string | null;
   onCancelBranch?: () => void;
@@ -37,6 +48,7 @@ export function Composer({
   disabled,
   onSend,
   onStop,
+  onStartCall,
   branchLabel = null,
   onCancelBranch,
   ref,
@@ -114,6 +126,7 @@ export function Composer({
   }
 
   const error = dictationError ?? voiceNotice;
+  const hasDraft = value.trim().length > 0;
 
   return (
     <div className="px-safe pb-safe border-t border-border bg-background">
@@ -147,63 +160,100 @@ export function Composer({
           </span>
         </p>
       )}
-      <form onSubmit={handleSubmit} className="flex items-end gap-2 p-3 sm:p-4">
-        {supported && (
-          <Button
-            type="button"
-            variant={recording ? 'destructive' : 'ghost'}
-            size="icon"
-            onClick={() => void handleMic()}
-            disabled={disabled || busyMic}
-            aria-label={recording ? 'Stop dictation' : 'Dictate'}
-            title={recording ? 'Stop dictation' : 'Dictate'}
-            className="h-11 w-11 shrink-0 rounded-xl sm:h-10 sm:w-10 sm:rounded-md"
-          >
-            {busyMic ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
-            ) : recording ? (
-              <Square className="h-4 w-4" />
-            ) : (
-              <Mic className="h-5 w-5" />
-            )}
-          </Button>
-        )}
-
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          rows={1}
-          placeholder={
-            dictation === 'finishing' ? 'Transcribing…' : 'Message Collaborator…'
-          }
-          // text-base (16px) on mobile prevents iOS from auto-zooming on focus.
-          className="max-h-40 min-h-[2.75rem] flex-1 resize-none rounded-xl border border-input bg-card px-3.5 py-3 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:rounded-md sm:py-2.5 sm:text-sm"
-        />
-        {disabled && onStop ? (
-          <Button
-            type="button"
-            size="icon"
-            variant="secondary"
-            onClick={onStop}
-            aria-label="Stop generating"
-            title="Stop generating"
-            className="h-11 w-11 shrink-0 rounded-xl sm:h-10 sm:w-10 sm:rounded-md"
-          >
-            <Square className="h-4 w-4" />
-          </Button>
-        ) : (
-          <Button
-            type="submit"
-            size="icon"
-            disabled={disabled || !value.trim()}
-            aria-label="Send message"
-            className="h-11 w-11 shrink-0 rounded-xl sm:h-10 sm:w-10 sm:rounded-md"
-          >
-            <SendHorizontal className="h-5 w-5 sm:h-4 sm:w-4" />
-          </Button>
-        )}
+      {/* One visual box, two layers: text on top, buttons below. Extra bottom
+          padding lifts the whole thing off the phone's bottom edge. */}
+      <form onSubmit={handleSubmit} className="px-3 pb-5 pt-3 sm:px-4">
+        <div className="rounded-2xl border border-input bg-card px-3 pb-2 pt-2.5 focus-within:ring-2 focus-within:ring-ring">
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={1}
+            placeholder={
+              dictation === 'finishing'
+                ? 'Transcribing…'
+                : 'Message Collaborator…'
+            }
+            // text-base (16px) on mobile prevents iOS from auto-zooming on focus.
+            className="max-h-40 min-h-[2.25rem] w-full resize-none border-0 bg-transparent px-1 py-1.5 text-base text-foreground outline-none placeholder:text-muted-foreground sm:text-sm"
+          />
+          <div className="mt-1 flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled
+              aria-label="Add attachment (coming soon)"
+              title="Attachments — coming soon"
+              className="h-9 w-9 rounded-full text-muted-foreground"
+            >
+              <Plus className="h-5 w-5" />
+            </Button>
+            <span className="ml-auto flex items-center gap-1">
+              {supported && (
+                <Button
+                  type="button"
+                  variant={recording ? 'destructive' : 'ghost'}
+                  size="icon"
+                  onClick={() => void handleMic()}
+                  disabled={disabled || busyMic}
+                  aria-label={recording ? 'Stop dictation' : 'Dictate'}
+                  title={recording ? 'Stop dictation' : 'Dictate'}
+                  className="h-9 w-9 rounded-full"
+                >
+                  {busyMic ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : recording ? (
+                    <Square className="h-4 w-4" />
+                  ) : (
+                    <Mic className="h-5 w-5" />
+                  )}
+                </Button>
+              )}
+              {/* Rightmost: call normally; morphs into send once there's a
+                  draft; stop while a response is streaming. */}
+              {disabled && onStop ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="secondary"
+                  onClick={onStop}
+                  aria-label="Stop generating"
+                  title="Stop generating"
+                  className="h-9 w-9 rounded-full"
+                >
+                  <Square className="h-4 w-4" />
+                </Button>
+              ) : hasDraft ? (
+                <Button
+                  type="submit"
+                  size="icon"
+                  disabled={disabled}
+                  aria-label="Send message"
+                  title="Send message"
+                  className="h-9 w-9 rounded-full"
+                >
+                  <SendHorizontal className="h-4 w-4" />
+                </Button>
+              ) : (
+                onStartCall && (
+                  <Button
+                    type="button"
+                    size="icon"
+                    onClick={onStartCall}
+                    disabled={disabled}
+                    aria-label="Start voice call"
+                    title="Start voice call"
+                    className="h-9 w-9 rounded-full"
+                  >
+                    <Phone className="h-4 w-4" />
+                  </Button>
+                )
+              )}
+            </span>
+          </div>
+        </div>
       </form>
     </div>
   );

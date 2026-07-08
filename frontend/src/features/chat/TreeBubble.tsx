@@ -1,19 +1,26 @@
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
+  Copy,
   GitBranch,
   Loader2,
   Reply,
+  Share2,
   Square,
   Trash2,
   Volume2,
 } from 'lucide-react';
+import { useState } from 'react';
 import { Markdown } from '@/components/Markdown';
 import { Button } from '@/components/ui/button';
 import { useSpeech } from '@/features/voice/SpeechContext';
 import { splitParagraphs } from '@/features/voice/speechUtils';
+import { useModalA11y } from '@/lib/useModalA11y';
 import { cn } from '@/lib/utils';
 import type { TreeNode } from '@/domain/models';
+
+export type ShareScope = 'turn' | 'context';
 
 /** Describes the fork at this node: which child paragraph is active + switcher. */
 export interface Fork {
@@ -37,6 +44,8 @@ interface TreeBubbleProps {
   onDelete: (turnId: number) => void;
   /** Quote this paragraph into the composer (stackable multi-quote replies). */
   onQuote?: (text: string) => void;
+  /** Share this turn or the current context window (assistant turns). */
+  onShare?: (scope: ShareScope) => void;
   /** When set, this node is a fork — highlight the source paragraph + switcher. */
   fork?: Fork;
   /** False → this turn is outside the next message's context window (lighter). */
@@ -108,11 +117,93 @@ function Switcher({
   );
 }
 
+/** Copy-to-clipboard icon button with a brief ✓ confirmation. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label="Copy this turn"
+      title="Copy this turn"
+      onClick={() => {
+        void navigator.clipboard?.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+      className="-my-1 h-9 w-9 opacity-70 hover:opacity-100"
+    >
+      {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
+    </Button>
+  );
+}
+
+/** Share button with a tiny scope popover: this turn / the context window. */
+function ShareButton({ onShare }: { onShare: (scope: ShareScope) => void }) {
+  const [open, setOpen] = useState(false);
+  const panelRef = useModalA11y<HTMLDivElement>(open, () => setOpen(false));
+  const pick = (scope: ShareScope) => {
+    setOpen(false);
+    onShare(scope);
+  };
+  return (
+    <span className="relative">
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="Share"
+        title="Share"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="-my-1 h-9 w-9 opacity-70 hover:opacity-100"
+      >
+        <Share2 className="h-4 w-4" />
+      </Button>
+      {open && (
+        <>
+          <button
+            aria-label="Close share menu"
+            onClick={() => setOpen(false)}
+            className="fixed inset-0 z-40 cursor-default"
+          />
+          <div
+            ref={panelRef}
+            role="menu"
+            aria-label="Share"
+            tabIndex={-1}
+            className="absolute bottom-full right-0 z-50 mb-1 w-44 rounded-xl border border-border bg-card py-1 shadow-lg outline-none"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => pick('turn')}
+              className="w-full px-3.5 py-2 text-left text-sm hover:bg-muted"
+            >
+              This turn
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => pick('context')}
+              className="w-full px-3.5 py-2 text-left text-sm hover:bg-muted"
+            >
+              Context window
+            </button>
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
 export function TreeBubble({
   node,
   onBranch,
   onDelete,
   onQuote,
+  onShare,
   fork,
   inContext = true,
 }: TreeBubbleProps) {
@@ -144,10 +235,12 @@ export function TreeBubble({
     <div className={cn('flex w-full', isUser ? 'justify-end' : 'justify-start')}>
       <div
         className={cn(
-          'max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed sm:max-w-[80%] sm:text-sm',
+          'rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed sm:text-sm',
+          // Agent turns take the full width (margins match left/right); user
+          // turns keep the classic right-aligned offset.
           isUser
-            ? 'bg-primary text-primary-foreground'
-            : 'border border-border bg-card text-card-foreground',
+            ? 'max-w-[85%] bg-primary text-primary-foreground sm:max-w-[80%]'
+            : 'w-full border border-border bg-card text-card-foreground',
         )}
       >
         {reading ? (
@@ -245,7 +338,7 @@ export function TreeBubble({
 
         <div className="mt-1.5 flex items-center gap-2 text-[10px] opacity-60">
           {node.paragraphIndex != null && <span>branched</span>}
-          <span className="ml-auto flex items-center gap-2">
+          <span className="ml-auto flex items-center gap-1.5">
             {canSpeak && (
               <Button
                 variant="ghost"
@@ -263,6 +356,8 @@ export function TreeBubble({
                 )}
               </Button>
             )}
+            {!isUser && <CopyButton text={node.content} />}
+            {!isUser && onShare && <ShareButton onShare={onShare} />}
             <Button
               variant="ghost"
               size="icon"

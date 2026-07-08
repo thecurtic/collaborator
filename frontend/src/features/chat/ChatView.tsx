@@ -6,8 +6,9 @@ import type { RecallBlock } from '@/domain/models';
 import type { BranchTarget } from './branchTarget';
 import { Composer, type ComposerHandle } from './Composer';
 import { quoteForReply } from './quote';
-import { TreeBubble, UserText } from './TreeBubble';
-import type { Conversation } from './useConversation';
+import { TreeBubble, UserText, type ShareScope } from './TreeBubble';
+import type { Conversation, PathEntry } from './useConversation';
+import type { TreeNode } from '@/domain/models';
 
 interface ChatViewProps {
   /** Conversation state/actions, owned by the app shell (shared with tabs). */
@@ -17,6 +18,18 @@ interface ChatViewProps {
   onBranchTargetChange: (b: BranchTarget | null) => void;
   /** Open the drafts inbox (filtered to a run) — model-proposed notes. */
   onReviewDrafts: (runId: string | null) => void;
+  /** Start a voice call (button lives in the composer). */
+  onStartCall: () => void;
+}
+
+/** Plain-text export of a run of turns (for sharing the context window). */
+function formatTurns(entries: PathEntry[]): string {
+  return entries
+    .map(
+      (e) =>
+        `${e.node.role === 'user' ? 'You' : 'Collaborator'}:\n${e.node.content}`,
+    )
+    .join('\n\n---\n\n');
 }
 
 interface BranchPoint {
@@ -66,6 +79,7 @@ export function ChatView({
   branchTarget,
   onBranchTargetChange,
   onReviewDrafts,
+  onStartCall,
 }: ChatViewProps) {
   const {
     path,
@@ -87,6 +101,14 @@ export function ChatView({
   } = convo;
   // Pending branch point awaiting a with/without-context choice.
   const [branchChoice, setBranchChoice] = useState<BranchPoint | null>(null);
+  // Transient feedback (e.g. "Copied to clipboard" when share falls back).
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showNotice = (msg: string) => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    setNotice(msg);
+    noticeTimer.current = setTimeout(() => setNotice(null), 2500);
+  };
   const branchDialogRef = useModalA11y<HTMLDivElement>(branchChoice !== null, () =>
     setBranchChoice(null),
   );
@@ -186,6 +208,23 @@ export function ChatView({
       ? Math.max(0, displayPath.length - contextWindow)
       : 0;
 
+  // Share a single turn or the current context window as plain text; falls
+  // back to the clipboard where the Web Share API is unavailable (desktop).
+  const handleShare = async (node: TreeNode, scope: ShareScope) => {
+    const text =
+      scope === 'turn' ? node.content : formatTurns(displayPath.slice(inCtxStart));
+    try {
+      if (navigator.share) {
+        await navigator.share({ text });
+      } else {
+        await navigator.clipboard.writeText(text);
+        showNotice('Copied to clipboard');
+      }
+    } catch {
+      /* user cancelled the share sheet — not an error */
+    }
+  };
+
   return (
     <div className="relative flex h-full flex-col">
       {/* Branch context choice. */}
@@ -278,6 +317,7 @@ export function ChatView({
                     onBranch={handleBranch}
                     onDelete={handleDelete}
                     onQuote={handleQuote}
+                    onShare={(scope) => void handleShare(entry.node, scope)}
                     fork={fork}
                     inContext={i >= inCtxStart}
                   />
@@ -299,7 +339,7 @@ export function ChatView({
               {/* In-flight recall: between the user message and the reply. */}
               {recall && <RecallCard recall={recall} />}
               <div className="flex w-full justify-start">
-                <div className="max-w-[85%] rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:max-w-[80%] sm:text-sm">
+                <div className="w-full rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:text-sm">
                   {streaming.reply ? (
                     <Markdown>{streaming.reply}</Markdown>
                   ) : status ? (
@@ -325,6 +365,12 @@ export function ChatView({
       {error && (
         <div className="border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-center text-sm text-destructive">
           {error}
+        </div>
+      )}
+
+      {notice && (
+        <div className="border-t border-border bg-muted/60 px-4 py-1.5 text-center text-xs text-muted-foreground">
+          {notice}
         </div>
       )}
 
@@ -405,6 +451,7 @@ export function ChatView({
           disabled={sending}
           onSend={handleSend}
           onStop={stopGeneration}
+          onStartCall={onStartCall}
           branchLabel={
             branchTarget
               ? `${branchTarget.label}${branchTarget.withContext ? '' : ' · no context'}`

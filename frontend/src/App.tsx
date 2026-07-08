@@ -4,7 +4,6 @@ import {
   Loader2,
   NotebookPen,
   NotebookText,
-  Phone,
   Plus,
   Sprout,
   TreePine,
@@ -299,17 +298,6 @@ function AppShell() {
             </div>
           )}
           <div className="flex shrink-0 items-center gap-1">
-            {gate === 'open' && (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Start voice call"
-                onClick={() => setCallOpen(true)}
-                className="h-8 w-8"
-              >
-                <Phone className="h-4 w-4" />
-              </Button>
-            )}
             <AppMenu
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenReferences={() => setReferencesOpen(true)}
@@ -418,6 +406,7 @@ function AppShell() {
             branchTarget={branchTarget}
             onBranchTargetChange={setBranchTarget}
             onReviewDrafts={openInbox}
+            onStartCall={() => setCallOpen(true)}
           />
         ) : tab === 'notes' ? (
           <NotesView
