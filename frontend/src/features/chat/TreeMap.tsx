@@ -19,6 +19,12 @@ interface TreeMapProps {
 const COL = 40; // px between branch columns
 const ROW = 30; // px per turn
 const PAD = 32;
+// Semantic zoom: past this scale, per-turn text appears beside the nodes
+// (counter-scaled to a constant ~11px on screen, so zooming in spreads the
+// nodes apart and lets progressively more characters fit).
+const TEXT_ZOOM = 1.3;
+const TEXT_SCREEN_PX = 11;
+const CHAR_W = 6.4; // ≈ average glyph width at 11px
 const NAME_H = 34; // space above each tree for its name label
 const TREE_GAP = 90; // horizontal gap between separate trees
 const LABEL_HALF = 90; // half-width of a tree's name label (overhang per side)
@@ -284,6 +290,17 @@ export function TreeMap({
   // Rendered only as the active tab, so mount = visible (no open gate needed).
   const trees = useMemo(() => buildForest(tree, activeIds), [tree, activeIds]);
 
+  // Per-node preview text for the semantic-zoom labels.
+  const textOf = useMemo(() => {
+    const m = new Map<number, { text: string; user: boolean }>();
+    const walk = (n: TreeNode) => {
+      m.set(n.id, { text: n.preview || n.content, user: n.role === 'user' });
+      n.children.forEach(walk);
+    };
+    tree.roots.forEach(walk);
+    return m;
+  }, [tree]);
+
   const layout = useMemo(() => {
     // A name label extends LABEL_HALF px on each side of its root column, so the
     // canvas must include that overhang or the edge trees' labels get clipped.
@@ -320,7 +337,9 @@ export function TreeMap({
   };
   const zoomAt = (mx: number, my: number, nextScale: number) => {
     setView((v) => {
-      const ns = clamp(nextScale, 0.3, 3);
+      // Generous ceiling: semantic-zoom text keeps gaining characters with
+      // scale, so reading depth is worth more range than the map alone was.
+      const ns = clamp(nextScale, 0.3, 5);
       const cx = (mx - v.x) / v.scale;
       const cy = (my - v.y) / v.scale;
       return { x: mx - cx * ns, y: my - cy * ns, scale: ns };
@@ -508,7 +527,46 @@ export function TreeMap({
                           pointerEvents="none"
                         />
                       ))}
-                      {/* Branch name, rotated to run along the line. Only
+                      {/* Semantic zoom: per-turn text beside each node once
+                          zoomed in enough. Counter-scaled font (constant
+                          on-screen size) so deeper zoom = wider gaps = more
+                          characters shown. */}
+                      {view.scale >= TEXT_ZOOM &&
+                        seg.nodeIds.map((id, i) => {
+                          const info = textOf.get(id);
+                          if (!info?.text) return null;
+                          const budget = COL * view.scale - 22; // screen px
+                          const maxChars = Math.max(
+                            4,
+                            Math.floor(budget / CHAR_W),
+                          );
+                          const label =
+                            info.text.length > maxChars
+                              ? `${info.text.slice(0, maxChars - 1)}…`
+                              : info.text;
+                          return (
+                            <text
+                              key={`txt-${id}`}
+                              x={x + 8}
+                              y={rowY(seg.startRow + i)}
+                              fontSize={TEXT_SCREEN_PX / view.scale}
+                              dominantBaseline="middle"
+                              fill={
+                                info.user
+                                  ? 'var(--color-muted-foreground)'
+                                  : 'var(--color-foreground)'
+                              }
+                              fontStyle={info.user ? 'italic' : undefined}
+                              opacity={emphasized ? 1 : 0.45}
+                              pointerEvents="none"
+                              className="select-none"
+                            >
+                              {label}
+                            </text>
+                          );
+                        })}
+                      {/* Branch name, rotated to run along the line — hidden
+                          once per-turn text takes over at high zoom. Only
                           explicit branch roots are nameable — the trunk is one
                           singular line (its name = the tree label above), and
                           trunk continuation segments are rendering artifacts
@@ -516,7 +574,10 @@ export function TreeMap({
                           Truncated to the segment's length (~5.5px/char at
                           10px font, small overhang allowed) so a long name on
                           a short branch doesn't spill across other lines. */}
-                      {seg.name && seg.branched && seg.parentColumn != null && (
+                      {view.scale < TEXT_ZOOM &&
+                        seg.name &&
+                        seg.branched &&
+                        seg.parentColumn != null && (
                         <text
                           transform={`translate(${x + 9}, ${top + 4}) rotate(90)`}
                           fontSize={10}
