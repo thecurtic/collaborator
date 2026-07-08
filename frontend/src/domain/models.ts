@@ -189,6 +189,17 @@ export interface ProposedDraft {
   runId: string;
 }
 
+/** One tool call in the live activity feed (start row, resolved by outcome). */
+export interface ToolActivity {
+  id: number;
+  tool: string;
+  /** What it's doing: full query/url/title when available, else the label. */
+  text: string;
+  outcome: 'pending' | 'ok' | 'empty' | 'error';
+  /** Resolution detail: "5 results" / failure reason / outcome label. */
+  detail: string | null;
+}
+
 export interface ReindexResult {
   added: number;
   updated: number;

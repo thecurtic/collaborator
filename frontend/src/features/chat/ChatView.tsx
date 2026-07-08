@@ -1,4 +1,15 @@
-import { Brain, Link as LinkIcon, Loader2, NotebookPen } from 'lucide-react';
+import {
+  Brain,
+  Check,
+  CircleSlash,
+  Globe,
+  Link as LinkIcon,
+  Loader2,
+  NotebookPen,
+  NotebookText,
+  Wrench,
+  X,
+} from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/Markdown';
 import { useModalA11y } from '@/lib/useModalA11y';
@@ -8,7 +19,52 @@ import { Composer, type ComposerHandle } from './Composer';
 import { quoteForReply } from './quote';
 import { TreeBubble, UserText, type ShareScope } from './TreeBubble';
 import type { Conversation, PathEntry } from './useConversation';
-import type { TreeNode } from '@/domain/models';
+import type { ToolActivity, TreeNode } from '@/domain/models';
+
+/** Icon per tool family for the live activity feed. */
+function toolIcon(tool: string) {
+  if (tool === 'web_search') return Globe;
+  if (tool === 'fetch_url') return LinkIcon;
+  if (tool.startsWith('recall')) return Brain;
+  if (tool === 'search_notes' || tool === 'get_note') return NotebookText;
+  if (tool === 'propose_note') return NotebookPen;
+  return Wrench;
+}
+
+/** One tool call: pending spinner → ✓ n results / ∅ empty / ✕ reason. */
+function ActivityRow({ item }: { item: ToolActivity }) {
+  const Icon = toolIcon(item.tool);
+  return (
+    <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
+      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{item.text}</span>
+      <span className="flex shrink-0 items-center gap-1">
+        {item.outcome === 'pending' ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : item.outcome === 'ok' ? (
+          <>
+            {item.detail && <span>{item.detail}</span>}
+            <Check className="h-3.5 w-3.5 text-primary" />
+          </>
+        ) : item.outcome === 'empty' ? (
+          <>
+            <span>no results</span>
+            <CircleSlash className="h-3.5 w-3.5" />
+          </>
+        ) : (
+          <>
+            {item.detail && (
+              <span className="max-w-[10rem] truncate text-destructive">
+                {item.detail}
+              </span>
+            )}
+            <X className="h-3.5 w-3.5 text-destructive" />
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
 
 interface ChatViewProps {
   /** Conversation state/actions, owned by the app shell (shared with tabs). */
@@ -89,7 +145,7 @@ export function ChatView({
     contextWindow,
     streaming,
     recall,
-    status,
+    activity,
     proposedDrafts,
     clearProposedDrafts,
     unfollowedLinks,
@@ -153,7 +209,7 @@ export function ChatView({
     if (!loading && pinnedRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
-  }, [path.length, streaming?.reply, sending, loading]);
+  }, [path.length, streaming?.reply, activity.length, sending, loading]);
 
   // Cycle a node's branch fork (keeps the tapped button under the finger).
   const switchFork = (parentId: number, dir: 1 | -1) => {
@@ -372,12 +428,18 @@ export function ChatView({
               {recall && <RecallCard recall={recall} />}
               <div className="flex w-full justify-start">
                 <div className="w-full rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:text-sm">
+                  {/* Live tool activity: one row per call, resolved in place
+                      (✓ n results / ∅ / ✕ reason). Persists while the answer
+                      streams below it. */}
+                  {activity.length > 0 && (
+                    <div className="mb-2 space-y-1 border-b border-border/60 pb-2">
+                      {activity.map((item) => (
+                        <ActivityRow key={item.id} item={item} />
+                      ))}
+                    </div>
+                  )}
                   {streaming.reply ? (
                     <Markdown>{streaming.reply}</Markdown>
-                  ) : status ? (
-                    <span className="text-sm italic text-muted-foreground">
-                      {status}
-                    </span>
                   ) : (
                     <span className="flex gap-1 py-1" aria-label="Responding">
                       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.3s]" />

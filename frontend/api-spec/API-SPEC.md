@@ -106,12 +106,19 @@ X-Passkey: <your-passkey>
 **Tool SSE events** (when tools are on and the model uses them; interleaved before the
 final answer tokens):
 ```
-data: {"type":"status","tool":"recall_semantic","label":"Searching memory (semantic)…"}
-data: {"type":"tool_result","tool":"recall_semantic","result":"[{...matches...}]"}   // only if tools.show_step_results
+data: {"type":"status","tool":"web_search","label":"Searching the web for “…”…","query":"boe governor 2026"}
+data: {"type":"tool_result","tool":"web_search","result":"{...}"}                     // only if tools.show_step_results
+data: {"type":"status","tool":"web_search","outcome":"ok","count":5,"label":"Web search returned 5 results."}
 data: {"type":"token","content":"We chose "}                                          // final answer
 data: {"type":"done", ...}
 ```
-- `status` — a short "what it's doing" note per tool call (`tools.status_notes`).
+- `status` (start) — a short "what it's doing" note per tool call (`tools.status_notes`).
+  Carries structured fields when available: `query` (search tools), `url` (fetch_url),
+  `title` (get_note) — render these instead of parsing `label`.
+- `status` (outcome) — a follow-up per tool call reporting what it produced, marked by
+  the `outcome` field: `"ok"` (with `count` for web_search), `"empty"` (searched,
+  genuinely nothing), or `"error"` (with `error` text — e.g. all search engines down).
+  Lets the UI distinguish "found nothing" from "search failed" from "never searched".
 - `tool_result` — the raw tool output, only when `tools.show_step_results` is on.
 - If the model calls the `synthesize` tool, its output is persisted as the turn's
   recall block (see `node.recall` in `GET /api/tree`).

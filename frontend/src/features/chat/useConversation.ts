@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type StreamHandlers } from '@/api/collaborator';
+import {
+  api,
+  type StreamHandlers,
+  type ToolStatusEvent,
+} from '@/api/collaborator';
 import type {
   ConversationTree,
   ProposedDraft,
   RecallBlock,
+  ToolActivity,
   TreeNode,
 } from '@/domain/models';
 import { getRecallEnabled } from '@/features/settings/uiPrefs';
@@ -62,8 +67,9 @@ export function useConversation(reloadSignal: number) {
   // The LIVE recall block during a send (shown in the streaming overlay). Once the
   // turn commits, the persisted block comes back from the tree (node.recall).
   const [recall, setRecall] = useState<RecallBlock | null>(null);
-  // Live tool-calling status line ("what it's doing"), cleared each turn.
-  const [status, setStatus] = useState('');
+  // Live tool activity feed for the in-flight turn: a row per tool call,
+  // resolved in place by its outcome event. Cleared each turn.
+  const [activity, setActivity] = useState<ToolActivity[]>([]);
   // Drafts the model proposed via propose_note this turn (pending in the
   // inbox). Kept after the stream so the chat can offer a "review" link;
   // cleared on the next send or when the user follows the link.
@@ -84,6 +90,46 @@ export function useConversation(reloadSignal: number) {
 
   // Swap in a fresh tree synchronously so callers can batch further state
   // updates (e.g. clearing the streaming overlay) into the same render.
+  // Fold a status event into the activity feed: starts append a pending row;
+  // outcomes resolve the LAST pending row for that tool (tool calls run
+  // sequentially, and outcome events carry no id to match on).
+  const applyToolEvent = useCallback((e: ToolStatusEvent) => {
+    setActivity((prev) => {
+      if (!e.isOutcome) {
+        return [
+          ...prev,
+          {
+            id: prev.length,
+            tool: e.tool,
+            text: e.query ?? e.url ?? e.title ?? e.label,
+            outcome: 'pending' as const,
+            detail: null,
+          },
+        ];
+      }
+      const outcome = e.outcome ?? 'ok';
+      const detail =
+        e.error ??
+        (typeof e.count === 'number'
+          ? `${e.count} ${e.count === 1 ? 'result' : 'results'}`
+          : null);
+      let i = prev.length - 1;
+      while (i >= 0 && !(prev[i].tool === e.tool && prev[i].outcome === 'pending'))
+        i--;
+      if (i < 0) {
+        // Outcome without a visible start (e.g. tool error on a start we
+        // didn't render) — show it as its own resolved row.
+        return [
+          ...prev,
+          { id: prev.length, tool: e.tool, text: e.label, outcome, detail },
+        ];
+      }
+      const next = prev.slice();
+      next[i] = { ...next[i], outcome, detail };
+      return next;
+    });
+  }, []);
+
   const applyTree = useCallback((t: ConversationTree) => {
     indexRef.current = indexNodes(t);
     setTree(t);
@@ -159,7 +205,7 @@ export function useConversation(reloadSignal: number) {
       setSending(true);
       setError(null);
       setRecall(null);
-      setStatus('');
+      setActivity([]);
       setProposedDrafts([]);
       setUnfollowedLinks([]);
       setStreaming({ user: userText, reply: '' });
@@ -169,7 +215,7 @@ export function useConversation(reloadSignal: number) {
             onToken: (c) =>
               setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
             onRecall: (block) => setRecall(block),
-            onStatus: (t) => setStatus(t),
+            onStatus: applyToolEvent,
             onDrafts: (drafts) =>
               setProposedDrafts((prev) => [...prev, ...drafts]),
             onUnfollowedLinks: (links) => setUnfollowedLinks(links),
@@ -200,12 +246,12 @@ export function useConversation(reloadSignal: number) {
         abortRef.current = null;
         setSending(false);
         setStreaming(null);
-        setStatus('');
+        setActivity([]);
         // Persisted recall now comes from the tree (node.recall) on reload.
         setRecall(null);
       }
     },
-    [applyTree, selectPathTo],
+    [applyTree, selectPathTo, applyToolEvent],
   );
 
   /** Abort the in-flight send/branch stream (the reply so far is kept server-side). */
@@ -457,7 +503,7 @@ export function useConversation(reloadSignal: number) {
     contextWindow,
     streaming,
     recall,
-    status,
+    activity,
     proposedDrafts,
     clearProposedDrafts,
     unfollowedLinks,

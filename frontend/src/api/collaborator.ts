@@ -89,14 +89,36 @@ function firstString(evt: Record<string, unknown>, keys: string[]): string {
   return '';
 }
 
+/**
+ * A tool-activity `status` event, structured. Two shapes share the event type:
+ * starts (no `outcome`; may carry the full query/url/title) and outcomes
+ * (`outcome` always present — that field is the discriminator, per contract).
+ */
+export interface ToolStatusEvent {
+  tool: string;
+  label: string;
+  /** Full untruncated query (search-type tools), url (fetch_url), title (get_note). */
+  query?: string;
+  url?: string;
+  title?: string;
+  /** Present ONLY on outcome events. */
+  outcome?: 'ok' | 'empty' | 'error';
+  /** web_search outcome: number of results. */
+  count?: number;
+  /** error outcome: short failure reason. */
+  error?: string;
+  /** True when this is an outcome event ('outcome' in raw event). */
+  isOutcome: boolean;
+}
+
 /** Callbacks for SSE events during a streamed send/branch. */
 export interface StreamHandlers {
   /** Each incremental response chunk. */
   onToken: (chunk: string) => void;
   /** Synthesized recall block injected into context. */
   onRecall?: (block: RecallBlock) => void;
-  /** Live tool-activity line ("Searching the web…"). */
-  onStatus?: (text: string) => void;
+  /** Tool activity: starts and outcomes ("Searching…" → "✓ 5 results"). */
+  onStatus?: (evt: ToolStatusEvent) => void;
   /** Drafts the model proposed via propose_note (pending in the inbox). */
   onDrafts?: (drafts: ProposedDraft[]) => void;
   /** Links the model wanted to read but couldn't (per-turn fetch budget). */
@@ -156,9 +178,27 @@ async function consumeStream(
           // toRecallBlock guards every field — SSE payloads are unvalidated.
           onRecall?.(toRecallBlock(evt as unknown as ApiRecall));
         } else if (evt.type === 'status') {
-          // Tool-calling: a live "what it's doing" line, e.g.
-          // {"type":"status","tool":"recall_semantic","label":"Searching memory…"}
-          onStatus?.(firstString(evt, ['label', 'content', 'message', 'text']));
+          // Tool activity: start events (what it's doing) and outcome events
+          // (how it went) — discriminated by the presence of `outcome`.
+          const str = (k: string) =>
+            typeof evt[k] === 'string' ? (evt[k] as string) : undefined;
+          const rawOutcome = str('outcome');
+          onStatus?.({
+            tool: str('tool') ?? '',
+            label: firstString(evt, ['label', 'content', 'message', 'text']),
+            query: str('query'),
+            url: str('url'),
+            title: str('title'),
+            outcome:
+              rawOutcome === 'ok' ||
+              rawOutcome === 'empty' ||
+              rawOutcome === 'error'
+                ? rawOutcome
+                : undefined,
+            count: typeof evt.count === 'number' ? evt.count : undefined,
+            error: str('error'),
+            isOutcome: 'outcome' in evt,
+          });
         } else if (evt.type === 'tool_result') {
           // Reserved — optional "show steps" view (tools.show_step_results); off
           // by default. Not rendered yet.
