@@ -4,8 +4,9 @@ import { Markdown } from '@/components/Markdown';
 import { useModalA11y } from '@/lib/useModalA11y';
 import type { RecallBlock } from '@/domain/models';
 import type { BranchTarget } from './branchTarget';
-import { Composer } from './Composer';
-import { TreeBubble } from './TreeBubble';
+import { Composer, type ComposerHandle } from './Composer';
+import { quoteForReply } from './quote';
+import { TreeBubble, UserText } from './TreeBubble';
 import type { Conversation } from './useConversation';
 
 interface ChatViewProps {
@@ -94,6 +95,12 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
   const suppressScrollRef = useRef(false);
+  const composerRef = useRef<ComposerHandle>(null);
+
+  // Reply button on a paragraph: stack a truncated quote into the draft.
+  const handleQuote = (text: string) => {
+    composerRef.current?.appendQuote(quoteForReply(text));
+  };
 
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -270,6 +277,7 @@ export function ChatView({
                     node={entry.node}
                     onBranch={handleBranch}
                     onDelete={handleDelete}
+                    onQuote={handleQuote}
                     fork={fork}
                     inContext={i >= inCtxStart}
                   />
@@ -285,9 +293,7 @@ export function ChatView({
             <>
               <div className="flex w-full justify-end">
                 <div className="max-w-[85%] rounded-2xl bg-primary px-3.5 py-2.5 text-[15px] leading-relaxed text-primary-foreground sm:max-w-[80%] sm:text-sm">
-                  <p className="whitespace-pre-wrap break-words">
-                    {streaming.user}
-                  </p>
+                  <UserText text={streaming.user} />
                 </div>
               </div>
               {/* In-flight recall: between the user message and the reply. */}
@@ -395,6 +401,7 @@ export function ChatView({
 
       <div className="mx-auto w-full max-w-3xl">
         <Composer
+          ref={composerRef}
           disabled={sending}
           onSend={handleSend}
           onStop={stopGeneration}

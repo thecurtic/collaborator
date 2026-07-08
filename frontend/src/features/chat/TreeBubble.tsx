@@ -3,6 +3,7 @@ import {
   ChevronRight,
   GitBranch,
   Loader2,
+  Reply,
   Square,
   Trash2,
   Volume2,
@@ -34,10 +35,39 @@ interface TreeBubbleProps {
     label: string,
   ) => void;
   onDelete: (turnId: number) => void;
+  /** Quote this paragraph into the composer (stackable multi-quote replies). */
+  onQuote?: (text: string) => void;
   /** When set, this node is a fork — highlight the source paragraph + switcher. */
   fork?: Fork;
   /** False → this turn is outside the next message's context window (lighter). */
   inContext?: boolean;
+}
+
+/**
+ * User message text with quote-reply lines ("> …") rendered as styled quotes,
+ * so multi-quote replies read as threads instead of raw markdown.
+ */
+export function UserText({ text }: { text: string }) {
+  return (
+    <div className="space-y-0.5">
+      {text.split('\n').map((line, i) =>
+        line.startsWith('> ') || line === '>' ? (
+          <p
+            key={i}
+            className="whitespace-pre-wrap break-words border-l-2 border-primary-foreground/40 pl-2 text-[13px] italic opacity-85"
+          >
+            {line.replace(/^> ?/, '')}
+          </p>
+        ) : line ? (
+          <p key={i} className="whitespace-pre-wrap break-words">
+            {line}
+          </p>
+        ) : (
+          <div key={i} className="h-2" />
+        ),
+      )}
+    </div>
+  );
 }
 
 function Switcher({
@@ -82,6 +112,7 @@ export function TreeBubble({
   node,
   onBranch,
   onDelete,
+  onQuote,
   fork,
   inContext = true,
 }: TreeBubbleProps) {
@@ -158,27 +189,40 @@ export function TreeBubble({
                   )}
                 >
                   {isUser ? (
-                    <p className="flex-1 whitespace-pre-wrap break-words">
-                      {block}
-                    </p>
+                    <div className="min-w-0 flex-1">
+                      <UserText text={block} />
+                    </div>
                   ) : (
                     <Markdown className="min-w-0 flex-1">{block}</Markdown>
                   )}
-                  <button
-                    type="button"
-                    aria-label="Branch from here"
-                    title="Branch from here"
-                    onClick={() =>
-                      onBranch(
-                        node.id,
-                        multiPara ? i : undefined,
-                        multiPara ? block : node.preview,
-                      )
-                    }
-                    className="mt-0.5 shrink-0 rounded p-2 opacity-50 transition hover:opacity-100 active:scale-90"
-                  >
-                    <GitBranch className="h-4 w-4" />
-                  </button>
+                  <span className="flex shrink-0 flex-col">
+                    <button
+                      type="button"
+                      aria-label="Branch from here"
+                      title="Branch from here"
+                      onClick={() =>
+                        onBranch(
+                          node.id,
+                          multiPara ? i : undefined,
+                          multiPara ? block : node.preview,
+                        )
+                      }
+                      className="mt-0.5 rounded p-2 opacity-50 transition hover:opacity-100 active:scale-90"
+                    >
+                      <GitBranch className="h-4 w-4" />
+                    </button>
+                    {!isUser && onQuote && (
+                      <button
+                        type="button"
+                        aria-label="Reply to this paragraph"
+                        title="Quote this paragraph in your reply"
+                        onClick={() => onQuote(block)}
+                        className="rounded p-2 opacity-50 transition hover:opacity-100 active:scale-90"
+                      >
+                        <Reply className="h-4 w-4" />
+                      </button>
+                    )}
+                  </span>
                 </div>
               </div>
             );

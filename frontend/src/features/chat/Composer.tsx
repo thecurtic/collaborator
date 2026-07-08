@@ -2,13 +2,22 @@ import { GitBranch, Loader2, Mic, SendHorizontal, Square, X } from 'lucide-react
 import {
   type FormEvent,
   type KeyboardEvent,
+  type Ref,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
 } from 'react';
 import { Button } from '@/components/ui/button';
 import { useDictation } from '@/features/voice/useDictation';
 import { useWakeLock } from '@/features/voice/useWakeLock';
+import { appendQuoteToDraft } from './quote';
+
+/** Imperative surface for quote-replies (paragraph Reply buttons). */
+export interface ComposerHandle {
+  /** Append a quote block to the draft, leaving the cursor area below it. */
+  appendQuote: (quote: string) => void;
+}
 
 interface ComposerProps {
   disabled: boolean;
@@ -19,6 +28,7 @@ interface ComposerProps {
   /** When set, the next send branches from this point (shown as a chip). */
   branchLabel?: string | null;
   onCancelBranch?: () => void;
+  ref?: Ref<ComposerHandle>;
 }
 
 const MAX_TEXTAREA_PX = 160; // matches max-h-40
@@ -29,6 +39,7 @@ export function Composer({
   onStop,
   branchLabel = null,
   onCancelBranch,
+  ref,
 }: ComposerProps) {
   const [value, setValue] = useState('');
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
@@ -47,6 +58,18 @@ export function Composer({
   const recording = dictation === 'listening';
   const busyMic = dictation === 'starting' || dictation === 'finishing';
   useWakeLock(dictation !== 'idle'); // keep screen on while capturing
+
+  // Quote-replies: paragraph Reply buttons stack quotes into the draft.
+  // Deliberately no focus() — the keyboard would cover the paragraphs the
+  // user may still want to quote.
+  useImperativeHandle(
+    ref,
+    () => ({
+      appendQuote: (quote: string) =>
+        setValue((v) => appendQuoteToDraft(v, quote)),
+    }),
+    [],
+  );
 
   // Grow with the content (up to max-h-40), shrink when cleared.
   useEffect(() => {
