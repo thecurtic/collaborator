@@ -465,6 +465,7 @@ function AppShell() {
             onReviewDrafts={openInbox}
             onStartCall={() => setCallOpen(true)}
             draftSeed={chatDraft}
+            onDraftSeedConsumed={() => setChatDraft(null)}
           />
         ) : tab === 'notes' ? (
           <NotesView

@@ -23,6 +23,9 @@ interface ChatViewProps {
   onStartCall: () => void;
   /** Prefill the composer (chats spawned from web search); nonce re-triggers. */
   draftSeed?: { text: string; nonce: number } | null;
+  /** MUST clear draftSeed — ChatView remounts per chat, so an unconsumed
+      seed would prefill every subsequent chat. */
+  onDraftSeedConsumed?: () => void;
 }
 
 /** Plain-text export of a run of turns (for sharing the context window). */
@@ -84,6 +87,7 @@ export function ChatView({
   onReviewDrafts,
   onStartCall,
   draftSeed = null,
+  onDraftSeedConsumed,
 }: ChatViewProps) {
   const {
     path,
@@ -134,8 +138,13 @@ export function ChatView({
   };
 
   // Prefill from web search ("chat about this page" / "ask about query").
+  // Consume-once: this effect fires on every mount (ChatView remounts per
+  // chat), so the seed must be cleared upstream after it's applied.
   useEffect(() => {
-    if (draftSeed) composerRef.current?.setDraft(draftSeed.text);
+    if (draftSeed) {
+      composerRef.current?.setDraft(draftSeed.text);
+      onDraftSeedConsumed?.();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftSeed?.nonce]);
 

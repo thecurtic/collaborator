@@ -12,6 +12,14 @@ import { ApiRequestError } from '@/api/http';
 import { Button } from '@/components/ui/button';
 import type { WebSearch } from '@/domain/models';
 
+// Session cache: the screen unmounts when you navigate away — returning
+// should restore the last search instead of a blank page.
+let lastSearch: {
+  query: string;
+  result: WebSearch | null;
+  error: string | null;
+} | null = null;
+
 function host(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '');
@@ -56,10 +64,14 @@ export function WebSearchView({
   /** Open a new seed chat with this draft in the composer. */
   onStartChat: (draft: string) => void;
 }) {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(() => lastSearch?.query ?? '');
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<WebSearch | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<WebSearch | null>(
+    () => lastSearch?.result ?? null,
+  );
+  const [error, setError] = useState<string | null>(
+    () => lastSearch?.error ?? null,
+  );
   const [unconfigured, setUnconfigured] = useState(false);
 
   const run = async (e?: FormEvent) => {
@@ -69,7 +81,9 @@ export function WebSearchView({
     setBusy(true);
     setError(null);
     try {
-      setResult(await api.searchWeb(q));
+      const res = await api.searchWeb(q);
+      setResult(res);
+      lastSearch = { query: q, result: res, error: null };
     } catch (err) {
       setResult(null);
       if (err instanceof ApiRequestError && err.status === 503) {
@@ -78,9 +92,9 @@ export function WebSearchView({
       } else {
         // 502 = engines failed (detail lists per-engine reasons). This is a
         // FAILURE, deliberately distinct from a genuine empty result set.
-        setError(
-          `Search failed: ${err instanceof Error ? err.message : 'unknown error'}`,
-        );
+        const msg = `Search failed: ${err instanceof Error ? err.message : 'unknown error'}`;
+        setError(msg);
+        lastSearch = { query: q, result: null, error: msg };
       }
     } finally {
       setBusy(false);
