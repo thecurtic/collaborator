@@ -20,6 +20,26 @@ let lastSearch: {
   error: string | null;
 } | null = null;
 
+/**
+ * Compose the "Ask Collaborator" draft: the full results page (answers,
+ * infoboxes, numbered results with URLs and snippets) so the model reasons
+ * over what YOU saw — and can fetch any of the URLs — with room at the end
+ * for the user's actual question.
+ */
+function draftFromSearch(s: WebSearch): string {
+  const lines: string[] = [`Web search results for "${s.query}":`, ''];
+  for (const a of s.answers) lines.push(`Answer: ${a}`, '');
+  for (const b of s.infoboxes) {
+    lines.push(`${b.title ? `${b.title}: ` : ''}${b.content}`, '');
+  }
+  s.results.forEach((r, i) => {
+    lines.push(`${i + 1}. ${r.title}`, `   ${r.url}`);
+    if (r.snippet) lines.push(`   ${r.snippet}`);
+  });
+  lines.push('', '');
+  return lines.join('\n');
+}
+
 function host(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '');
@@ -212,10 +232,12 @@ export function WebSearchView({
                 </ul>
               )}
 
-              {/* Escalation: hand the query to the model (new seed chat). */}
+              {/* Escalation: hand the WHOLE results page to the model (new
+                  seed chat) — it reasons over what you saw and can fetch any
+                  of the URLs; your question goes underneath. */}
               <button
                 type="button"
-                onClick={() => onStartChat(result.query)}
+                onClick={() => onStartChat(draftFromSearch(result))}
                 className="mx-4 my-4 flex w-[calc(100%-2rem)] items-center justify-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm text-primary hover:bg-primary/10"
               >
                 <MessageSquare className="h-4 w-4" />
