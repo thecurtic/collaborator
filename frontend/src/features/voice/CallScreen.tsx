@@ -8,6 +8,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import { useEffect, useRef, type Ref } from 'react';
+import { ActivityRow } from '@/components/ActivityRow';
 import { Button } from '@/components/ui/button';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import { useModalA11y } from '@/lib/useModalA11y';
@@ -175,6 +176,7 @@ export function CallScreen({
     spokenChars,
     speakBase,
     failedRanges,
+    activity,
     error,
     logs,
     endTurn,
@@ -275,6 +277,15 @@ export function CallScreen({
           </span>
         </div>
         <p className="text-xs text-muted-foreground">{LABELS[phase]}</p>
+        {/* Live tool activity for this spoken turn (searches, page reads) —
+            so you can SEE it working instead of sitting in silence. */}
+        {activity.length > 0 && (
+          <div className="w-full max-w-md space-y-1 px-2 pt-1">
+            {activity.slice(-4).map((item) => (
+              <ActivityRow key={item.id} item={item} />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Scrollable conversation — readable while listening or speaking. */}

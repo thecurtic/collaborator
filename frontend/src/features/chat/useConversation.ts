@@ -12,6 +12,8 @@ import type {
   TreeNode,
 } from '@/domain/models';
 import { getRecallEnabled } from '@/features/settings/uiPrefs';
+import { saveTurnSources } from './sourcesStore';
+import { foldToolEvent } from './toolActivity';
 import {
   CONTINUE,
   VIRTUAL_ROOT,
@@ -90,42 +92,13 @@ export function useConversation(reloadSignal: number) {
 
   // Swap in a fresh tree synchronously so callers can batch further state
   // updates (e.g. clearing the streaming overlay) into the same render.
-  // Fold a status event into the activity feed: starts append a pending row;
-  // outcomes resolve the LAST pending row for that tool (tool calls run
-  // sequentially, and outcome events carry no id to match on).
+  // Mirror of `activity` readable after the stream settles (state clears in
+  // the finally block, but the sources cache wants the final feed).
+  const activityRef = useRef<ToolActivity[]>([]);
   const applyToolEvent = useCallback((e: ToolStatusEvent) => {
     setActivity((prev) => {
-      if (!e.isOutcome) {
-        return [
-          ...prev,
-          {
-            id: prev.length,
-            tool: e.tool,
-            text: e.query ?? e.url ?? e.title ?? e.label,
-            outcome: 'pending' as const,
-            detail: null,
-          },
-        ];
-      }
-      const outcome = e.outcome ?? 'ok';
-      const detail =
-        e.error ??
-        (typeof e.count === 'number'
-          ? `${e.count} ${e.count === 1 ? 'result' : 'results'}`
-          : null);
-      let i = prev.length - 1;
-      while (i >= 0 && !(prev[i].tool === e.tool && prev[i].outcome === 'pending'))
-        i--;
-      if (i < 0) {
-        // Outcome without a visible start (e.g. tool error on a start we
-        // didn't render) — show it as its own resolved row.
-        return [
-          ...prev,
-          { id: prev.length, tool: e.tool, text: e.label, outcome, detail },
-        ];
-      }
-      const next = prev.slice();
-      next[i] = { ...next[i], outcome, detail };
+      const next = foldToolEvent(prev, e);
+      activityRef.current = next;
       return next;
     });
   }, []);
@@ -206,6 +179,7 @@ export function useConversation(reloadSignal: number) {
       setError(null);
       setRecall(null);
       setActivity([]);
+      activityRef.current = [];
       setProposedDrafts([]);
       setUnfollowedLinks([]);
       setStreaming({ user: userText, reply: '' });
@@ -227,7 +201,12 @@ export function useConversation(reloadSignal: number) {
         // turns and the overlay copy together.
         const t = await api.getTree();
         applyTree(t);
-        if (res.id != null) selectPathTo(res.id);
+        if (res.id != null) {
+          selectPathTo(res.id);
+          // Persist the tool feed as this turn's sources (client-side cache
+          // — the backend doesn't store per-turn tool activity yet).
+          saveTurnSources(res.id, activityRef.current);
+        }
         if (res.contextWindow != null) setContextWindow(res.contextWindow);
         return true;
       } catch (err) {

@@ -1,15 +1,4 @@
-import {
-  Brain,
-  Check,
-  CircleSlash,
-  Globe,
-  Link as LinkIcon,
-  Loader2,
-  NotebookPen,
-  NotebookText,
-  Wrench,
-  X,
-} from 'lucide-react';
+import { Brain, Link as LinkIcon, Loader2, NotebookPen } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/Markdown';
 import { useModalA11y } from '@/lib/useModalA11y';
@@ -19,52 +8,8 @@ import { Composer, type ComposerHandle } from './Composer';
 import { quoteForReply } from './quote';
 import { TreeBubble, UserText, type ShareScope } from './TreeBubble';
 import type { Conversation, PathEntry } from './useConversation';
-import type { ToolActivity, TreeNode } from '@/domain/models';
-
-/** Icon per tool family for the live activity feed. */
-function toolIcon(tool: string) {
-  if (tool === 'web_search') return Globe;
-  if (tool === 'fetch_url') return LinkIcon;
-  if (tool.startsWith('recall')) return Brain;
-  if (tool === 'search_notes' || tool === 'get_note') return NotebookText;
-  if (tool === 'propose_note') return NotebookPen;
-  return Wrench;
-}
-
-/** One tool call: pending spinner → ✓ n results / ∅ empty / ✕ reason. */
-function ActivityRow({ item }: { item: ToolActivity }) {
-  const Icon = toolIcon(item.tool);
-  return (
-    <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
-      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-      <span className="min-w-0 flex-1 truncate">{item.text}</span>
-      <span className="flex shrink-0 items-center gap-1">
-        {item.outcome === 'pending' ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : item.outcome === 'ok' ? (
-          <>
-            {item.detail && <span>{item.detail}</span>}
-            <Check className="h-3.5 w-3.5 text-primary" />
-          </>
-        ) : item.outcome === 'empty' ? (
-          <>
-            <span>no results</span>
-            <CircleSlash className="h-3.5 w-3.5" />
-          </>
-        ) : (
-          <>
-            {item.detail && (
-              <span className="max-w-[10rem] truncate text-destructive">
-                {item.detail}
-              </span>
-            )}
-            <X className="h-3.5 w-3.5 text-destructive" />
-          </>
-        )}
-      </span>
-    </div>
-  );
-}
+import { ActivityRow } from '@/components/ActivityRow';
+import type { TreeNode } from '@/domain/models';
 
 interface ChatViewProps {
   /** Conversation state/actions, owned by the app shell (shared with tabs). */

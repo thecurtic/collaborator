@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Copy,
   GitBranch,
+  Globe,
   Loader2,
   RefreshCw,
   Reply,
@@ -13,7 +14,9 @@ import {
   Volume2,
 } from 'lucide-react';
 import { useState } from 'react';
+import { ActivityRow } from '@/components/ActivityRow';
 import { Markdown } from '@/components/Markdown';
+import { getTurnSources } from './sourcesStore';
 import { Button } from '@/components/ui/button';
 import { useSpeech } from '@/features/voice/SpeechContext';
 import { splitParagraphs } from '@/features/voice/speechUtils';
@@ -120,6 +123,59 @@ function Switcher({
         <ChevronRight className="h-5 w-5" />
       </button>
     </span>
+  );
+}
+
+/**
+ * "Sources" affordance: what the model consulted for this turn (searches,
+ * pages read, notes opened), from the client-side per-turn cache. Opens a
+ * bottom sheet; page URLs are tappable.
+ */
+function SourcesButton({ turnId }: { turnId: number }) {
+  const [open, setOpen] = useState(false);
+  const panelRef = useModalA11y<HTMLDivElement>(open, () => setOpen(false));
+  const sources = getTurnSources(turnId);
+  if (sources.length === 0) return null;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-medium underline-offset-2 opacity-70 hover:opacity-100 hover:underline"
+      >
+        <Globe className="h-3 w-3" />
+        Sources · {sources.length}
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+          <button
+            aria-label="Close sources"
+            onClick={() => setOpen(false)}
+            className="absolute inset-0 bg-black/60"
+          />
+          <div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Sources"
+            tabIndex={-1}
+            className="pb-safe relative max-h-[70vh] w-full overflow-y-auto rounded-t-2xl border border-border bg-card p-4 outline-none sm:max-w-sm sm:rounded-2xl"
+          >
+            <p className="mb-3 text-sm font-medium">
+              What the model consulted for this reply
+            </p>
+            <div className="space-y-2">
+              {sources.map((item) => (
+                <ActivityRow key={item.id} item={item} />
+              ))}
+            </div>
+            <p className="mt-3 text-[10px] text-muted-foreground">
+              Recorded on this device when the reply streamed.
+            </p>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -345,6 +401,7 @@ export function TreeBubble({
 
         <div className="mt-1.5 flex items-center gap-2 text-[10px] opacity-60">
           {node.paragraphIndex != null && <span>branched</span>}
+          {!isUser && <SourcesButton turnId={node.id} />}
           <span className="ml-auto flex items-center gap-1.5">
             {canSpeak && (
               <Button

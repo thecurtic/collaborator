@@ -7,6 +7,9 @@ import {
   getSttEngine,
 } from '@/features/settings/uiPrefs';
 import { holdPwaUpdates } from '@/pwa';
+import { saveTurnSources } from '@/features/chat/sourcesStore';
+import { foldToolEvent } from '@/features/chat/toolActivity';
+import type { ToolActivity } from '@/domain/models';
 import { chimeListenStart, chimeListenStop } from './chime';
 import { DeviceTranscriber } from './deviceTranscriber';
 import { listenForWords, warmUpKeywordSpotter } from './keywordSpotter';
@@ -80,6 +83,10 @@ export function useCall(
   const [speakBase, setSpeakBase] = useState(0);
   // Char ranges TTS failed to speak (rendered red so unread text is visible).
   const [failedRanges, setFailedRanges] = useState<FailedRange[]>([]);
+  // Live tool activity for the current spoken turn (searches, page reads) —
+  // visible in the call UI, persisted per turn for the Sources button.
+  const [activity, setActivity] = useState<ToolActivity[]>([]);
+  const activityRef = useRef<ToolActivity[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const controlsRef = useRef<Controls | null>(null);
@@ -189,10 +196,21 @@ export function useCall(
       stream = null;
     };
 
+    const onToolEvent = (e: Parameters<typeof foldToolEvent>[1]) => {
+      if (!active) return;
+      setActivity((prev) => {
+        const next = foldToolEvent(prev, e);
+        activityRef.current = next;
+        return next;
+      });
+    };
+
     const listen = async () => {
       if (!active || !stream) return;
       finalizing = false;
       setPartial('');
+      setActivity([]); // the next spoken turn gets a fresh feed
+      activityRef.current = [];
       // Show a brief connecting state — don't signal "listening" until the socket
       // is open and PCM is actually flowing, or we'd drop the start of speech.
       setPhase('connecting');
@@ -336,10 +354,13 @@ export function useCall(
               recall: getRecallEnabled(),
               ...(pb.withContext ? {} : { contextTurns: 0 }),
             },
-            { onToken },
+            { onToken, onStatus: onToolEvent },
             streamAbort.signal,
           );
-          if (res.id != null) leafId = res.id; // continue off the new branch
+          if (res.id != null) {
+            leafId = res.id; // continue off the new branch
+            saveTurnSources(res.id, activityRef.current);
+          }
           // Graduation signal: the app promotes the seed this forked from.
           onBranchCreatedRef.current?.(pb.turnId);
         } else {
@@ -352,12 +373,15 @@ export function useCall(
               // Tools (web/notes/recall) on voice turns — same toggle as text.
               recall: getRecallEnabled(),
             },
-            // Voice-specific rendering of tool events is handled server-side
-            // (spoken citations, drafts announced verbally) — tokens suffice.
-            { onToken },
+            // Other voice event rendering is server-side (spoken citations,
+            // drafts announced verbally); tool activity shows in the call UI.
+            { onToken, onStatus: onToolEvent },
             streamAbort.signal,
           );
-          if (res.id != null) leafId = res.id;
+          if (res.id != null) {
+            leafId = res.id;
+            saveTurnSources(res.id, activityRef.current);
+          }
         }
         queue?.finish();
       } catch (err) {
@@ -495,6 +519,7 @@ export function useCall(
     spokenChars,
     speakBase,
     failedRanges,
+    activity,
     error,
     logs,
     endTurn,
