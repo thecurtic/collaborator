@@ -708,6 +708,33 @@ PUT /api/model    { "model_id": "qwen/qwen3-30b-a3b", "force"?: false }
 > (+ `recall.embedding_model`) to route embeddings through LM Studio instead. Recall
 > is best-effort — if embedding/synthesis fails, the turn proceeds without a block.
 
+### 15. Manual Web Search (search screen)
+
+```
+GET /api/search?q=<query>&limit=<1-20>
+-> 200 {
+     "query": "collaborator chat",
+     "results": [{"title": "…", "url": "https://…", "snippet": "…", "engine": "mojeek"}],
+     "answers":   ["…"],                       // sometimes (SearXNG direct answers)
+     "infoboxes": [{"title": "…", "content": "…"}]   // sometimes
+   }
+```
+
+User-driven search through the same private SearXNG instance the agent's
+`web_search` tool uses (same privacy path — queries leave only via the search VM).
+**Independent of the LLM tool loop**: works even when `tools.enabled` is false, and
+never touches conversations, recall, or the LLM.
+
+- `q` (required): the search query. `400` when blank.
+- `limit` (optional): max results, clamped to 1–20; defaults to the server's
+  `tools.web_search.results` (5).
+- `503` — search not configured on the server (`tools.web_search.url` unset).
+- `502` — the search backend failed; `detail` carries the reason, including
+  per-engine failures (e.g. `"web search failed — no engines responded (brave:
+  too many requests; …)"`). Show it — a failed search must not render as
+  "no results".
+- Zero hits with a healthy backend is `200 {"results": []}`.
+
 ---
 
 ## Data Models

@@ -232,6 +232,57 @@ def test_final_round_nudge():
     print("✓ forced final round carries the answer-in-prose nudge, tools dropped")
 
 
+def test_manual_search_endpoint():
+    """GET /api/search: user-driven search, independent of the tool loop."""
+    from starlette.testclient import TestClient
+    c = TestClient(main.app)
+    cfg = config.get_config._config
+    orig_url = cfg["tools"]["web_search"].get("url")
+
+    # Unconfigured -> 503; blank query -> 400.
+    cfg["tools"]["web_search"]["url"] = None
+    assert c.get("/api/search", params={"q": "x"}).status_code == 503
+    cfg["tools"]["web_search"]["url"] = "http://searx.test"
+    try:
+        assert c.get("/api/search", params={"q": "   "}).status_code == 400
+
+        class FakeResp:
+            def raise_for_status(self): pass
+            def json(self):
+                return {"results": [{"title": f"R{i}", "url": f"https://e.com/{i}",
+                                     "content": "snippet", "engine": "mojeek"}
+                                    for i in range(30)],
+                        "answers": ["direct answer"]}
+        orig_get = inference.requests.get
+        inference.requests.get = lambda *a, **k: FakeResp()
+        try:
+            r = c.get("/api/search", params={"q": "collaborator", "limit": 2})
+            assert r.status_code == 200
+            body = r.json()
+            assert body["query"] == "collaborator"
+            assert len(body["results"]) == 2
+            assert body["results"][0]["title"] == "R0"
+            assert body["answers"] == ["direct answer"]
+
+            # limit clamps to 20; omitted limit falls back to config (5).
+            assert len(c.get("/api/search", params={"q": "x", "limit": 999}).json()["results"]) == 20
+            assert len(c.get("/api/search", params={"q": "x"}).json()["results"]) == 5
+
+            # Backend failure -> 502 with the reason.
+            class DownResp(FakeResp):
+                def json(self):
+                    return {"results": [], "answers": [],
+                            "unresponsive_engines": [["brave", "CAPTCHA"]]}
+            inference.requests.get = lambda *a, **k: DownResp()
+            r = c.get("/api/search", params={"q": "x"})
+            assert r.status_code == 502 and "no engines responded" in r.json()["detail"]
+        finally:
+            inference.requests.get = orig_get
+    finally:
+        cfg["tools"]["web_search"]["url"] = orig_url
+    print("✓ GET /api/search: 400/503/502 paths + results, limit clamp, config default")
+
+
 if __name__ == "__main__":
     test_today_placeholder_substituted()
     test_parse_textual_tool_calls()
@@ -244,4 +295,5 @@ if __name__ == "__main__":
     test_final_round_tool_blob_suppressed()
     test_searxng_engine_failures_are_errors()
     test_final_round_nudge()
+    test_manual_search_endpoint()
     print("\n✓ All search UX tests passed!")

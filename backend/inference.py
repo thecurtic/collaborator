@@ -723,12 +723,13 @@ def synthesize_notes(tree: Dict, existing_notes: Optional[List[Dict]] = None) ->
 
 # --- Web search (SearXNG) ------------------------------------------------------
 
-def web_search_searxng(query: str) -> Dict:
+def web_search_searxng(query: str, limit: Optional[int] = None) -> Dict:
     """Query the configured SearXNG instance (JSON API) and return compact results.
 
     Config: tools.web_search {url (required to enable the tool), results, timeout,
     language, safesearch}. SearXNG must have the json format enabled in its
-    settings.yml (search.formats: [html, json]).
+    settings.yml (search.formats: [html, json]). `limit` overrides the configured
+    result cap per call (used by the manual GET /api/search endpoint).
     """
     wcfg = (_tools_config().get("web_search") or {})
     base = (wcfg.get("url") or "").rstrip("/")
@@ -750,7 +751,7 @@ def web_search_searxng(query: str) -> Dict:
     except Exception as e:
         return {"error": f"web search failed: {e}"}
 
-    limit = wcfg.get("results", 5)
+    limit = limit or wcfg.get("results", 5)
     out = {"results": [{
         "title": r.get("title"),
         "url": r.get("url"),

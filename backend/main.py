@@ -1470,6 +1470,41 @@ def _persist_config_override(section: str, key: str, value) -> None:
         yaml.dump(existing, f)
 
 
+@app.get("/api/search")
+async def manual_web_search(
+    q: str,
+    limit: Optional[int] = None,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """User-driven web search through the private SearXNG instance.
+
+    Independent of the LLM tool loop (works even when tools.enabled is false) —
+    this is the search-screen endpoint, not the agent's tool. Same backend and
+    privacy path as the web_search tool: queries leave only via the search VM.
+
+    Query params:
+    - **q**: the search query (required, non-empty)
+    - **limit**: max results, 1-20 (default: tools.web_search.results)
+
+    Returns {"query", "results": [{title,url,snippet,engine}], "answers"?,
+    "infoboxes"?}. 503 when search is unconfigured; 502 when the search backend
+    fails (e.g. all engines rate-limited) with the reason in detail.
+    """
+    _require_auth(passkey)
+    query = (q or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="q (search query) is required")
+    if not (config.get("tools", {}).get("web_search") or {}).get("url"):
+        raise HTTPException(status_code=503,
+                            detail="web search is not configured (tools.web_search.url)")
+    lim = max(1, min(limit, 20)) if limit else None
+    out = web_search_searxng(query, limit=lim)
+    if out.get("error"):
+        raise HTTPException(status_code=502, detail=out["error"])
+    out["query"] = query
+    return out
+
+
 @app.get("/api/models")
 async def list_models(
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
