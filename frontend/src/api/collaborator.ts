@@ -12,6 +12,7 @@ import type {
   SendMessageInput,
   SynthesisResult,
   TurnsPage,
+  WebSearch,
 } from '@/domain/models';
 import {
   toHealth,
@@ -41,6 +42,7 @@ import type {
   ApiSynthesisResponse,
   ApiTree,
   ApiTurnsResponse,
+  ApiWebSearchResponse,
   ApiWsTicket,
 } from './types';
 
@@ -332,6 +334,14 @@ export interface CollaboratorApi {
    */
   listPrompts(): Promise<PromptInfo[]>;
 
+  /**
+   * Manual (raw) web search via the private SearXNG instance — no LLM,
+   * nothing saved to any conversation. Errors matter to the UI: 502 = engines
+   * failed (detail has per-engine reasons — render as a failure, NOT "no
+   * results"); 503 = search not configured on this server.
+   */
+  searchWeb(q: string, limit?: number): Promise<WebSearch>;
+
   /** Current + available chat models (live from LM Studio; GET may 500). */
   getModels(): Promise<{ current: string; available: string[] }>;
   /**
@@ -548,6 +558,27 @@ class HttpCollaboratorApi implements CollaboratorApi {
       note: toNote(res.note),
       renamed: res.renamed === true,
       linksRewritten: res.links_rewritten ?? [],
+    };
+  }
+
+  async searchWeb(q: string, limit = 15): Promise<WebSearch> {
+    const search = new URLSearchParams({ q, limit: String(limit) });
+    const res = await request<ApiWebSearchResponse>(
+      `/api/search?${search.toString()}`,
+    );
+    return {
+      query: res.query ?? q,
+      results: (res.results ?? []).map((r) => ({
+        title: r.title || r.url,
+        url: r.url,
+        snippet: r.snippet ?? '',
+        engine: r.engine ?? '',
+      })),
+      answers: (res.answers ?? []).filter((a) => typeof a === 'string'),
+      infoboxes: (res.infoboxes ?? []).map((b) => ({
+        title: b.title ?? '',
+        content: b.content ?? '',
+      })),
     };
   }
 

@@ -21,6 +21,8 @@ interface ChatViewProps {
   onReviewDrafts: (runId: string | null) => void;
   /** Start a voice call (button lives in the composer). */
   onStartCall: () => void;
+  /** Prefill the composer (chats spawned from web search); nonce re-triggers. */
+  draftSeed?: { text: string; nonce: number } | null;
 }
 
 /** Plain-text export of a run of turns (for sharing the context window). */
@@ -81,6 +83,7 @@ export function ChatView({
   onBranchTargetChange,
   onReviewDrafts,
   onStartCall,
+  draftSeed = null,
 }: ChatViewProps) {
   const {
     path,
@@ -129,6 +132,12 @@ export function ChatView({
   const handleQuote = (text: string) => {
     composerRef.current?.appendQuote(quoteForReply(text));
   };
+
+  // Prefill from web search ("chat about this page" / "ask about query").
+  useEffect(() => {
+    if (draftSeed) composerRef.current?.setDraft(draftSeed.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftSeed?.nonce]);
 
   const handleScroll = () => {
     const el = scrollRef.current;

@@ -26,6 +26,7 @@ import { AppMenu } from '@/components/AppMenu';
 import { Button } from '@/components/ui/button';
 import { RenameSheet } from '@/components/RenameSheet';
 import { ReferencesView } from '@/features/reference/ReferencesView';
+import { WebSearchView } from '@/features/search/WebSearchView';
 import { useLongPress } from '@/lib/useLongPress';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
@@ -107,8 +108,14 @@ function AppShell() {
   const [tab, setTab] = useState<Tab>('conversations');
   // The chat screen is "pushed" over the tabs (back arrow returns to them).
   const [chatOpen, setChatOpen] = useState(false);
-  // References (prompt viewer) pushes over whatever is showing.
+  // References (prompt viewer) and Web Search push over whatever is showing.
   const [referencesOpen, setReferencesOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  // Composer prefill for chats spawned from search ("chat about this page").
+  const [chatDraft, setChatDraft] = useState<{
+    text: string;
+    nonce: number;
+  } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [callOpen, setCallOpen] = useState(false);
   // Tap-and-hold on the chat title → conversation actions.
@@ -219,6 +226,16 @@ function AppShell() {
     setChatOpen(true);
   };
 
+  // From Web Search: new seed chat with the URL/query pre-drafted — the user
+  // can add their question or just send (pasted URLs get auto-fetched).
+  const startChatWithDraft = (text: string) => {
+    setSearchOpen(false);
+    setReferencesOpen(false);
+    convo.startNewChat();
+    setChatOpen(true);
+    setChatDraft((prev) => ({ text, nonce: (prev?.nonce ?? 0) + 1 }));
+  };
+
   const handleDeleteSubtree = (turnId: number) => {
     if (
       window.confirm('Delete this branch and all its replies? This is permanent.')
@@ -265,19 +282,21 @@ function AppShell() {
     <div className="flex h-full flex-col">
       <header className="pt-safe px-safe border-b border-border">
         <div className="flex items-center gap-2 px-2 py-3">
-          {referencesOpen ? (
+          {referencesOpen || searchOpen ? (
             <>
               <Button
                 variant="ghost"
                 size="icon"
                 aria-label="Back"
-                onClick={() => setReferencesOpen(false)}
+                onClick={() =>
+                  searchOpen ? setSearchOpen(false) : setReferencesOpen(false)
+                }
                 className="h-8 w-8 shrink-0"
               >
                 <ChevronLeft className="h-5 w-5" />
               </Button>
               <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                References
+                {searchOpen ? 'Web Search' : 'References'}
               </span>
             </>
           ) : chatOpen ? (
@@ -312,9 +331,17 @@ function AppShell() {
           <div className="flex shrink-0 items-center gap-1">
             <AppMenu
               onOpenSettings={() => setSettingsOpen(true)}
-              onOpenReferences={() => setReferencesOpen(true)}
+              onOpenReferences={() => {
+                setSearchOpen(false);
+                setReferencesOpen(true);
+              }}
+              onOpenWebSearch={() => {
+                setReferencesOpen(false);
+                setSearchOpen(true);
+              }}
               onSignOut={() => {
                 setReferencesOpen(false);
+                setSearchOpen(false);
                 setChatOpen(false);
                 signOut();
               }}
@@ -426,6 +453,8 @@ function AppShell() {
           </div>
         ) : gate === 'locked' ? (
           <PasskeyScreen />
+        ) : searchOpen ? (
+          <WebSearchView onStartChat={startChatWithDraft} />
         ) : referencesOpen ? (
           <ReferencesView />
         ) : chatOpen ? (
@@ -435,6 +464,7 @@ function AppShell() {
             onBranchTargetChange={setBranchTarget}
             onReviewDrafts={openInbox}
             onStartCall={() => setCallOpen(true)}
+            draftSeed={chatDraft}
           />
         ) : tab === 'notes' ? (
           <NotesView
@@ -505,14 +535,14 @@ function AppShell() {
       </main>
 
       {/* Errors on tab screens (the chat screen shows its own strip). */}
-      {!chatOpen && !referencesOpen && gate === 'open' && convo.error && (
+      {!chatOpen && !referencesOpen && !searchOpen && gate === 'open' && convo.error && (
         <div className="border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-center text-sm text-destructive">
           {convo.error}
         </div>
       )}
 
-      {/* Bottom tabs — hidden while a chat or references screen is open. */}
-      {!chatOpen && !referencesOpen && gate === 'open' && (
+      {/* Bottom tabs — hidden while a pushed screen (chat/references/search) is open. */}
+      {!chatOpen && !referencesOpen && !searchOpen && gate === 'open' && (
         <nav className="pb-safe px-safe border-t border-border" aria-label="Main">
           <div className="mx-auto flex max-w-3xl">
             <TabButton

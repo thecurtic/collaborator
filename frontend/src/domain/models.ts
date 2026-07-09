@@ -207,6 +207,22 @@ export interface ReindexResult {
   total: number;
 }
 
+/** A raw web-search hit (manual search screen; private SearXNG). */
+export interface WebSearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+  engine: string;
+}
+
+export interface WebSearch {
+  query: string;
+  results: WebSearchResult[];
+  /** SearXNG direct answers (sometimes present). */
+  answers: string[];
+  infoboxes: { title: string; content: string }[];
+}
+
 /**
  * A prompt building block as the backend runtime resolves it (References
  * viewer). READ-ONLY by design — the backend shelved editability, so the UI

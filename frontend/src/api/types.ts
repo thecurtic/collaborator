@@ -221,6 +221,22 @@ export interface ApiPromptsResponse {
   count: number;
 }
 
+/** One GET /api/search result (private SearXNG, same path as the agent tool). */
+export interface ApiWebSearchResult {
+  title: string;
+  url: string;
+  snippet?: string;
+  engine?: string;
+}
+
+/** GET /api/search — manual web search (no LLM; nothing saved to convos). */
+export interface ApiWebSearchResponse {
+  query: string;
+  results: ApiWebSearchResult[];
+  answers?: string[];
+  infoboxes?: { title?: string; content?: string }[];
+}
+
 /** GET /api/models — live from LM Studio (may 500 if the box is down). */
 export interface ApiModelsResponse {
   current: string;

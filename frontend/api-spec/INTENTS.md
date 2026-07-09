@@ -630,6 +630,23 @@ Related injection containment for link-following: per-turn fetch budget
 `same_domain_only`, tiny write surface (only `propose_note` → pending draft), and
 every fetched URL is shown live to the user as a status event.
 
+## Decision: Web Search Stays on the Search VM (SearXNG-Only)
+
+Decided 2026-07-09. When SearXNG's engines were all rate-limited/CAPTCHA-walled,
+direct search-API integration from the backend (e.g. Brave Search API as a
+`web_search` provider/fallback) was proposed and **rejected**: it would send
+queries clearnet from the collaborator machine, breaking the boundary that all
+search egress leaves only from the search VM through its VPN. Search reliability
+(engine diversification, exit-IP reputation, rate-limit tuning) is an ops concern
+on the search VM — not a backend code concern. Don't re-propose in-backend search
+providers; the backend's job is only to surface failures honestly (it reports
+"no engines responded" as a search error, with per-engine reasons, since 0720fd7).
+
+A CAPTCHA-relay scheme (Playwright on the search VM streaming challenges to the
+frontend for human solving) was also considered and rejected as poor ROI: modern
+CAPTCHAs are origin-bound JS widgets requiring full remote-browser streaming, and
+on a burned IP the solves would be constant and block mid-turn UX.
+
 ## Future Considerations (User-Defined)
 
 - [ ] Priority levels for recall

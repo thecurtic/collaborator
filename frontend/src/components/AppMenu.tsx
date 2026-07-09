@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  Globe,
   LogOut,
   Menu,
   Settings as SettingsIcon,
@@ -37,10 +38,12 @@ function MenuItem({
 export function AppMenu({
   onOpenSettings,
   onOpenReferences,
+  onOpenWebSearch,
   onSignOut,
 }: {
   onOpenSettings: () => void;
   onOpenReferences: () => void;
+  onOpenWebSearch: () => void;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -84,6 +87,9 @@ export function AppMenu({
             </MenuItem>
             <MenuItem icon={BookOpen} onClick={() => pick(onOpenReferences)}>
               References
+            </MenuItem>
+            <MenuItem icon={Globe} onClick={() => pick(onOpenWebSearch)}>
+              Web Search
             </MenuItem>
             <div className="my-1 border-t border-border" />
             <MenuItem icon={LogOut} onClick={() => pick(onSignOut)}>
