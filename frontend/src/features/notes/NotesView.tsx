@@ -130,17 +130,17 @@ function NoteScreen({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-1 border-b border-border px-2 py-2">
+      <div className="flex items-center gap-1 border-b border-border px-2 py-3">
         <Button
           variant="ghost"
           size="icon"
           aria-label="Back to notes"
           onClick={onBack}
-          className="h-8 w-8"
+          className="h-9 w-9"
         >
           <ChevronLeft className="h-5 w-5" />
         </Button>
-        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{title}</h2>
+        <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</h2>
         {note && !draft && (
           <Button
             variant="ghost"
@@ -400,8 +400,8 @@ export function NotesView({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
-        <h2 className="text-sm font-semibold">Notes</h2>
+      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+        <h2 className="text-2xl font-semibold">Notes</h2>
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"

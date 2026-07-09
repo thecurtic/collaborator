@@ -60,9 +60,9 @@ export function AppMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="h-8 w-8"
+        className="h-10 w-10"
       >
-        <Menu className="h-4 w-4" />
+        <Menu className="h-5 w-5" />
       </Button>
       {open && (
         <>

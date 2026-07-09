@@ -84,12 +84,12 @@ function TabButton({
       aria-label={badge > 0 ? `${label} (${badge} pending)` : label}
       aria-current={active ? 'page' : undefined}
       className={
-        'flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px] font-medium ' +
+        'flex flex-1 flex-col items-center gap-1 py-3 text-[11px] font-medium ' +
         (active ? 'text-primary' : 'text-muted-foreground hover:text-foreground')
       }
     >
       <span className="relative">
-        <Icon className="h-5 w-5" />
+        <Icon className="h-6 w-6" />
         {badge > 0 && (
           <span className="absolute -right-2.5 -top-1 rounded-full bg-primary px-1 text-[9px] font-semibold leading-[14px] text-primary-foreground">
             {badge}
@@ -264,7 +264,7 @@ function AppShell() {
   return (
     <div className="flex h-full flex-col">
       <header className="pt-safe px-safe border-b border-border">
-        <div className="flex items-center gap-2 px-2 py-2">
+        <div className="flex items-center gap-2 px-2 py-3">
           {referencesOpen ? (
             <>
               <Button
@@ -452,14 +452,21 @@ function AppShell() {
             Loading…
           </div>
         ) : tab === 'conversations' ? (
-          <RootList
-            roots={treeRoots}
-            emptyTitle="No conversations yet"
-            emptyHint="Chats graduate here when you promote them (or branch from them)."
-            onOpen={openRoot}
-            onRename={(id, name) => void convo.renameTurn(id, name)}
-            onSynthesize={startSynthesis}
-          />
+          <div className="flex h-full flex-col">
+            <div className="border-b border-border px-4 py-3">
+              <h2 className="text-2xl font-semibold">Conversations</h2>
+            </div>
+            <div className="min-h-0 flex-1">
+              <RootList
+                roots={treeRoots}
+                emptyTitle="No conversations yet"
+                emptyHint="Chats graduate here when you promote them (or branch from them)."
+                onOpen={openRoot}
+                onRename={(id, name) => void convo.renameTurn(id, name)}
+                onSynthesize={startSynthesis}
+              />
+            </div>
+          </div>
         ) : tab === 'map' ? (
           <TreeMap
             tree={mapTree}
@@ -471,18 +478,9 @@ function AppShell() {
             onSynthesize={startSynthesis}
           />
         ) : (
-          <div className="flex h-full flex-col">
-            <div className="flex items-center justify-between border-b border-border px-4 py-2">
-              <h2 className="text-sm font-semibold">Chats</h2>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={openNewChat}
-                className="h-8 gap-1.5 px-2.5 text-primary"
-              >
-                <Plus className="h-4 w-4" />
-                New chat
-              </Button>
+          <div className="relative flex h-full flex-col">
+            <div className="border-b border-border px-4 py-3">
+              <h2 className="text-2xl font-semibold">Chats</h2>
             </div>
             <div className="min-h-0 flex-1">
               <RootList
@@ -494,6 +492,14 @@ function AppShell() {
                 onPromote={(id) => void convo.promote(id)}
               />
             </div>
+            {/* Floating pill, sitting just above the tab bar. */}
+            <Button
+              onClick={openNewChat}
+              className="absolute bottom-4 right-4 h-12 gap-2 rounded-full px-5 shadow-lg"
+            >
+              <Plus className="h-5 w-5" />
+              New chat
+            </Button>
           </div>
         )}
       </main>

@@ -50,17 +50,17 @@ export function ReferencesView() {
   if (detail) {
     return (
       <div className="flex h-full flex-col">
-        <div className="flex items-center gap-1 border-b border-border px-2 py-2">
+        <div className="flex items-center gap-1 border-b border-border px-2 py-3">
           <Button
             variant="ghost"
             size="icon"
             aria-label="Back to references"
             onClick={() => setSelected(null)}
-            className="h-8 w-8"
+            className="h-9 w-9"
           >
             <ChevronLeft className="h-5 w-5" />
           </Button>
-          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">
+          <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">
             {detail.name}
           </h2>
           <SourceBadge prompt={detail} />
@@ -88,9 +88,9 @@ export function ReferencesView() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-border px-4 py-2">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div>
-          <h2 className="text-sm font-semibold">References</h2>
+          <h2 className="text-2xl font-semibold">References</h2>
           <p className="text-xs text-muted-foreground">
             The prompts the model actually receives — live from the backend,
             read-only.

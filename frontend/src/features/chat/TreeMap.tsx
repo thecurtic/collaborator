@@ -1,4 +1,4 @@
-import { Maximize2, NotebookPen, Trash2 } from 'lucide-react';
+import { NotebookPen, Trash2 } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import type { ConversationTree, TreeNode } from '@/domain/models';
@@ -396,17 +396,8 @@ export function TreeMap({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between border-b border-border px-4 py-2">
-        <h2 className="text-sm font-semibold">Conversations</h2>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Reset view"
-          onClick={() => setView({ x: 0, y: 0, scale: 1 })}
-          className="h-8 w-8"
-        >
-          <Maximize2 className="h-4 w-4" />
-        </Button>
+      <header className="border-b border-border px-4 py-3">
+        <h2 className="text-2xl font-semibold">Conversation Trees</h2>
       </header>
 
       <div

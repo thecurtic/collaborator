@@ -224,17 +224,17 @@ export function InboxView({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-1 border-b border-border px-2 py-2">
+      <div className="flex items-center gap-1 border-b border-border px-2 py-3">
         <Button
           variant="ghost"
           size="icon"
           aria-label="Back to notes"
           onClick={onBack}
-          className="h-8 w-8"
+          className="h-9 w-9"
         >
           <ChevronLeft className="h-5 w-5" />
         </Button>
-        <h2 className="text-sm font-semibold">Drafts inbox</h2>
+        <h2 className="text-2xl font-semibold">Drafts inbox</h2>
         {runId && (
           <button
             type="button"
