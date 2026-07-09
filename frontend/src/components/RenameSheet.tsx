@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import { useModalA11y } from '@/lib/useModalA11y';
 
@@ -29,7 +30,9 @@ export function RenameSheet({
     onClose();
   };
 
-  return (
+  // Portaled for the same reason as ActionSheet: callers may sit inside
+  // reduced-opacity/stacking contexts.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       <button
         aria-label="Cancel"
@@ -59,6 +62,7 @@ export function RenameSheet({
           <Button onClick={commit}>Save</Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

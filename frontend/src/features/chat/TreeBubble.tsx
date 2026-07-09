@@ -5,7 +5,9 @@ import {
   Copy,
   GitBranch,
   Globe,
+  Layers,
   Loader2,
+  MessageSquare,
   RefreshCw,
   Reply,
   Share2,
@@ -14,6 +16,8 @@ import {
   Volume2,
 } from 'lucide-react';
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
+import { ActionSheet } from '@/components/ActionSheet';
 import { ActivityRow } from '@/components/ActivityRow';
 import { Markdown } from '@/components/Markdown';
 import { getTurnSources } from './sourcesStore';
@@ -146,35 +150,39 @@ function SourcesButton({ turnId }: { turnId: number }) {
         <Globe className="h-3 w-3" />
         Sources · {sources.length}
       </button>
-      {open && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
-          <button
-            aria-label="Close sources"
-            onClick={() => setOpen(false)}
-            className="absolute inset-0 bg-black/60"
-          />
-          <div
-            ref={panelRef}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Sources"
-            tabIndex={-1}
-            className="pb-safe relative max-h-[70vh] w-full overflow-y-auto rounded-t-2xl border border-border bg-card p-4 outline-none sm:max-w-sm sm:rounded-2xl"
-          >
-            <p className="mb-3 text-sm font-medium">
-              What the model consulted for this reply
-            </p>
-            <div className="space-y-2">
-              {sources.map((item) => (
-                <ActivityRow key={item.id} item={item} />
-              ))}
+      {open &&
+        // Portaled: this button lives in the bubble's dimmed (opacity-60)
+        // footer, which would ghost and mis-stack an overlay rendered here.
+        createPortal(
+          <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+            <button
+              aria-label="Close sources"
+              onClick={() => setOpen(false)}
+              className="absolute inset-0 bg-black/60"
+            />
+            <div
+              ref={panelRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Sources"
+              tabIndex={-1}
+              className="pb-safe relative max-h-[70vh] w-full overflow-y-auto rounded-t-2xl border border-border bg-card p-4 outline-none sm:max-w-sm sm:rounded-2xl"
+            >
+              <p className="mb-3 text-sm font-medium">
+                What the model consulted for this reply
+              </p>
+              <div className="space-y-2">
+                {sources.map((item) => (
+                  <ActivityRow key={item.id} item={item} />
+                ))}
+              </div>
+              <p className="mt-3 text-[10px] text-muted-foreground">
+                Recorded on this device when the reply streamed.
+              </p>
             </div>
-            <p className="mt-3 text-[10px] text-muted-foreground">
-              Recorded on this device when the reply streamed.
-            </p>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
@@ -201,16 +209,11 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/** Share button with a tiny scope popover: this turn / the context window. */
+/** Share button: the same bottom ActionSheet as everywhere else in the app. */
 function ShareButton({ onShare }: { onShare: (scope: ShareScope) => void }) {
   const [open, setOpen] = useState(false);
-  const panelRef = useModalA11y<HTMLDivElement>(open, () => setOpen(false));
-  const pick = (scope: ShareScope) => {
-    setOpen(false);
-    onShare(scope);
-  };
   return (
-    <span className="relative">
+    <>
       <Button
         variant="ghost"
         size="icon"
@@ -218,45 +221,29 @@ function ShareButton({ onShare }: { onShare: (scope: ShareScope) => void }) {
         title="Share"
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen(true)}
         className="-my-1 h-9 w-9 opacity-70 hover:opacity-100"
       >
         <Share2 className="h-4 w-4" />
       </Button>
-      {open && (
-        <>
-          <button
-            aria-label="Close share menu"
-            onClick={() => setOpen(false)}
-            className="fixed inset-0 z-40 cursor-default"
-          />
-          <div
-            ref={panelRef}
-            role="menu"
-            aria-label="Share"
-            tabIndex={-1}
-            className="absolute bottom-full right-0 z-50 mb-1 w-44 rounded-xl border border-border bg-card py-1 shadow-lg outline-none"
-          >
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => pick('turn')}
-              className="w-full px-3.5 py-2 text-left text-sm hover:bg-muted"
-            >
-              This turn
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => pick('context')}
-              className="w-full px-3.5 py-2 text-left text-sm hover:bg-muted"
-            >
-              Context window
-            </button>
-          </div>
-        </>
-      )}
-    </span>
+      <ActionSheet
+        open={open}
+        title="Share"
+        actions={[
+          {
+            label: 'This turn',
+            icon: MessageSquare,
+            onSelect: () => onShare('turn'),
+          },
+          {
+            label: 'Context window',
+            icon: Layers,
+            onSelect: () => onShare('context'),
+          },
+        ]}
+        onClose={() => setOpen(false)}
+      />
+    </>
   );
 }
 

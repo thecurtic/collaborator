@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import { createPortal } from 'react-dom';
 import { useModalA11y } from '@/lib/useModalA11y';
 import { cn } from '@/lib/utils';
 
@@ -28,7 +29,10 @@ export function ActionSheet({
   const panelRef = useModalA11y<HTMLDivElement>(open, onClose);
   if (!open) return null;
 
-  return (
+  // Portal to <body>: callers may sit inside reduced-opacity/stacking
+  // contexts (e.g. a bubble's dimmed footer) that would ghost or clip a
+  // fixed overlay rendered in place.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       <button
         aria-label="Close"
@@ -74,6 +78,7 @@ export function ActionSheet({
           </button>
         ))}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
