@@ -9,9 +9,10 @@ import {
 import { holdPwaUpdates } from '@/pwa';
 import { saveTurnSources } from '@/features/chat/sourcesStore';
 import { foldToolEvent } from '@/features/chat/toolActivity';
+import { withTimeout } from '@/lib/utils';
 import type { ToolActivity } from '@/domain/models';
 import { chimeListenStart, chimeListenStop } from './chime';
-import { DeviceTranscriber } from './deviceTranscriber';
+import { DeviceTranscriber, resetDeviceWorker } from './deviceTranscriber';
 import { listenForWords, warmUpKeywordSpotter } from './keywordSpotter';
 import { startPcmStream, type PcmStream } from './pcmStreamer';
 import type { BranchTarget } from '@/features/chat/branchTarget';
@@ -214,15 +215,21 @@ export function useCall(
       // Show a brief connecting state — don't signal "listening" until the socket
       // is open and PCM is actually flowing, or we'd drop the start of speech.
       setPhase('connecting');
+      const device = getSttEngine() === 'device';
       try {
         const onPartial = (t: string) => {
           if (active && !finalizing) setPartial(t);
         };
-        transcriber =
-          getSttEngine() === 'device'
-            ? new DeviceTranscriber(onPartial)
-            : new TranscriptionStream(onPartial);
-        await transcriber.ready();
+        transcriber = device
+          ? new DeviceTranscriber(onPartial)
+          : new TranscriptionStream(onPartial);
+        // Never hang in "connecting" — fail into the error phase, where the
+        // Try again button re-runs listen() with a fresh transcriber.
+        await withTimeout(
+          transcriber.ready(),
+          device ? 60_000 : 15_000,
+          'speech engine start timed out',
+        );
         if (!active) {
           transcriber.close();
           transcriber = null;
@@ -230,10 +237,14 @@ export function useCall(
         }
         pcm = await startPcmStream(stream, (buf) => transcriber?.sendPcm(buf));
       } catch (e) {
+        transcriber?.close();
+        transcriber = null;
+        // A hung device worker would hang every retry — rebuild it next time.
+        if (device) resetDeviceWorker();
         if (!active) return;
         log(`stream start FAIL: ${e instanceof Error ? e.message : e}`);
         setPhase('error');
-        setError('Could not open the transcription stream.');
+        setError('Could not open the transcription stream. Try again.');
         return;
       }
       if (!active) {

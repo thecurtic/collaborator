@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSttEngine } from '@/features/settings/uiPrefs';
 import { holdPwaUpdates } from '@/pwa';
+import { withTimeout } from '@/lib/utils';
 import { chimeListenStart, chimeListenStop } from './chime';
-import { DeviceTranscriber } from './deviceTranscriber';
+import { DeviceTranscriber, resetDeviceWorker } from './deviceTranscriber';
 import { startPcmStream, type PcmStream } from './pcmStreamer';
 import { TranscriptionStream } from './transcriptionStream';
+
+// ready() must not hang forever (stalled model download / dead socket) —
+// "Connecting…" without end is worse than an error with a retry. The device
+// budget is generous because first use downloads the Whisper model.
+const DEVICE_READY_MS = 60_000;
+const SERVER_READY_MS = 15_000;
 
 export type DictationStatus = 'idle' | 'starting' | 'listening' | 'finishing';
 
@@ -81,12 +88,23 @@ export function useDictation() {
       const onPartial = (t: string) => {
         if (tokenRef.current === token) setPartial(t);
       };
-      const transcriber =
-        getSttEngine() === 'device'
-          ? new DeviceTranscriber(onPartial)
-          : new TranscriptionStream(onPartial);
+      const device = getSttEngine() === 'device';
+      const transcriber = device
+        ? new DeviceTranscriber(onPartial)
+        : new TranscriptionStream(onPartial);
       try {
-        await transcriber.ready();
+        try {
+          await withTimeout(
+            transcriber.ready(),
+            device ? DEVICE_READY_MS : SERVER_READY_MS,
+            'The speech engine took too long to start — try again.',
+          );
+        } catch (err) {
+          // A hung device worker would hang every future attempt too — kill
+          // the singleton so the retry rebuilds from scratch.
+          if (device) resetDeviceWorker();
+          throw err;
+        }
         if (tokenRef.current !== token) {
           transcriber.close();
           stream.getTracks().forEach((t) => t.stop());

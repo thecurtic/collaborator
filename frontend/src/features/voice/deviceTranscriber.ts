@@ -16,6 +16,19 @@ let worker: Worker | null = null;
 let readyPromise: Promise<void> | null = null;
 let activeInstance: DeviceTranscriber | null = null;
 
+/**
+ * Kill the resident worker so the next attempt rebuilds from scratch. Needed
+ * when init HANGS (never resolves, never rejects — e.g. a stalled WebGPU
+ * probe or model download): the cached pending readyPromise would otherwise
+ * hang every future attempt until a full page reload.
+ */
+export function resetDeviceWorker(): void {
+  worker?.terminate();
+  worker = null;
+  readyPromise = null;
+  activeInstance = null;
+}
+
 function ensureWorker(): { worker: Worker; ready: Promise<void> } {
   if (worker && readyPromise) return { worker, ready: readyPromise };
 

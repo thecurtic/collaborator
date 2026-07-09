@@ -83,9 +83,20 @@ async function load(device: 'webgpu' | 'wasm'): Promise<Asr> {
   })) as unknown as Asr;
 }
 
+function timeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) =>
+      setTimeout(() => rej(new Error('init timed out')), ms),
+    ),
+  ]);
+}
+
 async function init() {
   try {
-    asr = await load('webgpu');
+    // WebGPU init can HANG (not reject) on some devices — race it so we fall
+    // back to WASM instead of never answering.
+    asr = await timeout(load('webgpu'), 30_000);
     postMessage({ type: 'ready', device: 'webgpu' });
   } catch {
     try {
