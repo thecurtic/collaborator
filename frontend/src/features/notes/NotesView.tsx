@@ -193,6 +193,37 @@ function NoteScreen({
           </>
         )}
       </div>
+      {draft && note ? (
+        // Edit mode fills the screen (body textarea takes the remainder).
+        <div className="min-h-0 flex-1">
+          <div className="mx-auto flex h-full max-w-3xl flex-col gap-2 px-4 py-3">
+            {saveError && <p className="text-xs text-destructive">{saveError}</p>}
+            <input
+              value={draft.title}
+              onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+              aria-label="Note title"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-base font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
+            />
+            <input
+              value={draft.tagsText}
+              onChange={(e) => setDraft({ ...draft, tagsText: e.target.value })}
+              placeholder="tags, comma, separated"
+              aria-label="Tags"
+              className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <textarea
+              value={draft.body}
+              onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+              aria-label="Note body"
+              className="min-h-0 w-full flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <p className="text-xs text-muted-foreground">
+              Renaming is safe — notes that link here get their links rewritten
+              automatically.
+            </p>
+          </div>
+        </div>
+      ) : (
       <div className="flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto max-w-3xl px-4 py-4">
           {error ? (
@@ -204,38 +235,6 @@ function NoteScreen({
             <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading note…
-            </div>
-          ) : draft ? (
-            <div className="space-y-2">
-              <input
-                value={draft.title}
-                onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-                aria-label="Note title"
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-base font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
-              />
-              <input
-                value={draft.tagsText}
-                onChange={(e) =>
-                  setDraft({ ...draft, tagsText: e.target.value })
-                }
-                placeholder="tags, comma, separated"
-                aria-label="Tags"
-                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-              <textarea
-                value={draft.body}
-                onChange={(e) => setDraft({ ...draft, body: e.target.value })}
-                rows={14}
-                aria-label="Note body"
-                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-              {saveError && (
-                <p className="text-xs text-destructive">{saveError}</p>
-              )}
-              <p className="text-xs text-muted-foreground">
-                Renaming is safe — notes that link here get their links
-                rewritten automatically.
-              </p>
             </div>
           ) : (
             <>
@@ -294,6 +293,7 @@ function NoteScreen({
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -403,7 +403,10 @@ export function NotesView({
 
   if (screen.kind === 'graph') {
     return (
-      <GraphView onBack={() => setScreen({ kind: 'list' })} onOpenNote={openNote} />
+      <GraphView
+        onClose={() => setScreen({ kind: 'list' })}
+        onOpenNote={openNote}
+      />
     );
   }
 

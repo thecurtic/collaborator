@@ -30,16 +30,16 @@ describe('buildEdges', () => {
 });
 
 describe('layoutGraph', () => {
-  it('is deterministic and keeps nodes inside the canvas', () => {
+  it('is deterministic and keeps nodes inside the cube', () => {
     const notes = [meta('A', ['B']), meta('B', ['C']), meta('C'), meta('D')];
     const g1 = layoutGraph(notes);
     const g2 = layoutGraph(notes);
     expect(g1.nodes).toEqual(g2.nodes);
     for (const node of g1.nodes) {
-      expect(node.x).toBeGreaterThanOrEqual(0);
-      expect(node.x).toBeLessThanOrEqual(g1.size);
-      expect(node.y).toBeGreaterThanOrEqual(0);
-      expect(node.y).toBeLessThanOrEqual(g1.size);
+      for (const v of [node.x, node.y, node.z]) {
+        expect(v).toBeGreaterThanOrEqual(0);
+        expect(v).toBeLessThanOrEqual(g1.size);
+      }
     }
   });
 
@@ -47,7 +47,11 @@ describe('layoutGraph', () => {
     const notes = [meta('A', ['B']), meta('B'), meta('Lonely')];
     const g = layoutGraph(notes);
     const d = (i: number, j: number) =>
-      Math.hypot(g.nodes[i].x - g.nodes[j].x, g.nodes[i].y - g.nodes[j].y);
+      Math.hypot(
+        g.nodes[i].x - g.nodes[j].x,
+        g.nodes[i].y - g.nodes[j].y,
+        g.nodes[i].z - g.nodes[j].z,
+      );
     expect(d(0, 1)).toBeLessThan(d(0, 2));
     expect(d(0, 1)).toBeLessThan(d(1, 2));
   });

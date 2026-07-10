@@ -7,6 +7,7 @@ import {
   getSttEngine,
 } from '@/features/settings/uiPrefs';
 import { holdPwaUpdates } from '@/pwa';
+import { saveDraftOrigins } from '@/features/notes/draftOrigins';
 import { saveTurnSources } from '@/features/chat/sourcesStore';
 import { foldToolEvent } from '@/features/chat/toolActivity';
 import { withTimeout } from '@/lib/utils';
@@ -348,6 +349,12 @@ export function useCall(
         updateTurn(aid, full);
         queue?.push(c);
       };
+      // Collect proposed-draft ids so they can be attributed to this turn
+      // (the backend announces them verbally; we just record provenance).
+      const proposedIds: number[] = [];
+      const onDrafts = (drafts: { id: number }[]) => {
+        for (const d of drafts) proposedIds.push(d.id);
+      };
       try {
         if (pendingBranch) {
           const pb = pendingBranch;
@@ -365,12 +372,13 @@ export function useCall(
               recall: getRecallEnabled(),
               ...(pb.withContext ? {} : { contextTurns: 0 }),
             },
-            { onToken, onStatus: onToolEvent },
+            { onToken, onStatus: onToolEvent, onDrafts },
             streamAbort.signal,
           );
           if (res.id != null) {
             leafId = res.id; // continue off the new branch
             saveTurnSources(res.id, activityRef.current);
+            saveDraftOrigins(proposedIds, res.id);
           }
           // Graduation signal: the app promotes the seed this forked from.
           onBranchCreatedRef.current?.(pb.turnId);
@@ -386,12 +394,13 @@ export function useCall(
             },
             // Other voice event rendering is server-side (spoken citations,
             // drafts announced verbally); tool activity shows in the call UI.
-            { onToken, onStatus: onToolEvent },
+            { onToken, onStatus: onToolEvent, onDrafts },
             streamAbort.signal,
           );
           if (res.id != null) {
             leafId = res.id;
             saveTurnSources(res.id, activityRef.current);
+            saveDraftOrigins(proposedIds, res.id);
           }
         }
         queue?.finish();

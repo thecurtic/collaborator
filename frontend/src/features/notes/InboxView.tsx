@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
 import type { NoteDraft } from '@/domain/models';
+import { getDraftOrigin } from './draftOrigins';
 import { NoteBody } from './NoteBody';
 
 interface InboxViewProps {
@@ -100,7 +101,10 @@ function DraftView({
     }
   };
 
-  const sourceTurn = draft.sourceTurns[0] ?? draft.treeRootId;
+  // Server attribution first (synthesis drafts); chat-proposed drafts fall
+  // back to the client-side origin recorded when the proposal streamed.
+  const sourceTurn =
+    draft.sourceTurns[0] ?? getDraftOrigin(draft.id) ?? draft.treeRootId;
   const tags = tagsText
     .split(',')
     .map((t) => t.trim())
@@ -133,87 +137,86 @@ function DraftView({
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto overscroll-contain">
-        <div className="mx-auto max-w-3xl px-4 py-4">
-          {draft.duplicateOf.length > 0 && (
-            <div className="mb-3 space-y-1">
-              {draft.duplicateOf.map((d) => (
-                <button
-                  key={d.title}
-                  type="button"
-                  onClick={() => onOpenNote(d.title)}
-                  className="flex w-full items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-left text-xs text-amber-700 hover:bg-amber-500/20"
-                >
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                  <span className="min-w-0 truncate">
-                    Possible duplicate of{' '}
-                    <span className="font-medium">{d.title}</span> (
-                    {Math.round(d.score * 100)}%) — tap to compare
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {editing ? (
-            <div className="space-y-2">
-              <input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                aria-label="Note title"
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-base font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
-              />
-              <input
-                value={tagsText}
-                onChange={(e) => setTagsText(e.target.value)}
-                placeholder="tags, comma, separated"
-                aria-label="Tags"
-                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-              <textarea
-                value={body}
-                onChange={(e) => setBody(e.target.value)}
-                rows={12}
-                aria-label="Note body"
-                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-            </div>
-          ) : (
-            <>
-              {tags.length > 0 && (
-                <div className="mb-3 flex flex-wrap gap-1.5">
-                  {tags.map((t) => (
-                    <span
-                      key={t}
-                      className="rounded bg-accent px-1.5 py-0.5 text-xs text-accent-foreground"
-                    >
-                      {t}
-                    </span>
-                  ))}
-                </div>
-              )}
-              <NoteBody body={body} onOpenNote={onOpenNote} />
-            </>
-          )}
-
-          {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
-
-          {sourceTurn != null && (
-            <div className="mt-4">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onOpenTurn(sourceTurn)}
-                title="Open the conversation this note came from"
-                className="h-8 gap-1.5 px-2 text-xs text-muted-foreground"
-              >
-                <MessageSquare className="h-3.5 w-3.5" />
-                View source conversation
-              </Button>
-            </div>
-          )}
+      {editing ? (
+        // Edit mode fills the screen — the body textarea takes every
+        // remaining pixel instead of floating in whitespace.
+        <div className="min-h-0 flex-1">
+          <div className="mx-auto flex h-full max-w-3xl flex-col gap-2 px-4 py-3">
+            {error && <p className="text-xs text-destructive">{error}</p>}
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              aria-label="Note title"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-base font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
+            />
+            <input
+              value={tagsText}
+              onChange={(e) => setTagsText(e.target.value)}
+              placeholder="tags, comma, separated"
+              aria-label="Tags"
+              className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              aria-label="Note body"
+              className="min-h-0 w-full flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto overscroll-contain">
+          <div className="mx-auto max-w-3xl px-4 py-4">
+            {draft.duplicateOf.length > 0 && (
+              <div className="mb-3 space-y-1">
+                {draft.duplicateOf.map((d) => (
+                  <button
+                    key={d.title}
+                    type="button"
+                    onClick={() => onOpenNote(d.title)}
+                    className="flex w-full items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-left text-xs text-amber-700 hover:bg-amber-500/20"
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    <span className="min-w-0 truncate">
+                      Possible duplicate of{' '}
+                      <span className="font-medium">{d.title}</span> (
+                      {Math.round(d.score * 100)}%) — tap to compare
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {tags.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                {tags.map((t) => (
+                  <span
+                    key={t}
+                    className="rounded bg-accent px-1.5 py-0.5 text-xs text-accent-foreground"
+                  >
+                    {t}
+                  </span>
+                ))}
+              </div>
+            )}
+            <NoteBody body={body} onOpenNote={onOpenNote} />
+            {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
+            {sourceTurn != null && (
+              <div className="mt-4">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onOpenTurn(sourceTurn)}
+                  title="Open the conversation this note came from"
+                  className="h-8 gap-1.5 px-2 text-xs text-muted-foreground"
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  View source conversation
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Decision bar — the point of the whole screen. */}
       <div className="pb-safe border-t border-border bg-background px-4 py-3">
