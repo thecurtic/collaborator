@@ -7,6 +7,7 @@ import {
   Pencil,
   RefreshCw,
   Search,
+  Waypoints,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -14,6 +15,7 @@ import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Note, NoteMeta } from '@/domain/models';
+import { GraphView } from './GraphView';
 import { InboxView } from './InboxView';
 import { NoteBody } from './NoteBody';
 
@@ -21,7 +23,8 @@ import { NoteBody } from './NoteBody';
 type Screen =
   | { kind: 'list' }
   | { kind: 'note'; title: string }
-  | { kind: 'inbox'; runId: string | null };
+  | { kind: 'inbox'; runId: string | null }
+  | { kind: 'graph' };
 
 interface NotesViewProps {
   pendingCount: number;
@@ -398,11 +401,27 @@ export function NotesView({
     );
   }
 
+  if (screen.kind === 'graph') {
+    return (
+      <GraphView onBack={() => setScreen({ kind: 'list' })} onOpenNote={openNote} />
+    );
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
         <h2 className="text-2xl font-semibold">Notes</h2>
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Graph View"
+            title="Graph View — the vault as a network"
+            onClick={() => setScreen({ kind: 'graph' })}
+            className="h-8 w-8 text-muted-foreground"
+          >
+            <Waypoints className="h-4 w-4" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"
