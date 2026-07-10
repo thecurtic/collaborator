@@ -128,9 +128,31 @@ export function ChatView({
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const pinnedRef = useRef(true);
   const suppressScrollRef = useRef(false);
   const composerRef = useRef<ComposerHandle>(null);
+  // Top of the streaming response (the optimistic user bubble) — following
+  // stops once this scrolls off-screen, so a long answer stays readable
+  // from its start.
+  const streamTopRef = useRef<HTMLDivElement>(null);
+  // Follow-the-stream state machine:
+  //   'auto'    — follow, but stop when the response start leaves the screen
+  //   'stopped' — don't follow (auto-stop above, or the user scrolled up)
+  //   'user'    — user deliberately returned to the bottom: always follow
+  const followRef = useRef<'auto' | 'stopped' | 'user'>('auto');
+  // Our own scrollIntoView fires scroll events indistinguishable from the
+  // user's — flag them so they can't re-pin the view (the old "fighting").
+  const programmaticRef = useRef(false);
+
+  const scrollToBottom = (smooth: boolean) => {
+    programmaticRef.current = true;
+    bottomRef.current?.scrollIntoView({
+      behavior: smooth ? 'smooth' : 'auto',
+      block: 'end',
+    });
+    setTimeout(() => {
+      programmaticRef.current = false;
+    }, smooth ? 350 : 80);
+  };
 
   // Reply button on a paragraph: stack a truncated quote into the draft.
   const handleQuote = (text: string) => {
@@ -150,29 +172,53 @@ export function ChatView({
 
   const handleScroll = () => {
     const el = scrollRef.current;
-    if (!el) return;
-    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (!el || programmaticRef.current) return;
+    // A real user scroll: away from the bottom stops following for the rest
+    // of the turn; deliberately returning to the bottom re-engages it.
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    followRef.current = nearBottom ? 'user' : 'stopped';
   };
 
   // Jump to the newest message when the screen opens (mount) / finishes loading.
   useLayoutEffect(() => {
     if (!loading) {
-      pinnedRef.current = true;
+      followRef.current = 'auto';
       bottomRef.current?.scrollIntoView({ block: 'end' });
     }
   }, [loading]);
 
-  // Follow new/streaming content while pinned to the bottom — but not when
+  // Each new turn starts following afresh.
+  useEffect(() => {
+    if (sending) followRef.current = 'auto';
+  }, [sending]);
+
+  // Follow new/streaming content per the follow state — but not when
   // switching branch forks (keep the tapped toggle under the finger).
   useEffect(() => {
     if (suppressScrollRef.current) {
       suppressScrollRef.current = false;
       return;
     }
-    if (!loading && pinnedRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    if (loading || followRef.current === 'stopped') return;
+    if (followRef.current === 'auto' && streaming) {
+      // Auto-stop once the response start would scroll off-screen, so a long
+      // answer stays readable from the top without any user action.
+      const container = scrollRef.current;
+      const top = streamTopRef.current;
+      if (container && top) {
+        const wouldScrollOff =
+          top.getBoundingClientRect().top <
+          container.getBoundingClientRect().top;
+        if (wouldScrollOff) {
+          followRef.current = 'stopped';
+          return;
+        }
+      }
     }
-  }, [path.length, streaming?.reply, activity.length, sending, loading]);
+    // Instant during streaming: smooth animations pile up across rapid
+    // tokens and were the main source of scroll fighting.
+    scrollToBottom(!streaming);
+  }, [path.length, streaming?.reply, streaming, activity.length, sending, loading]);
 
   // Cycle a node's branch fork (keeps the tapped button under the finger).
   const switchFork = (parentId: number, dir: 1 | -1) => {
@@ -382,7 +428,7 @@ export function ChatView({
           {/* Optimistic streaming overlay while a send/branch is in flight. */}
           {streaming && (
             <>
-              <div className="flex w-full justify-end">
+              <div ref={streamTopRef} className="flex w-full justify-end">
                 <div className="max-w-[85%] rounded-2xl bg-primary px-3.5 py-2.5 text-[15px] leading-relaxed text-primary-foreground sm:max-w-[80%] sm:text-sm">
                   <UserText text={streaming.user} />
                 </div>
