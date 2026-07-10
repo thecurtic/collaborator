@@ -12,7 +12,6 @@ import type {
   TreeNode,
 } from '@/domain/models';
 import { getRecallEnabled } from '@/features/settings/uiPrefs';
-import { saveDraftOrigins } from '@/features/notes/draftOrigins';
 import { saveTurnSources } from './sourcesStore';
 import { foldToolEvent } from './toolActivity';
 import {
@@ -73,12 +72,10 @@ export function useConversation(reloadSignal: number) {
   // Live tool activity feed for the in-flight turn: a row per tool call,
   // resolved in place by its outcome event. Cleared each turn.
   const [activity, setActivity] = useState<ToolActivity[]>([]);
-  // Drafts the model proposed via propose_note this turn (pending in the
-  // inbox). Kept after the stream so the chat can offer a "review" link;
-  // cleared on the next send or when the user follows the link. The ref
-  // mirror pairs them with the turn id once the done event lands.
+  // Drafts the model proposed this turn (pending in the inbox). Kept after
+  // the stream so the chat can offer a "review" link; cleared on the next
+  // send or when the user follows the link.
   const [proposedDrafts, setProposedDrafts] = useState<ProposedDraft[]>([]);
-  const proposedRef = useRef<ProposedDraft[]>([]);
   // Links the model wanted to read but couldn't (per-turn fetch budget hit).
   // Kept after the stream for one-tap follow-ups; a new send clears them
   // (each user message starts a fresh budget).
@@ -184,7 +181,6 @@ export function useConversation(reloadSignal: number) {
       setActivity([]);
       activityRef.current = [];
       setProposedDrafts([]);
-      proposedRef.current = [];
       setUnfollowedLinks([]);
       setStreaming({ user: userText, reply: '' });
       try {
@@ -195,11 +191,7 @@ export function useConversation(reloadSignal: number) {
             onRecall: (block) => setRecall(block),
             onStatus: applyToolEvent,
             onDrafts: (drafts) =>
-              setProposedDrafts((prev) => {
-                const next = [...prev, ...drafts];
-                proposedRef.current = next;
-                return next;
-              }),
+              setProposedDrafts((prev) => [...prev, ...drafts]),
             onUnfollowedLinks: (links) => setUnfollowedLinks(links),
           },
           abort.signal,
@@ -211,15 +203,9 @@ export function useConversation(reloadSignal: number) {
         applyTree(t);
         if (res.id != null) {
           selectPathTo(res.id);
-          // Persist the tool feed as this turn's sources (client-side cache
-          // — the backend doesn't store per-turn tool activity yet).
+          // Cache the tool feed for this turn — fallback for turns whose
+          // persisted `tools` haven't been fetched yet this session.
           saveTurnSources(res.id, activityRef.current);
-          // Attribute chat-proposed drafts to the turn that proposed them
-          // (synthesis drafts get source_turns server-side; these don't).
-          saveDraftOrigins(
-            proposedRef.current.map((d) => d.id),
-            res.id,
-          );
         }
         if (res.contextWindow != null) setContextWindow(res.contextWindow);
         return true;

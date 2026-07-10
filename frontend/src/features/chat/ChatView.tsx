@@ -539,8 +539,10 @@ export function ChatView({
           <NotebookPen className="h-4 w-4 shrink-0" />
           <span className="min-w-0 truncate">
             {proposedDrafts.length === 1
-              ? `Note proposed: “${proposedDrafts[0].title}”`
-              : `${proposedDrafts.length} notes proposed`}
+              ? proposedDrafts[0].kind === 'edit'
+                ? `Edit proposed for “${proposedDrafts[0].targetTitle ?? proposedDrafts[0].title}”`
+                : `Note proposed: “${proposedDrafts[0].title}”`
+              : `${proposedDrafts.length} note proposals`}
           </span>
           <span className="shrink-0 font-medium underline underline-offset-2">
             Review

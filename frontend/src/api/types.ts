@@ -77,9 +77,26 @@ export interface ApiTreeNode {
   branched?: boolean;
   /** User-set name (conversation/branch naming); null/absent = unnamed. */
   name?: string | null;
+  /** LLM-generated title (roots, all states). User-set `name` wins. */
+  title?: string | null;
   /** Conversation stage: "seed" (provisional chat) or "tree" (promoted). */
   state?: string;
+  /** Persisted tool activity for this (assistant) turn, when tools ran. */
+  tools?: ApiTurnTool[];
   children: ApiTreeNode[];
+}
+
+/** One persisted tool call on a tree node (mirrors the status/outcome events). */
+export interface ApiTurnTool {
+  tool: string;
+  query?: string;
+  url?: string;
+  title?: string;
+  outcome?: string;
+  count?: number;
+  error?: string;
+  /** web_search result URLs (page-level sources). */
+  urls?: string[];
 }
 
 /** GET /api/tree */
@@ -132,6 +149,12 @@ export interface ApiNoteDraft {
   id: number;
   run_id: string;
   tree_root_id: number | null;
+  /** "new" (default) = a proposed note; "edit" = a proposed change. */
+  kind?: string;
+  /** Edit drafts: the existing note being changed. */
+  target_title?: string | null;
+  /** Edit drafts: the model's one-line rationale. */
+  reason?: string | null;
   title: string;
   body: string;
   tags?: string[];
@@ -154,6 +177,10 @@ export interface ApiApproveResponse {
   draft: ApiNoteDraft;
   path: string;
   filename: string;
+  /** Edit drafts: the approval renamed the target note. */
+  renamed?: boolean;
+  /** Edit drafts: notes whose inbound wikilinks were rewritten. */
+  links_rewritten?: string[];
 }
 
 /** POST /api/notes/synthesize/{tree_id} */

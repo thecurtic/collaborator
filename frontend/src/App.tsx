@@ -6,6 +6,7 @@ import {
   NotebookText,
   Pencil,
   Plus,
+  RefreshCw,
   Sprout,
   TreePine,
   X,
@@ -34,7 +35,7 @@ import { RootList } from '@/features/chat/RootList';
 import { TreeMap } from '@/features/chat/TreeMap';
 import { useConversation } from '@/features/chat/useConversation';
 import type { BranchTarget } from '@/features/chat/branchTarget';
-import type { TreeNode } from '@/domain/models';
+import { rootLabel, type TreeNode } from '@/domain/models';
 import { NotesView } from '@/features/notes/NotesView';
 import { usePendingDrafts } from '@/features/notes/usePendingDrafts';
 import { SettingsSheet } from '@/features/settings/SettingsSheet';
@@ -246,9 +247,20 @@ function AppShell() {
 
   const chatTitle = chatOpen
     ? activeRoot
-      ? (activeRoot.name ?? activeRoot.preview ?? 'Conversation')
+      ? rootLabel(activeRoot)
       : 'New chat'
     : null;
+
+  // Regenerate the LLM title, then refresh so lists/headers pick it up.
+  const regenerateTitle = useCallback(
+    (rootId: number) => {
+      void api
+        .regenerateTitle(rootId)
+        .catch(() => {}) // 502 = generation failed; the old title stands
+        .finally(() => void reload());
+    },
+    [reload],
+  );
 
   // Hold the chat title for conversation actions (rename/promote/synthesize).
   const titlePress = useLongPress(() => {
@@ -269,11 +281,12 @@ function AppShell() {
         {
           label: 'Synthesize notes',
           icon: NotebookPen,
-          onSelect: () =>
-            startSynthesis(
-              activeRoot.id,
-              activeRoot.name ?? activeRoot.preview ?? 'this chat',
-            ),
+          onSelect: () => startSynthesis(activeRoot.id, rootLabel(activeRoot)),
+        },
+        {
+          label: 'Regenerate title',
+          icon: RefreshCw,
+          onSelect: () => regenerateTitle(activeRoot.id),
         },
       ]
     : [];
@@ -495,6 +508,7 @@ function AppShell() {
                 onOpen={openRoot}
                 onRename={(id, name) => void convo.renameTurn(id, name)}
                 onSynthesize={startSynthesis}
+                onRegenerateTitle={regenerateTitle}
               />
             </div>
           </div>
@@ -521,6 +535,7 @@ function AppShell() {
                 onOpen={openRoot}
                 onRename={(id, name) => void convo.renameTurn(id, name)}
                 onPromote={(id) => void convo.promote(id)}
+                onRegenerateTitle={regenerateTitle}
               />
             </div>
             {/* Floating pill, sitting just above the tab bar. */}

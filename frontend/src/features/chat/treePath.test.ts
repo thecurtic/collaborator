@@ -22,8 +22,10 @@ function node(id: number, children: TreeNode[] = [], branched = false): TreeNode
     contextBoundary: false,
     branched,
     name: null,
+    title: null,
     state: 'tree',
     recall: null,
+    tools: [],
     children,
   };
 }

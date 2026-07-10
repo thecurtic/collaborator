@@ -11,8 +11,9 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
-import type { NoteDraft } from '@/domain/models';
-import { getDraftOrigin } from './draftOrigins';
+import { cn } from '@/lib/utils';
+import type { Note, NoteDraft } from '@/domain/models';
+import { lineDiff } from './lineDiff';
 import { NoteBody } from './NoteBody';
 
 interface InboxViewProps {
@@ -56,6 +57,28 @@ function DraftView({
   const [tagsText, setTagsText] = useState(draft.tags.join(', '));
   const [busy, setBusy] = useState<null | 'approve' | 'reject'>(null);
   const [error, setError] = useState<string | null>(null);
+  // Edit drafts diff against the CURRENT note (snapshot semantics: the draft
+  // holds the full proposed state, so current-vs-draft is the review).
+  const isEdit = draft.kind === 'edit';
+  const [target, setTarget] = useState<Note | null>(null);
+  const [targetGone, setTargetGone] = useState(false);
+
+  useEffect(() => {
+    if (!isEdit || !draft.targetTitle) return;
+    let cancelled = false;
+    api
+      .getNote(draft.targetTitle)
+      .then((n) => {
+        if (!cancelled) setTarget(n);
+      })
+      .catch(() => {
+        // Deleted/renamed since the proposal — approval would 409.
+        if (!cancelled) setTargetGone(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEdit, draft.targetTitle]);
 
   const dirty =
     title !== draft.title ||
@@ -76,8 +99,19 @@ function DraftView({
             .filter(Boolean),
         });
       }
-      const { filename } = await api.approveDraft(draft.id);
-      onDecided(draft.id, `Approved — saved to vault as “${filename}”`);
+      const res = await api.approveDraft(draft.id);
+      const rewrites =
+        res.linksRewritten.length > 0
+          ? ` (also updated ${res.linksRewritten.length} linking ${
+              res.linksRewritten.length === 1 ? 'note' : 'notes'
+            })`
+          : '';
+      onDecided(
+        draft.id,
+        isEdit
+          ? `Approved — updated “${title.trim()}”${rewrites}`
+          : `Approved — saved to vault as “${res.filename}”`,
+      );
     } catch (err) {
       // 422 invalid title / 409 collision: stay pending; drop into edit mode
       // so the title can be fixed and re-approved.
@@ -101,10 +135,8 @@ function DraftView({
     }
   };
 
-  // Server attribution first (synthesis drafts); chat-proposed drafts fall
-  // back to the client-side origin recorded when the proposal streamed.
-  const sourceTurn =
-    draft.sourceTurns[0] ?? getDraftOrigin(draft.id) ?? draft.treeRootId;
+  // Provenance is server-stamped for all draft kinds now (3275100).
+  const sourceTurn = draft.sourceTurns[0] ?? draft.treeRootId;
   const tags = tagsText
     .split(',')
     .map((t) => t.trim())
@@ -186,6 +218,33 @@ function DraftView({
                 ))}
               </div>
             )}
+            {isEdit && (
+              <div className="mb-3 space-y-1.5">
+                <p className="text-xs text-muted-foreground">
+                  Proposes changes to{' '}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      draft.targetTitle && onOpenNote(draft.targetTitle)
+                    }
+                    className="font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    {draft.targetTitle}
+                  </button>
+                </p>
+                {draft.reason && (
+                  <p className="rounded-md bg-primary/5 px-2.5 py-1.5 text-xs italic text-muted-foreground">
+                    Why: {draft.reason}
+                  </p>
+                )}
+                {targetGone && (
+                  <p className="rounded-md bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-700">
+                    The target note no longer exists (renamed or deleted since
+                    the proposal) — approving will fail; consider rejecting.
+                  </p>
+                )}
+              </div>
+            )}
             {tags.length > 0 && (
               <div className="mb-3 flex flex-wrap gap-1.5">
                 {tags.map((t) => (
@@ -198,7 +257,50 @@ function DraftView({
                 ))}
               </div>
             )}
-            <NoteBody body={body} onOpenNote={onOpenNote} />
+            {isEdit && target ? (
+              <>
+                {target.title !== title.trim() && (
+                  <p className="mb-2 text-sm">
+                    <span className="text-destructive line-through">
+                      {target.title}
+                    </span>{' '}
+                    → <span className="font-medium">{title.trim()}</span>
+                  </p>
+                )}
+                {target.tags.join(',') !== tags.join(',') && (
+                  <p className="mb-2 text-xs text-muted-foreground">
+                    tags:{' '}
+                    <span className="line-through opacity-60">
+                      {target.tags.join(', ') || '—'}
+                    </span>{' '}
+                    → {tags.join(', ') || '—'}
+                  </p>
+                )}
+                <div className="rounded-md border border-border px-3 py-2 text-sm leading-relaxed">
+                  {lineDiff(target.body, body).map((l, i) => (
+                    <p
+                      key={i}
+                      className={cn(
+                        'whitespace-pre-wrap break-words',
+                        l.type === 'add' &&
+                          'bg-emerald-500/10 text-emerald-700',
+                        l.type === 'del' &&
+                          'bg-destructive/10 text-destructive line-through',
+                      )}
+                    >
+                      {l.text || ' '}
+                    </p>
+                  ))}
+                </div>
+              </>
+            ) : isEdit && !targetGone ? (
+              <div className="flex items-center gap-2 py-6 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Loading the current note for comparison…
+              </div>
+            ) : (
+              <NoteBody body={body} onOpenNote={onOpenNote} />
+            )}
             {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
             {sourceTurn != null && (
               <div className="mt-4">
@@ -366,9 +468,15 @@ export function InboxView({
                       {d.title}
                     </span>
                     <span className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">
-                      {d.body}
+                      {d.kind === 'edit' ? (d.reason ?? d.body) : d.body}
                     </span>
                     <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                      {d.kind === 'edit' && (
+                        <span className="flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                          <Pencil className="h-3 w-3" />
+                          edit · {d.targetTitle}
+                        </span>
+                      )}
                       {d.duplicateOf.length > 0 && (
                         <span className="flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700">
                           <AlertTriangle className="h-3 w-3" />

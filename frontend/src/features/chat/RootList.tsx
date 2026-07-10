@@ -1,9 +1,9 @@
-import { NotebookPen, Pencil, Sprout, TreePine } from 'lucide-react';
+import { NotebookPen, Pencil, RefreshCw, Sprout, TreePine } from 'lucide-react';
 import { useState } from 'react';
 import { ActionSheet, type SheetAction } from '@/components/ActionSheet';
 import { RenameSheet } from '@/components/RenameSheet';
 import { useLongPress } from '@/lib/useLongPress';
-import type { TreeNode } from '@/domain/models';
+import { rootLabel, type TreeNode } from '@/domain/models';
 
 interface RootListProps {
   /** Conversation roots to list (already filtered by state), any order. */
@@ -17,6 +17,8 @@ interface RootListProps {
   onPromote?: (rootId: number) => void;
   /** Synthesize notes from this conversation (slow, backgrounded). */
   onSynthesize?: (rootId: number, label: string) => void;
+  /** Regenerate the LLM-generated title for this conversation. */
+  onRegenerateTitle?: (rootId: number) => void;
 }
 
 /** Count all turns in a subtree (shown as light row metadata). */
@@ -60,7 +62,7 @@ function Row({
       )}
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium text-foreground">
-          {root.name ?? root.preview ?? 'Untitled'}
+          {rootLabel(root)}
         </span>
         <span className="block text-xs text-muted-foreground">
           {count} {count === 1 ? 'turn' : 'turns'}
@@ -83,6 +85,7 @@ export function RootList({
   onRename,
   onPromote,
   onSynthesize,
+  onRegenerateTitle,
 }: RootListProps) {
   const [menuRoot, setMenuRoot] = useState<TreeNode | null>(null);
   const [renaming, setRenaming] = useState<TreeNode | null>(null);
@@ -110,11 +113,16 @@ export function RootList({
               {
                 label: 'Synthesize notes',
                 icon: NotebookPen,
-                onSelect: () =>
-                  onSynthesize(
-                    menuRoot.id,
-                    menuRoot.name ?? menuRoot.preview ?? 'Untitled',
-                  ),
+                onSelect: () => onSynthesize(menuRoot.id, rootLabel(menuRoot)),
+              },
+            ]
+          : []),
+        ...(onRegenerateTitle
+          ? [
+              {
+                label: 'Regenerate title',
+                icon: RefreshCw,
+                onSelect: () => onRegenerateTitle(menuRoot.id),
               },
             ]
           : []),
@@ -144,7 +152,7 @@ export function RootList({
 
       <ActionSheet
         open={menuRoot !== null}
-        title={menuRoot?.name ?? menuRoot?.preview ?? undefined}
+        title={menuRoot ? rootLabel(menuRoot) : undefined}
         actions={menuActions}
         onClose={() => setMenuRoot(null)}
       />

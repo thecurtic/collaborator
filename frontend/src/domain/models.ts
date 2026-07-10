@@ -64,11 +64,20 @@ export interface TreeNode {
   branched: boolean;
   /** User-set name (used to name a conversation/branch by its root turn). */
   name: string | null;
+  /** LLM-generated title (roots, all states). `name` always wins. */
+  title: string | null;
   /** Conversation stage (see ConversationState). Meaningful on roots. */
   state: ConversationState;
   /** Recall block that this turn triggered (user turns only), or null. */
   recall: RecallBlock | null;
+  /** Persisted tool activity for this turn (assistant turns; may be empty). */
+  tools: ToolActivity[];
   children: TreeNode[];
+}
+
+/** Display label for a conversation root: user name → LLM title → preview. */
+export function rootLabel(node: TreeNode): string {
+  return node.name ?? node.title ?? node.preview ?? 'Untitled';
 }
 
 export interface ConversationTree {
@@ -142,6 +151,12 @@ export interface NoteDraft {
   /** Groups one synthesis pass / one chat turn's proposals. */
   runId: string;
   treeRootId: number | null;
+  /** 'new' = a proposed note; 'edit' = a proposed change to an existing one. */
+  kind: 'new' | 'edit';
+  /** Edit drafts: the existing note being changed. */
+  targetTitle: string | null;
+  /** Edit drafts: the model's one-line rationale (review context). */
+  reason: string | null;
   title: string;
   body: string;
   tags: string[];
@@ -187,17 +202,25 @@ export interface ProposedDraft {
   id: number;
   title: string;
   runId: string;
+  kind: 'new' | 'edit';
+  targetTitle: string | null;
 }
 
-/** One tool call in the live activity feed (start row, resolved by outcome). */
+/**
+ * One tool call — in the live activity feed or persisted on a turn.
+ * 'pending' = live call awaiting its outcome; 'none' = the tool doesn't
+ * report outcomes (recall/notes reads) — render as a plain row.
+ */
 export interface ToolActivity {
   id: number;
   tool: string;
   /** What it's doing: full query/url/title when available, else the label. */
   text: string;
-  outcome: 'pending' | 'ok' | 'empty' | 'error';
+  outcome: 'pending' | 'ok' | 'empty' | 'error' | 'none';
   /** Resolution detail: "5 results" / failure reason / outcome label. */
   detail: string | null;
+  /** web_search result URLs (page-level sources), when reported. */
+  urls?: string[];
 }
 
 export interface ReindexResult {

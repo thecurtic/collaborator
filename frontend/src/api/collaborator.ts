@@ -107,6 +107,8 @@ export interface ToolStatusEvent {
   outcome?: 'ok' | 'empty' | 'error';
   /** web_search outcome: number of results. */
   count?: number;
+  /** web_search outcome: the result URLs (page-level sources). */
+  urls?: string[];
   /** error outcome: short failure reason. */
   error?: string;
   /** True when this is an outcome event ('outcome' in raw event). */
@@ -138,6 +140,9 @@ function toProposedDrafts(evt: Record<string, unknown>): ProposedDraft[] {
             id: o.id,
             title: o.title,
             runId: typeof o.run_id === 'string' ? o.run_id : '',
+            kind: o.kind === 'edit' ? ('edit' as const) : ('new' as const),
+            targetTitle:
+              typeof o.target_title === 'string' ? o.target_title : null,
           },
         ]
       : [];
@@ -198,6 +203,11 @@ async function consumeStream(
                 ? rawOutcome
                 : undefined,
             count: typeof evt.count === 'number' ? evt.count : undefined,
+            urls: Array.isArray(evt.urls)
+              ? (evt.urls as unknown[]).filter(
+                  (u): u is string => typeof u === 'string',
+                )
+              : undefined,
             error: str('error'),
             isOutcome: 'outcome' in evt,
           });
@@ -278,6 +288,11 @@ export interface CollaboratorApi {
   /** Set (or clear, with an empty string) a turn's name. */
   renameTurn(turnId: number, name: string): Promise<void>;
   /**
+   * Regenerate the LLM title for the conversation containing `turnId`
+   * (resolves to the root). 502 = generation failed.
+   */
+  regenerateTitle(turnId: number): Promise<string>;
+  /**
    * Set a conversation's stage. Applies to the turn's ENTIRE subtree, so call
    * it on the conversation's root to promote the whole chat (seed → tree).
    */
@@ -303,10 +318,14 @@ export interface CollaboratorApi {
     patch: { title?: string; body?: string; tags?: string[]; links?: string[] },
   ): Promise<void>;
   /**
-   * Approve: writes the vault file. Throws ApiRequestError 422 (invalid
-   * title) or 409 (title collision — draft stays pending; rename and retry).
+   * Approve: writes the vault file (new drafts) or applies the change to the
+   * target note (edit drafts — renames rewrite inbound wikilinks). Throws
+   * 422 (invalid title) or 409 (title collision, or an edit draft's target
+   * was deleted/renamed since the proposal — detail explains).
    */
-  approveDraft(id: number): Promise<{ filename: string }>;
+  approveDraft(
+    id: number,
+  ): Promise<{ filename: string; renamed: boolean; linksRewritten: string[] }>;
   rejectDraft(id: number): Promise<void>;
   listNotes(tag?: string): Promise<NoteMeta[]>;
   searchNotes(
@@ -451,6 +470,14 @@ class HttpCollaboratorApi implements CollaboratorApi {
     });
   }
 
+  async regenerateTitle(turnId: number): Promise<string> {
+    const res = await request<{ root_id: number; title: string }>(
+      `/api/turns/${turnId}/title`,
+      { method: 'POST' },
+    );
+    return res.title;
+  }
+
   async setTurnState(turnId: number, state: 'seed' | 'tree'): Promise<void> {
     await request<unknown>(`/api/turns/${turnId}/state`, {
       method: 'PATCH',
@@ -500,12 +527,18 @@ class HttpCollaboratorApi implements CollaboratorApi {
     });
   }
 
-  async approveDraft(id: number): Promise<{ filename: string }> {
+  async approveDraft(
+    id: number,
+  ): Promise<{ filename: string; renamed: boolean; linksRewritten: string[] }> {
     const res = await request<ApiApproveResponse>(
       `/api/notes/drafts/${id}/approve`,
       { method: 'POST' },
     );
-    return { filename: res.filename };
+    return {
+      filename: res.filename,
+      renamed: res.renamed === true,
+      linksRewritten: res.links_rewritten ?? [],
+    };
   }
 
   async rejectDraft(id: number): Promise<void> {

@@ -135,10 +135,13 @@ function Switcher({
  * pages read, notes opened), from the client-side per-turn cache. Opens a
  * bottom sheet; page URLs are tappable.
  */
-function SourcesButton({ turnId }: { turnId: number }) {
+function SourcesButton({ node }: { node: TreeNode }) {
   const [open, setOpen] = useState(false);
   const panelRef = useModalA11y<HTMLDivElement>(open, () => setOpen(false));
-  const sources = getTurnSources(turnId);
+  // Server-persisted tool records first (any device); fall back to the
+  // local stream-time cache for turns not yet re-fetched with `tools`.
+  const persisted = node.tools.length > 0;
+  const sources = persisted ? node.tools : getTurnSources(node.id);
   if (sources.length === 0) return null;
   return (
     <>
@@ -173,12 +176,14 @@ function SourcesButton({ turnId }: { turnId: number }) {
               </p>
               <div className="space-y-2">
                 {sources.map((item) => (
-                  <ActivityRow key={item.id} item={item} />
+                  <ActivityRow key={item.id} item={item} showUrls />
                 ))}
               </div>
-              <p className="mt-3 text-[10px] text-muted-foreground">
-                Recorded on this device when the reply streamed.
-              </p>
+              {!persisted && (
+                <p className="mt-3 text-[10px] text-muted-foreground">
+                  Recorded on this device when the reply streamed.
+                </p>
+              )}
             </div>
           </div>,
           document.body,
@@ -388,7 +393,7 @@ export function TreeBubble({
 
         <div className="mt-1.5 flex items-center gap-2 text-[10px] opacity-60">
           {node.paragraphIndex != null && <span>branched</span>}
-          {!isUser && <SourcesButton turnId={node.id} />}
+          {!isUser && <SourcesButton node={node} />}
           <span className="ml-auto flex items-center gap-1.5">
             {canSpeak && (
               <Button

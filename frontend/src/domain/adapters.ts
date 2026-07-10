@@ -8,6 +8,7 @@ import type {
   ApiTree,
   ApiTreeNode,
   ApiTurn,
+  ApiTurnTool,
   ApiTurnsResponse,
 } from '@/api/types';
 import type {
@@ -18,6 +19,7 @@ import type {
   NoteMeta,
   PromptInfo,
   RecallBlock,
+  ToolActivity,
   TreeNode,
   Turn,
   TurnsPage,
@@ -78,6 +80,28 @@ export function toTurn(api: ApiTurn): Turn {
   };
 }
 
+/** Persisted tool records → the same ToolActivity shape the live feed uses. */
+export function toTurnTools(api: ApiTurnTool[] | undefined): ToolActivity[] {
+  return (api ?? []).map((t, i) => ({
+    id: i,
+    tool: t.tool ?? '',
+    text: t.query ?? t.url ?? t.title ?? t.tool ?? '',
+    outcome:
+      t.outcome === 'ok' || t.outcome === 'empty' || t.outcome === 'error'
+        ? t.outcome
+        : // Tools that don't report outcomes (recall/notes reads).
+          'none',
+    detail:
+      t.error ??
+      (typeof t.count === 'number'
+        ? `${t.count} ${t.count === 1 ? 'result' : 'results'}`
+        : null),
+    urls: Array.isArray(t.urls)
+      ? t.urls.filter((u): u is string => typeof u === 'string')
+      : undefined,
+  }));
+}
+
 export function toTreeNode(api: ApiTreeNode): TreeNode {
   return {
     id: api.id,
@@ -90,9 +114,11 @@ export function toTreeNode(api: ApiTreeNode): TreeNode {
     contextBoundary: api.context_boundary === true,
     branched: api.branched === true,
     name: typeof api.name === 'string' ? api.name : null,
+    title: typeof api.title === 'string' && api.title ? api.title : null,
     // Unknown/absent state → treat as an established conversation.
     state: api.state === 'seed' ? 'seed' : 'tree',
     recall: api.recall ? toRecallBlock(api.recall) : null,
+    tools: toTurnTools(api.tools),
     children: (api.children ?? []).map(toTreeNode),
   };
 }
@@ -126,6 +152,9 @@ export function toNoteDraft(api: ApiNoteDraft): NoteDraft {
     id: api.id,
     runId: api.run_id,
     treeRootId: api.tree_root_id ?? null,
+    kind: api.kind === 'edit' ? 'edit' : 'new',
+    targetTitle: api.target_title ?? null,
+    reason: api.reason ?? null,
     title: api.title,
     body: api.body,
     tags: api.tags ?? [],

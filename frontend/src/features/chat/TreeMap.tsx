@@ -214,7 +214,7 @@ function buildForest(tree: ConversationTree, activeIds: Set<number>) {
     for (const s of segments) for (const id of s.nodeIds) colOf.set(id, s.column);
     trees.push({
       rootNodeId: node.id,
-      rootName: node.name ?? node.preview ?? 'Untitled',
+      rootName: node.name ?? node.title ?? node.preview ?? 'Untitled',
       segments,
       minCol: Math.min(...cols),
       maxCol: Math.max(...cols),

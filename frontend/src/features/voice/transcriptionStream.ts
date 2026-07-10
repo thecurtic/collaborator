@@ -1,14 +1,13 @@
 import { api } from '@/api/collaborator';
-import { getPasskey } from '@/auth/session';
 
 /**
  * Client for WS /api/transcribe/stream: send PCM16 frames, receive live partial
  * transcripts, and a final transcript after end().
  *
  * Auth: a short-lived single-use ticket (POST /api/auth/ws-ticket) fetched in
- * ready(), right before the socket opens — the long-lived passkey never goes
- * in the URL. If the ticket fetch fails, we fall back to the deprecated
- * ?passkey= param so a transient hiccup doesn't kill the call.
+ * ready(), right before the socket opens. Ticket-only — the backend removed
+ * the passkey-in-URL path (3275100), so a failed ticket fetch fails ready()
+ * (surfaced as a retryable error upstream).
  */
 export class TranscriptionStream {
   private ws: WebSocket | null = null;
@@ -39,13 +38,7 @@ export class TranscriptionStream {
   }
 
   private async open(): Promise<void> {
-    let auth: string;
-    try {
-      auth = `ticket=${encodeURIComponent(await api.getWsTicket())}`;
-    } catch {
-      // Ticket endpoint unavailable — deprecated passkey-in-URL fallback.
-      auth = `passkey=${encodeURIComponent(getPasskey() ?? '')}`;
-    }
+    const auth = `ticket=${encodeURIComponent(await api.getWsTicket())}`;
     if (this.closed) return; // close() raced the ticket fetch
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';

@@ -40,6 +40,6 @@ export function foldToolEvent(
     ];
   }
   const next = prev.slice();
-  next[i] = { ...next[i], outcome, detail };
+  next[i] = { ...next[i], outcome, detail, urls: e.urls };
   return next;
 }
