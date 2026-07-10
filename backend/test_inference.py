@@ -131,18 +131,21 @@ def test_datetime_grounding_in_system_prompt():
     assert "ground truth" in system.lower()
     assert "{now}" not in system                          # placeholder substituted
 
-    # Inline config override respected, with substitution.
+    # Inline config override respected, with substitution. (inference reads the
+    # live config singleton — no separate cache to poke.)
     import config
-    cfg = config.get_config._config if hasattr(config.get_config, "_config") else None
-    inference._get_config._config = dict(inference._get_config())
-    inference._get_config._config["system_prompt"] = dict(
-        inference._get_config._config.get("system_prompt", {}))
-    inference._get_config._config["system_prompt"]["datetime_text"] = "It is {now}, trust me."
+    sp = config.get_config().setdefault("system_prompt", {})
+    had = "datetime_text" in sp
+    orig = sp.get("datetime_text")
+    sp["datetime_text"] = "It is {now}, trust me."
     try:
         system = inference._build_messages("hi")[0]["content"]
         assert "trust me" in system and _time.strftime("%Y-%m-%d") in system
     finally:
-        del inference._get_config._config
+        if had:
+            sp["datetime_text"] = orig
+        else:
+            del sp["datetime_text"]
     print("✓ datetime grounding: injected every turn, substituted, overridable")
 
 

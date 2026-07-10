@@ -164,13 +164,22 @@ def ensure_conversation_schema(conn) -> None:
             duplicate_of TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            decided_at TEXT
+            decided_at TEXT,
+            kind TEXT NOT NULL DEFAULT 'new',
+            target_title TEXT,
+            reason TEXT
         )
     """)
-    # Migrate older draft tables (column added later).
+    # Migrate older draft tables (columns added later).
     draft_cols = {row[1] for row in cursor.execute("PRAGMA table_info(note_drafts)").fetchall()}
     if "duplicate_of" not in draft_cols:
         cursor.execute("ALTER TABLE note_drafts ADD COLUMN duplicate_of TEXT")
+    # kind 'new' = a fresh note; 'edit' = a proposed change to an existing vault
+    # note (target_title names it; title/body/tags hold the proposed state).
+    if "kind" not in draft_cols:
+        cursor.execute("ALTER TABLE note_drafts ADD COLUMN kind TEXT NOT NULL DEFAULT 'new'")
+        cursor.execute("ALTER TABLE note_drafts ADD COLUMN target_title TEXT")
+        cursor.execute("ALTER TABLE note_drafts ADD COLUMN reason TEXT")
     conn.commit()
 
     _migrate_turns_branching(conn)
@@ -201,6 +210,16 @@ def _migrate_turns_branching(conn) -> None:
         cursor.execute("ALTER TABLE turns ADD COLUMN recall_sources TEXT")
     if "embedding" not in existing:
         cursor.execute("ALTER TABLE turns ADD COLUMN embedding BLOB")
+    if "tool_activity" not in existing:
+        # JSON list of the turn's tool calls ({tool, query/url/title, outcome,
+        # count, error, urls}) — persisted "Sources" for assistant turns.
+        cursor.execute("ALTER TABLE turns ADD COLUMN tool_activity TEXT")
+    if "title" not in existing:
+        # LLM-generated conversation title, stored on ROOT turns only, separate
+        # from the user-set name (manual renames always win in the UI).
+        # title_turns = tree turn count when it was generated (lazy regeneration).
+        cursor.execute("ALTER TABLE turns ADD COLUMN title TEXT")
+        cursor.execute("ALTER TABLE turns ADD COLUMN title_turns INTEGER")
     conn.commit()
 
     # When parent_turn_id was just introduced, link pre-existing turns into one
@@ -375,6 +394,47 @@ def get_ancestor_chain(db, turn_id: int, limit: Optional[int] = None,
     return chain
 
 
+def set_turn_tool_activity(db, turn_id: int, activity: List[dict]) -> None:
+    """Persist a turn's tool-call records (the frontend's per-reply "Sources")."""
+    db.cursor().execute(
+        "UPDATE turns SET tool_activity = ? WHERE id = ?",
+        (_json.dumps(activity or []), turn_id),
+    )
+    db.commit()
+
+
+def set_turn_title(db, turn_id: int, title: str, title_turns: int) -> None:
+    """Store a generated conversation title on a ROOT turn (separate from the
+    user-set name; title_turns records tree size at generation for lazy regen)."""
+    db.cursor().execute(
+        "UPDATE turns SET title = ?, title_turns = ? WHERE id = ?",
+        (title, title_turns, turn_id),
+    )
+    db.commit()
+
+
+def get_turn_title_state(db, turn_id: int):
+    """(title, title_turns) for a turn — None fields when never generated."""
+    row = db.cursor().execute(
+        "SELECT title, title_turns FROM turns WHERE id = ?", (turn_id,)).fetchone()
+    return (row[0], row[1]) if row else (None, None)
+
+
+def count_tree_turns(db, root_id: int) -> int:
+    """Number of committed turns in the tree rooted at root_id."""
+    row = db.cursor().execute(
+        """
+        WITH RECURSIVE tree(id) AS (
+            SELECT id FROM turns WHERE id = ?
+            UNION ALL
+            SELECT t.id FROM turns t JOIN tree ON t.parent_turn_id = tree.id
+        )
+        SELECT COUNT(*) FROM tree JOIN turns ON turns.id = tree.id
+        WHERE turns.committed = 1
+        """, (root_id,)).fetchone()
+    return row[0] if row else 0
+
+
 def get_turn_tree(db, committed_only: bool = True) -> List[dict]:
     """Return the conversation as a nested tree (list of roots).
 
@@ -403,6 +463,22 @@ def get_turn_tree(db, committed_only: bool = True) -> List[dict]:
             except Exception:
                 parsed = []
             nodes[tid]["recall"] = {"content": content, "sources": parsed}
+
+    # Attach persisted tool activity (per-reply "Sources") and generated titles
+    # (root rows; the UI renders name ?? title ?? preview).
+    for (tid, activity) in cursor.execute(
+        "SELECT id, tool_activity FROM turns WHERE tool_activity IS NOT NULL"
+    ).fetchall():
+        if tid in nodes:
+            try:
+                nodes[tid]["tools"] = _json.loads(activity)
+            except Exception:
+                pass
+    for (tid, title) in cursor.execute(
+        "SELECT id, title FROM turns WHERE title IS NOT NULL"
+    ).fetchall():
+        if tid in nodes:
+            nodes[tid]["title"] = title
 
     roots: List[dict] = []
     for node in nodes.values():  # insertion order == ascending id
@@ -776,6 +852,7 @@ def clear_current_recall(db) -> None:
 NOTE_DRAFT_COLUMNS = [
     "id", "run_id", "tree_root_id", "title", "body", "tags", "links",
     "source_turns", "duplicate_of", "status", "created_at", "decided_at",
+    "kind", "target_title", "reason",
 ]
 _DRAFT_COLS = ", ".join(NOTE_DRAFT_COLUMNS)
 
@@ -796,22 +873,43 @@ def create_note_draft(db, title: str, body: str,
                       source_turns: Optional[List[int]] = None,
                       tree_root_id: Optional[int] = None,
                       run_id: Optional[str] = None,
-                      duplicate_of: Optional[List[dict]] = None) -> dict:
+                      duplicate_of: Optional[List[dict]] = None,
+                      kind: str = "new",
+                      target_title: Optional[str] = None,
+                      reason: Optional[str] = None) -> dict:
     """Insert a pending note draft. duplicate_of lists near-duplicate existing
-    notes ([{title, score}]) so the user can reject/merge during review."""
+    notes ([{title, score}]) so the user can reject/merge during review.
+
+    kind 'new' proposes a fresh note; kind 'edit' proposes changes to the existing
+    vault note named by target_title — title/body/tags then hold the full proposed
+    state of that note (approving applies exactly what was reviewed)."""
     cursor = db.cursor()
     cursor.execute(
         """
         INSERT INTO note_drafts
-            (run_id, tree_root_id, title, body, tags, links, source_turns, duplicate_of)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (run_id, tree_root_id, title, body, tags, links, source_turns,
+             duplicate_of, kind, target_title, reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (run_id, tree_root_id, title, body,
          _json.dumps(tags or []), _json.dumps(links or []),
-         _json.dumps(source_turns or []), _json.dumps(duplicate_of or [])),
+         _json.dumps(source_turns or []), _json.dumps(duplicate_of or []),
+         kind, target_title, reason),
     )
     db.commit()
     return get_note_draft(db, cursor.lastrowid)
+
+
+def stamp_note_draft_provenance(db, draft_id: int,
+                                source_turns: List[int],
+                                tree_root_id: Optional[int]) -> None:
+    """Backfill a draft's provenance once its turn exists (chat-proposed drafts are
+    created mid-stream, before the assistant turn row is written)."""
+    db.cursor().execute(
+        "UPDATE note_drafts SET source_turns = ?, tree_root_id = ? WHERE id = ?",
+        (_json.dumps(source_turns or []), tree_root_id, draft_id),
+    )
+    db.commit()
 
 
 def get_note_draft(db, draft_id: int) -> Optional[dict]:

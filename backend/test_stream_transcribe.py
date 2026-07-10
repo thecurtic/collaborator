@@ -38,30 +38,19 @@ def test_partial_then_final():
     print("✓ streams partials and finalizes on end")
 
 
-def test_auth_rejects_bad_passkey():
+def test_deprecated_passkey_paths_removed():
+    """Tickets are the ONLY WS auth: ?passkey= and first-frame passkey are gone."""
     main.auth_enabled = True
     main.validate_passkey = lambda pk: pk == "good"
     c = TestClient(main.app)
-    with c.websocket_connect("/api/transcribe/stream?passkey=bad") as ws:
-        msg = ws.receive_json()
-        assert msg["type"] == "error"
-    main.auth_enabled = False
-    print("✓ rejects bad passkey")
-
-
-def test_auth_via_first_message():
-    main.auth_enabled = True
-    main.validate_passkey = lambda pk: pk == "good"
-    _stub_whisper()
-    c = TestClient(main.app)
+    # A valid passkey in the URL no longer authenticates.
+    with c.websocket_connect("/api/transcribe/stream?passkey=good") as ws:
+        assert ws.receive_json()["type"] == "error"
+    # Neither does a first-frame passkey.
     with c.websocket_connect("/api/transcribe/stream") as ws:
-        ws.send_text(json.dumps({"passkey": "good"}))   # auth as first text frame
-        ws.send_bytes(PCM_2S)
-        assert ws.receive_json()["type"] == "partial"
-        ws.send_text(json.dumps({"type": "end"}))
-        assert ws.receive_json()["type"] == "final"
+        assert ws.receive_json()["type"] == "error"
     main.auth_enabled = False
-    print("✓ accepts passkey via first text frame")
+    print("✓ deprecated passkey auth paths rejected (ticket-only)")
 
 
 def test_ws_ticket_flow():
@@ -95,7 +84,6 @@ def test_ws_ticket_flow():
 
 if __name__ == "__main__":
     test_partial_then_final()
-    test_auth_rejects_bad_passkey()
-    test_auth_via_first_message()
+    test_deprecated_passkey_paths_removed()
     test_ws_ticket_flow()
     print("\n✓ All streaming-transcribe tests passed!")

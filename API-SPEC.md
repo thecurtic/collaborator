@@ -129,7 +129,10 @@ data: {"type":"done", ...}
 vault — read-only; `get_note` includes backlinks for graph traversal),
 `propose_note` — which **only ever creates a pending draft** in the review inbox
 (never the vault; the user approves/rejects as usual; near-duplicates of existing
-notes are flagged in the result and on the draft) — `web_search`, which queries
+notes are flagged in the result and on the draft) — `propose_edit`, which proposes
+changes to an **existing** note (title/body/tags) as a pending draft of
+`kind: "edit"` in the same inbox (see §11; the vault is never edited directly) —
+`web_search`, which queries
 the private SearXNG instance (`tools.web_search.url`; the tool is offered to the
 model only when that URL is configured, and SearXNG must have the `json` format
 enabled in its settings.yml) — and `fetch_url`, which reads a specific web page
@@ -137,12 +140,17 @@ enabled in its settings.yml) — and `fetch_url`, which reads a specific web pag
 private/tailnet addresses refused unless `tools.fetch_url.allow_private`).
 
 **`drafts_proposed` SSE event** — emitted after the answer streams when the model
-called `propose_note` during the turn:
+called `propose_note` or `propose_edit` during the turn:
 ```
-data: {"type":"drafts_proposed","drafts":[{"id":7,"title":"…","run_id":"chat-a1b2c3d4"}]}
+data: {"type":"drafts_proposed","drafts":[
+  {"id":7,"title":"…","run_id":"chat-a1b2c3d4","kind":"new"},
+  {"id":8,"title":"…","run_id":"chat-a1b2c3d4","kind":"edit","target_title":"…"}]}
 ```
 Use it to surface a "review drafts" affordance; fetch details via
-`GET /api/notes/drafts?run_id=chat-…`.
+`GET /api/notes/drafts?run_id=chat-…`. Chat-proposed drafts (both kinds) are
+stamped server-side with `source_turns = [<assistant turn id>]` and
+`tree_root_id` once the turn persists — no client-side pairing with the `done`
+event is needed.
 
 **`unfollowed_links` SSE event** — emitted after the answer when the model wanted to
 fetch more pages than the per-turn budget allowed (`tools.fetch_url.max_per_turn`):
@@ -379,6 +387,33 @@ parent it branched from. `preview` is a single-line label.
   conversation/branch by naming its root turn). `null` = unnamed. Set via
   `PATCH /api/turns/{turn_id}/name` with `{ "name": "..." }` (empty/whitespace clears
   it; returns `{ "turn_id", "name" }`; `404` if the turn doesn't exist).
+- `title` (string, present only on ROOT turns that have one): the **auto-generated
+  conversation title** — LLM-generated from the conversation after each exchange
+  (lazily: regenerated once the tree grows by `titles.regenerate_after_turns`, default
+  6). Applies to seeds and trees alike, and survives seed→tree promotion (same root
+  row). It is separate from the user-set `name` — render `name ?? title ?? preview`
+  so manual renames always win. Force a refresh with
+  `POST /api/turns/{turn_id}/title` (any turn id in the tree; resolves to the root;
+  returns `{ "root_id", "title" }`; `502` if generation fails). Titles are generated
+  *after* the `done` event (never delaying the reply), so a list refresh right after
+  a first exchange may briefly show no title. The prompt is editable in
+  `title-prompt.md`; disable via `titles.enabled: false`.
+- `tools` (array, present only on assistant turns that used tools): the turn's
+  persisted tool activity — the same records the `status` start/outcome SSE events
+  carried live (0720fd7), so "Sources" works from any device without localStorage:
+  ```json
+  "tools": [
+    { "tool": "web_search", "query": "…", "outcome": "ok", "count": 5,
+      "urls": ["https://…", "…"] },
+    { "tool": "fetch_url", "url": "https://…", "outcome": "ok" },
+    { "tool": "search_notes", "query": "…" }
+  ]
+  ```
+  Fields per record: `tool`, plus `query`/`url`/`title` (what it acted on) and
+  `outcome`/`count`/`error`/`urls` (how it went) when the tool reports an outcome.
+  `urls` on `web_search` records (and on the live `outcome: "ok"` SSE event) lists
+  the result URLs. Records mirror emitted status events, so they exist only when
+  `tools.status_notes` is on (default).
 - `recall` (object, present only on turns that triggered recall): the recall block
   used for that turn — `{ "content": "...", "sources": [...] }`. This is **per-turn /
   per-branch**, so each branch shows its own recall on load, independent of the latest
@@ -390,11 +425,11 @@ parent it branched from. `preview` is a single-line label.
 
 ### 7. Streaming Transcription (WebSocket)
 ```
-WS /api/transcribe/stream?passkey=<your-passkey>&language=en
+WS /api/transcribe/stream?ticket=<one-time-ticket>&language=en
 ```
 
-Stream mic audio in and receive incremental transcripts. For tap-to-record, keep
-using the one-shot `POST /api/transcribe`.
+Stream mic audio in and receive incremental transcripts. (The one-shot multipart
+`POST /api/transcribe` still exists for CLI/bulk use; the frontend uses this WS.)
 
 **Auth (preferred): one-time ticket.** Browsers can't set WebSocket headers, so
 exchange the passkey for a short-lived single-use ticket over a normal request, then
@@ -407,9 +442,10 @@ WS /api/transcribe/stream?ticket=<ticket>
 The ticket is single-use, expires in ~30s, and only the WS endpoint accepts it — so
 the long-lived passkey never lands in a WS URL or proxy logs.
 
-**Backward compat (deprecated):** `?passkey=<secret>` or a first text frame
-`{"passkey":"..."}` still work; remove once the ticket flow ships. Invalid/missing
-auth → `{"type":"error"}` then close (1008).
+**Tickets are the ONLY auth path.** The deprecated fallbacks (`?passkey=<secret>`
+and a first-text-frame `{"passkey":"..."}`) were **removed** — the passkey never
+rides a WS URL. Invalid/missing ticket → `{"type":"error"}` then close (1008).
+(`POST /api/transcribe` remains available for CLI/bulk transcription.)
 
 **Audio in (binary frames):** raw **PCM16, mono, 16 kHz, little-endian** — sent as
 captured (any frame size). This is fed straight to Whisper (no transcode).
@@ -567,6 +603,23 @@ POST /api/notes/drafts
 -> 200 { "draft": { "id": 1, "status": "pending", ... } }
 ```
 
+**Edit drafts (kind: "edit")** — the model can also propose changes to an EXISTING
+vault note via the `propose_edit` tool (title/body/tags, any subset). Those arrive in
+the **same inbox** as new-note drafts, distinguished by three fields:
+```json
+{ "id": 9, "kind": "edit", "target_title": "Transit is freedom",
+  "title": "Good transit is freedom",        // proposed title (may equal target)
+  "body": "…full proposed body…",            // proposed body (snapshot-filled)
+  "tags": ["transit", "cities"],             // proposed tags
+  "reason": "sharper claim; add cities tag", // model's one-line why
+  "status": "pending", ... }
+```
+- `kind` is `"new"` (default; everything before this feature) or `"edit"`.
+- For edit drafts, `title`/`body`/`tags` hold the **full proposed state** of the note
+  (fields the model didn't change were snapshot-filled from the current note), so
+  render the review as a diff: `target_title`'s current note vs the draft.
+- `reason` may be null. Same PATCH-during-review and reject flow as new drafts.
+
 **List / review:**
 ```
 GET /api/notes/drafts?status=pending&run_id=run-abc
@@ -579,11 +632,18 @@ PATCH /api/notes/drafts/{id}
 { "title"?: "...", "body"?: "...", "tags"?: [...], "links"?: [...] }
 ```
 
-**Approve** → writes the note file, returns its location:
+**Approve** → applies the draft to the vault, returns the note's location:
 ```
 POST /api/notes/drafts/{id}/approve
 -> 200 { "draft": {...status:"approved"...}, "path": "...", "filename": "<Title>.md" }
+   (edit drafts additionally return "renamed": bool, "links_rewritten": [titles])
 ```
+- kind "new": writes `<Title>.md` with app-stamped frontmatter (existing behavior).
+- kind "edit": applies the proposed state to `target_title`'s note through the same
+  machinery as `PATCH /api/notes/{title}` — renames rewrite inbound `[[wikilinks]]`
+  across the vault and everything is reindexed. Extra `409` case: the target note
+  was deleted/renamed since the proposal (`detail` says so) — reject the draft or
+  have the model re-propose.
 - `422` if the title is empty/too long or contains `/ \ : * ? " < > | # ^ [ ]`
 - `409` if a note with that title already exists (case-insensitive) — the draft stays
   pending; rename via PATCH and re-approve.

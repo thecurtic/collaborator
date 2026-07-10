@@ -28,10 +28,15 @@ rejection by the user may itself be a note).
 
 ## How to write each note
 
-- Title: a declarative claim ("SQLite fits single-user local persistence") or an
-  honest question the user holds ("Is Postgres's JSON support worth the ops cost?").
-  Never a topic label ("Database notes"). Definitions are claims too. Avoid the
-  characters / \ : * ? " < > | # ^ [ ] in titles.
+- Title: a declarative claim ("SQLite fits local persistence", "Transit is
+  freedom") or an honest question the user holds ("Is Postgres's JSON support
+  worth the ops cost?"). Never a topic label ("Database notes"). Definitions are
+  claims too. KEEP TITLES SHORT — they are [[wikilink]] handles in an atomic wiki:
+  3–7 words. Cut hedges and qualifiers; push
+  every detail, condition, and caveat into the body. If the title reads as a full
+  sentence rather than a handle, trim it until it links well inline
+  ("…because [[Transit is freedom]], I think…"). Avoid the characters
+  / \ : * ? " < > | # ^ [ ] in titles.
 - Body: 50–200 words, written in the user's first-person voice — this reads as the
   user's own thought, not a summary of a chat. Fully self-contained. No dialogue
   form, no speaker tags, never "the user said" or "the assistant suggested". When an

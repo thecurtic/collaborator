@@ -13,12 +13,11 @@ from functools import lru_cache
 from config import get_config, resolve_path
 
 
-# Initialize from config (cached)
 def _get_config():
-    """Get configuration with caching."""
-    if not hasattr(_get_config, "_config"):
-        _get_config._config = get_config()
-    return _get_config._config
+    """Get configuration (get_config() itself caches; never cache a second copy
+    here — a stale duplicate would desync inference from live config updates
+    like PUT /api/model)."""
+    return get_config()
 
 
 def _get_endpoint_url() -> str:
@@ -608,6 +607,44 @@ def synthesize_recall(query: str, matches: List[Dict]) -> str:
         return ""
 
 
+# --- Conversation titles --------------------------------------------------------
+
+DEFAULT_TITLE_PROMPT = (
+    "You title conversations for a chat list. Given the conversation excerpt, reply "
+    "with ONLY the title: 2-6 words, plain text, no quotes, no trailing punctuation, "
+    "no markdown. Name the specific subject (and intent when clear) — never generic "
+    "labels like 'Chat', 'Conversation', or 'Help with a question'."
+)
+
+
+def generate_title(turns: List[Dict]) -> str:
+    """One short LLM call: a 2-6 word title for a conversation's chat-list row.
+
+    Config: titles {prompt_file/prompt_text, temperature, max_tokens, timeout}.
+    Returns "" on empty output (callers treat that as generation failure).
+    """
+    tcfg = _get_config().get("titles", {}) or {}
+    prompt = _load_prompt_layer(tcfg, "prompt_file", "prompt_text", DEFAULT_TITLE_PROMPT)
+    excerpt = "\n".join(
+        f"{t.get('role', '?')}: {(t.get('content') or '')[:400]}"
+        for t in turns[-12:])[:6000]
+    payload = _build_payload(
+        [{"role": "system", "content": prompt},
+         {"role": "user", "content": excerpt}], stream=False)
+    payload["temperature"] = tcfg.get("temperature", 0.3)
+    payload["max_tokens"] = tcfg.get("max_tokens", 24)
+
+    response = requests.post(
+        f"{_get_endpoint_url()}/chat/completions",
+        json=payload, timeout=tcfg.get("timeout", 30),
+    )
+    response.raise_for_status()
+    text = response.json()["choices"][0]["message"]["content"] or ""
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    title = " ".join(first_line.split()).strip(' "\'')
+    return title[:80].rstrip(" .")
+
+
 # --- Notes synthesis (tree -> atomic note drafts) ------------------------------
 
 _NOTES_SCHEMA = {
@@ -621,7 +658,10 @@ _NOTES_SCHEMA = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "title": {"type": "string"},
+                        "title": {"type": "string",
+                                  "description": "SHORT wikilink handle: declarative "
+                                                 "claim or honest question, 3-7 words, "
+                                                 "never a full sentence"},
                         "body": {"type": "string"},
                         "tags": {"type": "array", "items": {"type": "string"}},
                         "links": {"type": "array", "items": {"type": "string"}},
@@ -1030,6 +1070,9 @@ def _tool_status_label(name: str, args: Dict) -> str:
     if name == "propose_note":
         t = (args.get("title") or "").strip()
         return f"Proposing note{f' “{t[:40]}”' if t else ''} (draft for your review)…"
+    if name == "propose_edit":
+        t = (args.get("title") or "").strip()
+        return f"Proposing edit to{f' “{t[:40]}”' if t else ' a note'} (draft for your review)…"
     if name == "web_search":
         return f"Searching the web{f' for “{q[:40]}”' if q else ''}…"
     if name == "fetch_url":
@@ -1047,7 +1090,7 @@ def _tool_status_fields(name: str, args: Dict) -> Dict:
         fields["query"] = q
     if name == "fetch_url" and (args.get("url") or "").strip():
         fields["url"] = args["url"].strip()
-    if name == "get_note" and (args.get("title") or "").strip():
+    if name in ("get_note", "propose_note", "propose_edit") and (args.get("title") or "").strip():
         fields["title"] = args["title"].strip()
     return fields
 
@@ -1068,11 +1111,13 @@ def _tool_outcome_event(name: str, result: str) -> Optional[Dict]:
                 "error": str(data["error"])[:200],
                 "label": f"{name} failed: {str(data['error'])[:120]}"}
     if name == "web_search":
-        n = len(data.get("results") or [])
+        results = data.get("results") or []
+        n = len(results)
         if n == 0:
             return {"type": "status", "tool": name, "outcome": "empty", "count": 0,
                     "label": "Web search returned no results."}
         return {"type": "status", "tool": name, "outcome": "ok", "count": n,
+                "urls": [r.get("url") for r in results if r.get("url")],
                 "label": f"Web search returned {n} result{'s' if n != 1 else ''}."}
     if name == "fetch_url":
         title = (data.get("title") or "").strip()

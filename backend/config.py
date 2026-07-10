@@ -111,6 +111,18 @@ def load_config() -> dict:
             "dedupe_threshold": 0.85,
             "dedupe_context_notes": 30,
         },
+        "titles": {
+            # Auto-generated conversation titles on ROOT turns (seeds and trees
+            # alike; separate from the user-set name, which always wins in the UI).
+            # Generated after an exchange completes; lazily regenerated once the
+            # tree has grown by regenerate_after_turns since the last title.
+            "enabled": True,
+            "regenerate_after_turns": 6,
+            "temperature": 0.3,
+            "max_tokens": 24,
+            "timeout": 30,
+            "prompt_file": "title-prompt.md",  # editable/auditable, like other layers
+        },
         "tools": {
             "enabled": False,          # master switch; false = plain chat, no tools
             "status_notes": True,      # emit a short "what it's doing" per tool step
@@ -127,6 +139,7 @@ def load_config() -> dict:
                 "search_notes": True,
                 "get_note": True,
                 "propose_note": True,  # only ever creates PENDING drafts
+                "propose_edit": True,  # edits to existing notes -> PENDING drafts too
                 "web_search": True,    # self-gating: active only when web_search.url is set
                 "fetch_url": True,     # read a specific page (pasted links)
             },

@@ -65,6 +65,19 @@ Propose a new atomic note distilled from this conversation. This creates a PENDI
 DRAFT in the user's review inbox — it never writes to their vault and never publishes;
 the user approves or rejects it. Use when the user asks you to note something down, or
 when an idea clearly worth keeping emerges and the user has invited suggestions.
-Follow the note rules: title is a declarative claim or honest question; body is 50–200
+Follow the note rules: title is a SHORT declarative claim or honest question — 3–7
+words, a clean [[wikilink]] handle like "Transit is freedom",
+never a full sentence (details and qualifiers belong in the body); body is 50–200
 words in the user's first-person voice, self-contained, no dialogue form. After
 calling it, tell the user the draft is awaiting their review.
+
+## propose_edit
+Propose changes to an EXISTING atomic note: its title, body, tags, or any combination.
+Like propose_note, this creates a PENDING DRAFT in the user's review inbox — it NEVER
+edits the vault directly; the user sees a diff and approves or rejects. Pass the
+note's exact current title (find it with search_notes / get_note first) plus only the
+fields you want changed; omitted fields keep their current values. Give a one-line
+reason so the user understands the intent during review. To edit several notes, call
+this once per note — each becomes its own draft in the same inbox. Body edits are full
+replacements in the user's first-person voice, following the same note rules as
+propose_note. After calling it, tell the user the edit draft(s) await their review.

@@ -37,16 +37,25 @@ specified separately (`synthesis-notes.md` prompt, later).
 
 ### Title style
 
-The title is a **declarative claim or an honest question**, never a topic label:
+The title is a **declarative claim or an honest question**, never a topic label —
+and it must be **short**. Titles are wikilink handles in an atomic wiki: a title
+that doesn't read well inline as `…because [[Title]], I think…` is too long.
+**Titles are 3–7 words.** Compress by cutting hedges and
+qualifiers ("I think", "in most cases", "probably") and pushing every detail,
+condition, and caveat into the body — the title carries the claim, the body carries
+the argument.
 
-- ✅ `SQLite fits single-user local persistence`
-- ✅ `Is Postgres's JSON support worth the ops cost?`
-- ❌ `Database notes`, `Thoughts on SQLite`
+- ✅ `SQLite fits local persistence`
+- ✅ `Transit is freedom`
+- ✅ `Is Postgres's JSON support worth the ops cost?` (questions get a little more room)
+- ❌ `Database notes`, `Thoughts on SQLite` (topic labels, not claims)
+- ❌ `SQLite is a good fit for single-user local-first persistence in this project`
+  (a claim, but a sentence — trim to the handle, argue in the body)
 
 Claims (and genuinely held questions) are what make notes atomic, linkable, and
-arguable. Definitions are claims too ("A context boundary marks where conversation
-memory resets") — no noun-phrase titles. The note's *kind* (decision, open-question,
-concept…) is carried by tags, not by the title shape or a `type` field.
+arguable. Definitions are claims too ("A context boundary marks a memory reset") —
+no noun-phrase titles. The note's *kind* (decision, open-question, concept…) is
+carried by tags, not by the title shape or a `type` field.
 
 ---
 

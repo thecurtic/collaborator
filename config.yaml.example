@@ -85,6 +85,19 @@ notes:
   dedupe_threshold: 0.85       # cosine similarity above which a candidate is flagged
   dedupe_context_notes: 30     # how many existing notes to show the model
 
+# Auto-generated conversation titles, stored on root turns (seeds and trees alike;
+# separate from the user-set name — the UI renders name ?? title ?? preview).
+# Generated after an exchange completes (never delays the reply) and lazily
+# regenerated once the tree grows by regenerate_after_turns. Editable prompt in
+# title-prompt.md. Force-refresh via POST /api/turns/{id}/title.
+titles:
+  enabled: true
+  regenerate_after_turns: 6
+  temperature: 0.3
+  max_tokens: 24
+  timeout: 30
+  prompt_file: "title-prompt.md"
+
 # Tool-calling. When enabled, the model drives retrieval/synthesis by calling tools
 # (recall is a set of tools) and streams status notes for what it's doing. Requires a
 # tool-capable chat model in LM Studio (qwen3-coder-next works). Off by default.
@@ -104,6 +117,7 @@ tools:
     search_notes: true        # search the notes vault (curated knowledge)
     get_note: true            # read one note in full (body + backlinks)
     propose_note: true        # propose a note -> PENDING draft only (user approves)
+    propose_edit: true        # propose edits to an existing note -> PENDING draft too
     web_search: true          # self-gating: active only when web_search.url is set
     fetch_url: true           # read a specific page (pasted links)
   web_search:                 # private SearXNG instance (JSON format must be enabled

@@ -22,12 +22,14 @@ from db import (
     update_turn_name, update_subtree_state, set_current_recall, get_current_recall,
     set_turn_recall, get_turns_missing_embeddings,
     create_note_draft, get_note_draft, list_note_drafts, update_note_draft,
-    set_note_draft_status,
+    set_note_draft_status, stamp_note_draft_provenance,
+    set_turn_tool_activity, set_turn_title, get_turn_title_state, count_tree_turns,
 )
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
     get_embedding, embed_texts, synthesize_recall, get_available_models,
     generate_with_tools, synthesize, synthesize_notes, web_search_searxng, fetch_url,
+    generate_title,
     resolve_prompt_layer, DEFAULT_PARAGRAPH_STYLE, DEFAULT_VOICE_STYLE,
     DEFAULT_TOOLS_GUIDANCE, DEFAULT_RECALL_SYNTHESIS_PROMPT,
     DEFAULT_NOTES_SYNTHESIS_PROMPT, DEFAULT_DATETIME_TEXT,
@@ -183,6 +185,45 @@ def _default_context_window() -> int:
     return config.get("memory", {}).get("default_context_window", 5)
 
 
+def _find_root_id(conn, turn_id: int) -> int:
+    """Walk parent_turn_id up from a turn to its tree's root id."""
+    current = turn_id
+    while True:
+        row = conn.cursor().execute(
+            "SELECT parent_turn_id FROM turns WHERE id = ?", (current,)).fetchone()
+        if row is None or row[0] is None:
+            return current
+        current = row[0]
+
+
+def _maybe_update_title(db_path: str, leaf_turn_id: int, force: bool = False):
+    """Generate/refresh the root's conversation title from the leaf's branch.
+
+    Lazy: runs when the root has no title yet, or the tree grew by
+    titles.regenerate_after_turns since the last one (force skips both checks).
+    Returns (root_id, title) — title is None when nothing was (re)generated.
+    """
+    tcfg = config.get("titles", {}) or {}
+    conn = sqlite3.connect(db_path)
+    try:
+        root_id = _find_root_id(conn, leaf_turn_id)
+        if not tcfg.get("enabled", True) and not force:
+            return root_id, None
+        current, generated_at = get_turn_title_state(conn, root_id)
+        count = count_tree_turns(conn, root_id)
+        stale = count - (generated_at or 0) >= tcfg.get("regenerate_after_turns", 6)
+        if not force and current is not None and not stale:
+            return root_id, None
+        chain = get_ancestor_chain(conn, leaf_turn_id, limit=12)
+        title = generate_title(chain)
+        if title:
+            set_turn_title(conn, root_id, title, count)
+            return root_id, title
+        return root_id, None
+    finally:
+        conn.close()
+
+
 def _effective_context_turns(value: Optional[int]) -> int:
     """Resolve a request's context_turns: None -> configured default; 0 -> fresh."""
     return _default_context_window() if value is None else value
@@ -257,6 +298,11 @@ DEFAULT_TOOL_DESCRIPTIONS = {
     "propose_note": ("Propose a new atomic note. Creates a PENDING DRAFT the user must "
                      "review and approve — it never publishes. Use when the user asks to "
                      "note something down, or an idea clearly worth keeping emerges."),
+    "propose_edit": ("Propose changes to an EXISTING atomic note (title, body, and/or "
+                     "tags). Creates a PENDING DRAFT the user must review and approve — "
+                     "it never edits the vault directly. Pass the note's exact current "
+                     "title plus only the fields you want changed. Call once per note "
+                     "when editing several."),
     "web_search": ("Search the web via the user's private SearXNG instance. Use for "
                    "current events, facts you don't know, or anything the user asks you "
                    "to look up. Returns result titles, URLs, and snippets. Today is "
@@ -376,7 +422,9 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             "description": descs["propose_note"],
             "parameters": {"type": "object", "properties": {
                 "title": {"type": "string",
-                          "description": "declarative claim or honest question"},
+                          "description": "SHORT declarative claim or honest question "
+                                         "(3-7 words; a wikilink handle, "
+                                         "not a sentence)"},
                 "body": {"type": "string",
                          "description": "50-200 words, user's first-person voice, "
                                         "self-contained, [[wikilinks]] allowed"},
@@ -385,6 +433,24 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "links": {"type": "array", "items": {"type": "string"},
                           "description": "titles of related notes"}},
                 "required": ["title", "body"]}}})
+    if avail.get("propose_edit", True):
+        schemas.append({"type": "function", "function": {
+            "name": "propose_edit",
+            "description": descs["propose_edit"],
+            "parameters": {"type": "object", "properties": {
+                "title": {"type": "string",
+                          "description": "EXACT title of the existing note to edit"},
+                "new_title": {"type": "string",
+                              "description": "proposed new title (omit to keep the "
+                                             "current one); keep it SHORT — a wikilink "
+                                             "handle, 3-7 words"},
+                "body": {"type": "string",
+                         "description": "proposed full replacement body (omit to keep)"},
+                "tags": {"type": "array", "items": {"type": "string"},
+                         "description": "proposed full replacement tag list (omit to keep)"},
+                "reason": {"type": "string",
+                           "description": "one line: why this edit, shown to the user in review"}},
+                "required": ["title"]}}})
 
     def execute(name, args):
         if name in ("recall_semantic", "recall_keyword"):
@@ -460,7 +526,8 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             finally:
                 conn.close()
             state.setdefault("proposed_drafts", []).append(
-                {"id": draft["id"], "title": draft["title"], "run_id": draft["run_id"]})
+                {"id": draft["id"], "title": draft["title"], "run_id": draft["run_id"],
+                 "kind": "new"})
             result = {"draft_id": draft["id"], "status": "pending",
                       "note": "Draft created; awaiting the user's review. Tell "
                               "the user it's in their drafts inbox."}
@@ -470,6 +537,51 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                                    f"{', '.join(d['title'] for d in dupes)} — mention "
                                    "this to the user.")
             return json.dumps(result)
+        if name == "propose_edit":
+            target = (args.get("title") or "").strip()
+            if not target:
+                return json.dumps({"error": "propose_edit needs the exact title of "
+                                            "an existing note"})
+            conn = sqlite3.connect(db_path)
+            try:
+                note = notes_index.get_note_by_title(conn, target)
+                if note is None:
+                    return json.dumps({"error": f"no note titled \"{target}\" — find "
+                                                "the exact title with search_notes first"})
+                vault = _resolve_vault_dir(db_path)
+                parsed = notes_index.parse_note_file(
+                    os.path.join(vault, note["filename"]))
+                # Snapshot semantics: omitted fields are filled with the note's
+                # current values, so the draft holds the FULL proposed state and
+                # approval applies exactly what the user reviewed.
+                new_title = " ".join((args.get("new_title") or note["title"]).split())
+                if new_title != note["title"]:
+                    try:
+                        new_title = _validate_note_title(new_title)
+                    except HTTPException as e:
+                        return json.dumps({"error": f"invalid new_title: {e.detail}"})
+                body = (args.get("body") or "").strip() or parsed["body"]
+                tags = args.get("tags")
+                tags = ([str(t) for t in tags] if isinstance(tags, list)
+                        else (note.get("tags") or []))
+                if (new_title == note["title"] and body == parsed["body"]
+                        and tags == (note.get("tags") or [])):
+                    return json.dumps({"error": "the proposed edit changes nothing — "
+                                                "pass new_title, body, and/or tags"})
+                draft = create_note_draft(
+                    conn, new_title, body, tags=tags,
+                    run_id=state["chat_run_id"], kind="edit",
+                    target_title=note["title"],
+                    reason=(args.get("reason") or "").strip() or None)
+            finally:
+                conn.close()
+            state.setdefault("proposed_drafts", []).append(
+                {"id": draft["id"], "title": draft["title"], "run_id": draft["run_id"],
+                 "kind": "edit", "target_title": draft["target_title"]})
+            return json.dumps({
+                "draft_id": draft["id"], "status": "pending",
+                "note": "Edit draft created; nothing changes until the user approves "
+                        "it. Tell the user it's in their drafts inbox."})
         if name == "web_search":
             return json.dumps(web_search_searxng(args.get("query", "")))
         if name == "fetch_url":
@@ -769,6 +881,7 @@ def _stream_turn_response(
         full_response = ""
         synthesis_block = None
         synthesis_sources = []
+        tool_activity = []      # per-call records mirrored from status events
 
         if tools_enabled:
             # Turns already in the context window are excluded from recall searches
@@ -786,6 +899,20 @@ def _stream_turn_response(
                 ):
                     if ev.get("type") == "token":
                         full_response += ev["content"]
+                    elif ev.get("type") == "status" and ev.get("tool"):
+                        # Persisted "Sources": start events open a record, outcome
+                        # events complete the newest open record for that tool.
+                        if "outcome" in ev:
+                            for entry in reversed(tool_activity):
+                                if entry["tool"] == ev["tool"] and "outcome" not in entry:
+                                    entry.update({k: ev[k] for k in
+                                                  ("outcome", "count", "error", "urls")
+                                                  if k in ev})
+                                    break
+                        else:
+                            tool_activity.append({k: ev[k] for k in
+                                                  ("tool", "query", "url", "title")
+                                                  if k in ev})
                     yield f"data: {json.dumps(ev)}\n\n"
                     if ev.get("type") == "error":
                         return
@@ -840,6 +967,22 @@ def _stream_turn_response(
                                 set_turn_embedding(conn, t["id"], vec)
                         except Exception:
                             pass
+                # Now that the turns exist: stamp chat-proposed drafts with their
+                # provenance, and persist this turn's tool activity ("Sources").
+                if tools_enabled:
+                    root_id = _find_root_id(conn, user_turn["id"])
+                    for p in (tool_state.get("proposed_drafts") or []):
+                        try:
+                            stamp_note_draft_provenance(
+                                conn, p["id"], [assistant_turn["id"]], root_id)
+                        except Exception:
+                            pass
+                    if tool_activity:
+                        try:
+                            set_turn_tool_activity(
+                                conn, assistant_turn["id"], tool_activity)
+                        except Exception:
+                            pass
             finally:
                 conn.close()
         except Exception as e:
@@ -855,6 +998,13 @@ def _stream_turn_response(
             "context_turns_used": context_turns,
         }
         yield f"data: {json.dumps(done)}\n\n"
+
+        # After done (so it never delays the reply): keep the root's generated
+        # conversation title fresh. Best-effort; the next GET /api/tree shows it.
+        try:
+            _maybe_update_title(db_path, assistant_turn["id"])
+        except Exception:
+            pass
 
     return event_generator
 
@@ -1209,8 +1359,12 @@ async def approve_draft(
     draft_id: int,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
-    """Approve a pending draft: validate the title, write the note file into the
-    vault with app-stamped frontmatter, and mark the draft approved."""
+    """Approve a pending draft and apply it to the vault.
+
+    kind 'new': validate the title and write the note file with app-stamped
+    frontmatter. kind 'edit': apply the proposed state to the target note through
+    the same machinery as PATCH /api/notes/{title} (renames rewrite inbound
+    wikilinks; 409 if the target note was deleted/renamed since the proposal)."""
     _require_auth(passkey)
     try:
         db_path = _resolve_db_path(passkey)
@@ -1222,8 +1376,25 @@ async def approve_draft(
             if draft["status"] != "pending":
                 raise HTTPException(status_code=409, detail=f"Draft {draft_id} is already {draft['status']}")
 
-            title = _validate_note_title(draft["title"])
             vault = _resolve_vault_dir(db_path)
+            if draft.get("kind") == "edit":
+                target = draft.get("target_title") or ""
+                if notes_index.get_note_by_title(conn, target) is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Target note \"{target}\" no longer exists (deleted "
+                               "or renamed since this edit was proposed) — reject "
+                               "the draft or re-propose against the current note")
+                applied = _apply_note_edit(conn, vault, target,
+                                           new_title=draft["title"],
+                                           body=draft["body"], tags=draft["tags"])
+                draft = set_note_draft_status(conn, draft_id, "approved")
+                filename = applied["note"]["filename"]
+                return {"draft": draft, "path": os.path.join(vault, filename),
+                        "filename": filename, "renamed": applied["renamed"],
+                        "links_rewritten": applied["links_rewritten"]}
+
+            title = _validate_note_title(draft["title"])
             path = _write_note_file(vault, title, draft["body"],
                                     draft["tags"], draft["source_turns"])
             draft = set_note_draft_status(conn, draft_id, "approved")
@@ -1364,6 +1535,78 @@ async def get_vault_note(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _apply_note_edit(conn, vault: str, title: str,
+                     new_title: Optional[str] = None,
+                     body: Optional[str] = None,
+                     tags: Optional[List[str]] = None) -> dict:
+    """Apply an edit to an approved vault note: body, tags, and/or title (rename).
+
+    Shared by the user's PATCH /api/notes/{title} and edit-draft approval, so both
+    paths behave identically: renames rewrite inbound [[wikilinks]] across the
+    vault (the Obsidian-parity obligation from NOTES-FORMAT.md), unknown
+    frontmatter keys are preserved, and the edited note (plus any rewritten
+    linkers) are reindexed immediately. None fields are left unchanged.
+
+    Returns {"note", "renamed", "links_rewritten"}; raises HTTPException 404 when
+    the note doesn't exist and 409 on a rename collision.
+    """
+    note = notes_index.get_note_by_title(conn, title)
+    if note is None:
+        raise HTTPException(status_code=404, detail=f"Note \"{title}\" not found")
+
+    old_title = note["title"]
+    old_path = os.path.join(vault, note["filename"])
+    parsed = notes_index.parse_note_file(old_path)
+    front = dict(parsed.get("front") or {})
+
+    new_body = body if body is not None else parsed["body"]
+    if tags is not None:
+        front["tags"] = [t for t in (_normalize_tag(t) for t in tags) if t]
+
+    new_title = " ".join((new_title or old_title).split())
+    renamed = new_title != old_title
+    if renamed:
+        new_title = _validate_note_title(new_title)
+        existing = {f.lower() for f in os.listdir(vault)} - {note["filename"].lower()}
+        if f"{new_title}.md".lower() in existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"A note titled \"{new_title}\" already exists")
+
+    # Gather linkers BEFORE the index changes (backlinks come from the index).
+    linkers = notes_index.get_backlinks(conn, old_title) if renamed else []
+
+    new_path = os.path.join(vault, f"{new_title}.md")
+    with open(new_path, "w", encoding="utf-8") as f:
+        f.write(notes_index.compose_note_file(front, new_title, new_body))
+    if renamed:
+        if os.path.exists(old_path) and old_path != new_path:
+            os.remove(old_path)
+        conn.cursor().execute("DELETE FROM notes_index WHERE filename = ?",
+                              (note["filename"],))
+        conn.commit()
+    notes_index.index_note_file(conn, new_path, embed_fn=embed_texts)
+
+    links_rewritten = []
+    for linker in linkers:
+        lpath = os.path.join(vault, linker["filename"])
+        try:
+            with open(lpath, "r", encoding="utf-8") as f:
+                raw = f.read()
+            updated = notes_index.rewrite_wikilinks(raw, old_title, new_title)
+            if updated != raw:
+                with open(lpath, "w", encoding="utf-8") as f:
+                    f.write(updated)
+                notes_index.index_note_file(conn, lpath, embed_fn=embed_texts)
+                links_rewritten.append(linker["title"])
+        except IOError:
+            continue
+
+    result = notes_index.get_note_by_title(conn, new_title)
+    result["backlinks"] = notes_index.get_backlinks(conn, new_title)
+    return {"note": result, "renamed": renamed, "links_rewritten": links_rewritten}
+
+
 @app.patch("/api/notes/{title}")
 async def edit_vault_note(
     title: str,
@@ -1372,9 +1615,7 @@ async def edit_vault_note(
 ):
     """Edit an approved note in the vault: body, tags, and/or title (rename).
 
-    Renames rewrite inbound [[wikilinks]] across the vault (the Obsidian-parity
-    obligation from NOTES-FORMAT.md). Unknown frontmatter keys are preserved; the
-    edited note (and any rewritten linkers) are reindexed immediately.
+    Thin wrapper over _apply_note_edit (same machinery as edit-draft approval).
     """
     _require_auth(passkey)
     try:
@@ -1382,63 +1623,10 @@ async def edit_vault_note(
         vault = _resolve_vault_dir(db_path)
         conn = sqlite3.connect(db_path)
         try:
-            note = notes_index.get_note_by_title(conn, title)
-            if note is None:
-                raise HTTPException(status_code=404, detail=f"Note \"{title}\" not found")
-
-            old_title = note["title"]
-            old_path = os.path.join(vault, note["filename"])
-            parsed = notes_index.parse_note_file(old_path)
-            front = dict(parsed.get("front") or {})
-
-            new_body = request.body if request.body is not None else parsed["body"]
-            if request.tags is not None:
-                front["tags"] = [t for t in (_normalize_tag(t) for t in request.tags) if t]
-
-            new_title = " ".join((request.title or old_title).split())
-            renamed = new_title != old_title
-            if renamed:
-                new_title = _validate_note_title(new_title)
-                existing = {f.lower() for f in os.listdir(vault)} - {note["filename"].lower()}
-                if f"{new_title}.md".lower() in existing:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"A note titled \"{new_title}\" already exists")
-
-            # Gather linkers BEFORE the index changes (backlinks come from the index).
-            linkers = notes_index.get_backlinks(conn, old_title) if renamed else []
-
-            new_path = os.path.join(vault, f"{new_title}.md")
-            with open(new_path, "w", encoding="utf-8") as f:
-                f.write(notes_index.compose_note_file(front, new_title, new_body))
-            if renamed:
-                if os.path.exists(old_path) and old_path != new_path:
-                    os.remove(old_path)
-                conn.cursor().execute("DELETE FROM notes_index WHERE filename = ?",
-                                      (note["filename"],))
-                conn.commit()
-            notes_index.index_note_file(conn, new_path, embed_fn=embed_texts)
-
-            links_rewritten = []
-            for linker in linkers:
-                lpath = os.path.join(vault, linker["filename"])
-                try:
-                    with open(lpath, "r", encoding="utf-8") as f:
-                        raw = f.read()
-                    updated = notes_index.rewrite_wikilinks(raw, old_title, new_title)
-                    if updated != raw:
-                        with open(lpath, "w", encoding="utf-8") as f:
-                            f.write(updated)
-                        notes_index.index_note_file(conn, lpath, embed_fn=embed_texts)
-                        links_rewritten.append(linker["title"])
-                except IOError:
-                    continue
-
-            result = notes_index.get_note_by_title(conn, new_title)
-            result["backlinks"] = notes_index.get_backlinks(conn, new_title)
+            return _apply_note_edit(conn, vault, title, new_title=request.title,
+                                    body=request.body, tags=request.tags)
         finally:
             conn.close()
-        return {"note": result, "renamed": renamed, "links_rewritten": links_rewritten}
     except HTTPException:
         raise
     except Exception as e:
@@ -1731,6 +1919,37 @@ async def patch_turn_tags(
         if tags is None:
             raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
         return {"turn_id": turn_id, "tags": tags}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/turns/{turn_id}/title")
+async def regenerate_conversation_title(
+    turn_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Regenerate the conversation title on demand.
+
+    Accepts any turn id in the tree (resolves to the root; the freshest branch to
+    summarize is the one containing the given turn). Returns the new title —
+    stored on the root, separate from the user-set name (which the UI should
+    always prefer). 502 when generation fails.
+    """
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        conn = sqlite3.connect(db_path)
+        try:
+            if get_turn_by_id(conn, turn_id) is None:
+                raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
+        finally:
+            conn.close()
+        root_id, title = _maybe_update_title(db_path, turn_id, force=True)
+        if title is None:
+            raise HTTPException(status_code=502, detail="Title generation failed")
+        return {"root_id": root_id, "title": title}
     except HTTPException:
         raise
     except Exception as e:
@@ -2079,15 +2298,15 @@ async def create_ws_ticket(passkey: Optional[str] = Header(None, alias="X-Passke
 async def transcribe_stream(
     websocket: WebSocket,
     ticket: Optional[str] = Query(None),
-    passkey: Optional[str] = Query(None),
     language: Optional[str] = Query(None),
 ):
     """Stream mic audio in, get incremental transcripts back.
 
     Protocol:
-      - Auth (preferred): ?ticket=<one-time ticket from POST /api/auth/ws-ticket>.
-        Backward compat: ?passkey=... OR first text frame {"passkey": "..."}.
-        Invalid/missing -> error + close.
+      - Auth: ?ticket=<one-time ticket from POST /api/auth/ws-ticket>. This is the
+        ONLY auth path (the passkey never rides a URL); the deprecated ?passkey=
+        and first-frame-passkey fallbacks were removed once the frontend moved to
+        tickets. Invalid/missing -> error + close.
       - Client -> server (binary): raw PCM16, mono, 16 kHz, little-endian.
       - Client -> server (text): {"type":"end"} to finalize the turn.
       - Server -> client (text): {"type":"partial","text":...} as it transcribes,
@@ -2095,27 +2314,8 @@ async def transcribe_stream(
     """
     await websocket.accept()
 
-    # --- Auth: ticket (preferred) -> ?passkey= -> first text frame {"passkey"} ---
     if auth_enabled:
-        authed = False
-        if ticket is not None:
-            authed = _consume_ws_ticket(ticket)   # ticket path: don't fall back to passkey
-        else:
-            pk = passkey
-            if not pk:
-                try:
-                    first = await websocket.receive()
-                except WebSocketDisconnect:
-                    return
-                if first.get("type") == "websocket.disconnect":
-                    return
-                if first.get("text"):
-                    try:
-                        pk = json.loads(first["text"]).get("passkey")
-                    except Exception:
-                        pk = None
-            authed = bool(pk) and validate_passkey(pk)
-        if not authed:
+        if not (ticket and _consume_ws_ticket(ticket)):
             await _ws_send(websocket, {"type": "error", "detail": "Invalid or missing credentials"})
             await websocket.close(code=1008)
             return
