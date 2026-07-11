@@ -7,6 +7,7 @@ import {
   getSttEngine,
 } from '@/features/settings/uiPrefs';
 import { holdPwaUpdates } from '@/pwa';
+import { startCallService, stopCallService } from '@/native/nativeShell';
 import { saveTurnSources } from '@/features/chat/sourcesStore';
 import { foldToolEvent } from '@/features/chat/toolActivity';
 import { withTimeout } from '@/lib/utils';
@@ -131,6 +132,9 @@ export function useCall(
     setError(null);
     // Pause PWA update checks — an auto-update reload would drop the call.
     const releaseUpdateHold = holdPwaUpdates();
+    // Android shell: mic foreground service so capture survives screen-off
+    // (no-op in browsers). Shows the persistent "call in progress" notice.
+    void startCallService();
     let stream: MediaStream | null = null;
     let pcm: PcmStream | null = null;
     let transcriber: Transcriber | null = null;
@@ -186,6 +190,7 @@ export function useCall(
     const cleanup = () => {
       active = false;
       releaseUpdateHold();
+      void stopCallService();
       stopKws();
       streamAbort?.abort();
       stopCapture();

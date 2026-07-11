@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "android:sync": "cap sync android"
   },
   "dependencies": {
     "@diffusionstudio/vits-web": "^1.0.3",
@@ -26,6 +27,10 @@
     "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/cli": "^8.4.1",
+    "@capacitor/core": "^8.4.1",
+    "@capawesome-team/capacitor-android-foreground-service": "^8.1.0",
     "@tailwindcss/vite": "^4.0.0",
     "@types/node": "^26.0.1",
     "@types/react": "^19.0.0",

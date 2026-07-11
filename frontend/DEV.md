@@ -185,3 +185,27 @@ later (and are worth fixing in the backend/spec to stop the drift):
   `.config.yaml`.
 - **Frontend health shows "offline"** → backend isn't running on `:8001`.
 - **Port 8001 in use** → another backend instance is running; stop it first.
+
+## Android shell (`android/`)
+
+A Capacitor wrapper in **remote-URL mode**: the WebView loads
+`https://collaborator.example.com` directly, so every frontend deploy
+updates the app through the existing service-worker flow — **the APK is built
+once** and only rebuilt if the native layer itself changes. Its sole job is a
+microphone-type **foreground service** (capawesome plugin) so calls keep
+capturing with the screen off; the web app starts/stops it around calls via
+`src/native/nativeShell.ts` (feature-detected — browsers no-op, and nothing
+from `@capacitor/*` is imported into the web bundle).
+
+Build (needs Android Studio / an Android SDK):
+
+```bash
+npm run android:sync                    # sync config + plugin registrations
+cd android && ./gradlew assembleDebug   # or open android/ in Android Studio
+# → android/app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+First call in the app prompts for microphone + notification permissions.
+The debug APK is fine for personal sideloading; set up a signing config in
+`android/app/build.gradle` only if you ever want a release build.
