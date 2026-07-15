@@ -1,5 +1,6 @@
 import {
   Brain,
+  Camera,
   Check,
   CircleSlash,
   Globe,
@@ -16,6 +17,7 @@ import type { ToolActivity } from '@/domain/models';
 export function toolIcon(tool: string) {
   if (tool === 'web_search') return Globe;
   if (tool === 'fetch_url') return LinkIcon;
+  if (tool === 'screenshot_page') return Camera;
   if (tool.startsWith('recall')) return Brain;
   if (tool === 'search_notes' || tool === 'get_note') return NotebookText;
   if (tool === 'propose_note') return NotebookPen;
