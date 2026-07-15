@@ -75,12 +75,59 @@ def test_parse_textual_tool_calls():
     xml = ("<tool_call>\n<function=web_search>\n<parameter=query>\n"
            "boe governor\n</parameter>\n</function>\n</tool_call>")
     assert p(xml, known) == want
+    # Call style with a positional arg (seen live, unclosed tags included).
+    assert p('<tool_call>\n<function=web_search("boe governor")\n</function>', known) == want
+    assert p('<function=web_search("boe governor")>', known) == want
+    # Call style with kwargs; positional maps to the tool's primary param.
+    assert p('<function=fetch_url(url="https://x.example/p")</function>', known) == \
+        [{"name": "fetch_url", "args": {"url": "https://x.example/p"}}]
+    assert p("<function=fetch_url('https://x.example/p')", known) == \
+        [{"name": "fetch_url", "args": {"url": "https://x.example/p"}}]
+    # JSON body inside function tags.
+    assert p('<function=web_search>{"query": "boe governor"}</function>', known) == want
     # not tool calls
     assert p("The governor is Andrew Bailey.", known) == []
     assert p('{"answer": 42}', known) == []
     assert p('{"name": "rm_rf", "arguments": {}}', known) == []
     assert p("<function=rm_rf>\n</function>", known) == []
+    assert p('<function=rm_rf("x")>', known) == []
     print("✓ textual tool-call parser accepts real calls, rejects everything else")
+
+
+def test_prose_then_blob_intercepted():
+    """The reported failure: prose first, then a textual tool call — the prose
+    must stream, the blob must execute instead of reaching the user."""
+    prose = "I'll quickly verify the ownership structure and key facts.\n\n"
+    blob = ('<tool_call>\n<function=web_search("GCT Global Container Terminals '
+            'ownership CK Hutchison China")  \n</function>')
+    whole = prose + blob
+    rounds = [
+        # split awkwardly so the marker straddles a chunk boundary
+        [{"content": whole[:30]}, {"content": whole[30:68]},
+         {"content": whole[68:75]}, {"content": whole[75:]}],
+        [{"content": "GCT is owned by ..."}],
+    ]
+    executed = []
+    events = _run(rounds, lambda n, a: executed.append((n, a)) or
+                  json.dumps({"results": [{"title": "x"}]}))
+    assert executed == [("web_search",
+                         {"query": "GCT Global Container Terminals ownership "
+                                   "CK Hutchison China"})]
+    text = "".join(e["content"] for e in events if e["type"] == "token")
+    assert "I'll quickly verify" in text            # prose delivered
+    assert "<tool_call" not in text and "<function" not in text
+    assert "GCT is owned by" in text                # real answer streamed after
+    print("✓ prose + textual tool call: prose streams, call executes, blob hidden")
+
+
+def test_prose_mentioning_function_still_delivered():
+    """Mid-prose marker that is NOT a real call gets delivered, not eaten."""
+    msg = "In JS you might write <function=foo> style pseudo-tags, which is invalid."
+    rounds = [[{"content": msg[:40]}, {"content": msg[40:]}]]
+    events = _run(rounds, lambda n, a: "{}")
+    text = "".join(e["content"] for e in events if e["type"] == "token")
+    assert text == msg
+    print("✓ false-alarm markers in prose are still delivered verbatim")
 
 
 def test_textual_tool_call_recovered_not_streamed():
@@ -114,11 +161,14 @@ def test_braced_answer_still_delivered():
 
 
 def test_prose_streams_immediately():
-    rounds = [[{"content": "Hello "}, {"content": "world."}]]
+    rounds = [[{"content": "Hello there my friend, "}, {"content": "how are you today?"}]]
     events = _run(rounds, lambda n, a: "{}")
     tokens = [e["content"] for e in events if e["type"] == "token"]
-    assert tokens == ["Hello ", "world."]       # per-chunk, not batched at round end
-    print("✓ ordinary prose is streamed chunk by chunk (no buffering penalty)")
+    assert "".join(tokens) == "Hello there my friend, how are you today?"
+    # Streaming still incremental: text flows during the round (a small tail is
+    # withheld for marker detection), not one blob at round end.
+    assert len(tokens) >= 2
+    print("✓ ordinary prose streams incrementally and is delivered verbatim")
 
 
 def _tool_call(idx_id, name, arguments):
@@ -286,6 +336,8 @@ def test_manual_search_endpoint():
 if __name__ == "__main__":
     test_today_placeholder_substituted()
     test_parse_textual_tool_calls()
+    test_prose_then_blob_intercepted()
+    test_prose_mentioning_function_still_delivered()
     test_textual_tool_call_recovered_not_streamed()
     test_braced_answer_still_delivered()
     test_prose_streams_immediately()

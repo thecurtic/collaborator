@@ -1267,29 +1267,82 @@ def _tool_outcome_event(name: str, result: str) -> Optional[Dict]:
     return None
 
 
+# When a textual tool call passes ONE positional argument — web_search("...") —
+# this maps it onto the tool's primary parameter.
+_POSITIONAL_ARG_KEY = {
+    "web_search": "query", "recall_semantic": "query", "recall_keyword": "query",
+    "search_notes": "query", "fetch_url": "url", "screenshot_page": "url",
+    "get_note": "title",
+}
+
+
 def _parse_textual_tool_calls(text: str, known_names) -> List[Dict]:
     """Recover tool calls the model wrote as plain text instead of structured
-    tool_calls deltas (some models occasionally do this). Accepts bare JSON,
-    ```json fences, <tool_call> wrappers, and qwen's XML-style
-    <function=name><parameter=key>value</parameter></function> format. Returns
-    [{"name", "args"}, ...] or [] when the text is not a recognizable tool call."""
+    tool_calls deltas (quantized models especially do this). Accepted dialects:
+    bare/fenced JSON ({"name": ..., "arguments": ...}, lists, {"tool_calls": []}),
+    qwen's XML style (<function=name><parameter=key>value</parameter></function>),
+    call style (<function=name("arg")> / <function=name(key="v")>), and a JSON or
+    quoted body inside function tags — all tolerant of missing closing tags.
+    Returns [{"name", "args"}, ...] or [] when nothing recognizable."""
     import json as _json
     import re as _re
     s = (text or "").strip()
     s = _re.sub(r"^```(?:json)?\s*|\s*```$", "", s).strip()
-    s = _re.sub(r"^<tool_call>\s*|\s*</tool_call>$", "", s).strip()
+    s = _re.sub(r"^<tool_call>\s*|\s*</tool_call>\s*$", "", s).strip()
 
-    # qwen3-style XML tool call.
-    if s.startswith("<function="):
+    def _positional(name, value):
+        key = _POSITIONAL_ARG_KEY.get(name)
+        return {key: value} if key else None
+
+    # Call style: <function=name("arg")> / <function=name(key="v", k2="v2")>.
+    if _re.match(r"<function=[\w.-]+\s*\(", s):
         calls = []
-        for m in _re.finditer(r"<function=([\w.-]+)>(.*?)(?:</function>|$)", s, _re.S):
+        for m in _re.finditer(r"<function=([\w.-]+)\s*\((.*?)\)\s*>?", s, _re.S):
             name = m.group(1)
             if name not in known_names:
                 return []
+            inner = m.group(2).strip()
+            kwargs = _re.findall(r"""([\w.-]+)\s*=\s*(['"])(.*?)\2""", inner, _re.S)
+            if kwargs:
+                args = {k: v for k, _q, v in kwargs}
+            elif not inner:
+                args = {}
+            elif inner.startswith("{"):
+                try:
+                    args = _json.loads(inner)
+                except Exception:
+                    return []
+            else:
+                quoted = _re.match(r"""^(['"])(.*)\1$""", inner, _re.S)
+                args = _positional(name, (quoted.group(2) if quoted else inner).strip())
+                if args is None:
+                    return []
+            calls.append({"name": name, "args": args if isinstance(args, dict) else {}})
+        return calls
+
+    # qwen3-style XML tool call: parameter tags, or a JSON/quoted positional body.
+    if s.startswith("<function="):
+        calls = []
+        for m in _re.finditer(r"<function=([\w.-]+)>\s*(.*?)\s*(?:</function>|$)", s, _re.S):
+            name = m.group(1)
+            if name not in known_names:
+                return []
+            body = m.group(2).strip()
             args = {k: v.strip() for k, v in
                     _re.findall(r"<parameter=([\w.-]+)>\s*(.*?)\s*</parameter>",
-                                m.group(2), _re.S)}
-            calls.append({"name": name, "args": args})
+                                body, _re.S)}
+            if not args and body:
+                if body.startswith("{"):
+                    try:
+                        args = _json.loads(body)
+                    except Exception:
+                        return []
+                else:
+                    quoted = _re.match(r"""^(['"])(.*)\1$""", body, _re.S)
+                    args = _positional(name, (quoted.group(2) if quoted else body).strip())
+                    if args is None:
+                        return []
+            calls.append({"name": name, "args": args if isinstance(args, dict) else {}})
         return calls
 
     if not s.startswith(("{", "[")):
@@ -1320,6 +1373,56 @@ def _parse_textual_tool_calls(text: str, known_names) -> List[Dict]:
                 args = {}
         calls.append({"name": name, "args": args if isinstance(args, dict) else {}})
     return calls
+
+
+class _StreamGuard:
+    """Withholds streamed text that looks like a textual tool-call blob.
+
+    At message start, any blob-ish opener ({, [, ```, <tool_call, <function) is
+    held back. Mid-prose, explicit call markers (<tool_call, <function=) arm the
+    guard — "I'll check that.\\n<tool_call>…" is the common failure shape of
+    quantized models, and a start-only guard streams the blob to the user. A
+    small tail is withheld from passthrough so a marker split across stream
+    chunks is still caught. Held text that turns out NOT to be a tool call is
+    delivered at end of round — nothing is ever dropped.
+    """
+    _START = ("{", "[", "```", "<tool_call", "<function")
+    _MID = ("<tool_call", "<function=")
+    _TAIL = max(len(m) for m in _MID) - 1
+
+    def __init__(self):
+        self.pending = ""     # passthrough text not yet emitted (marker-tail guard)
+        self.held = ""        # suspected blob, from its marker onward
+        self._started = False
+
+    def feed(self, content: str) -> str:
+        """Add streamed content; return whatever is safe to emit right now."""
+        if self.held:
+            self.held += content
+            return ""
+        self.pending += content
+        if not self._started:
+            lead = self.pending.lstrip()
+            if not lead:
+                return ""
+            self._started = True
+            if lead.startswith(self._START):
+                self.held, self.pending = self.pending, ""
+                return ""
+        hits = [i for i in (self.pending.find(m) for m in self._MID) if i != -1]
+        if hits:
+            cut = min(hits)
+            out, self.held, self.pending = self.pending[:cut], self.pending[cut:], ""
+            return out
+        if len(self.pending) > self._TAIL:
+            out, self.pending = self.pending[:-self._TAIL], self.pending[-self._TAIL:]
+            return out
+        return ""
+
+    def flush_pending(self) -> str:
+        """End of round: any withheld ordinary prose (always emit this)."""
+        out, self.pending = self.pending, ""
+        return out
 
 
 def _iter_stream_events(payload: Dict):
@@ -1369,6 +1472,7 @@ def generate_with_tools(
     tools_temp = _tools_config().get("temperature", 0.3)
 
     known_names = {s["function"]["name"] for s in tool_schemas}
+    nudged_about_textual_calls = False
 
     for round_index in range(max_rounds + 1):
         # Last iteration: drop tools so the model must produce a final answer.
@@ -1386,34 +1490,25 @@ def generate_with_tools(
             payload["tools"] = tool_schemas
             payload["tool_choice"] = "auto"
 
-        # Some models occasionally write their tool call as plain text ("{...}")
-        # instead of a structured tool_calls delta. Streaming that JSON to the user
-        # is the "reply is one raw JSON blob" bug — so hold back content that looks
-        # like it might be one, and decide at end of round: execute it as a tool
-        # call if it parses as one, otherwise flush it as normal tokens.
+        # Some models — quantized ones especially — write tool calls as plain text
+        # (JSON or <tool_call>/<function=…> markup) instead of structured
+        # tool_calls deltas, often after a line of prose. The guard withholds
+        # anything blob-shaped (start-of-message or mid-prose) and we decide at
+        # end of round: execute it as a tool call if it parses as one, otherwise
+        # deliver it as normal text.
         content_parts: List[str] = []
-        held: List[str] = []          # tokens held back pending the JSON check
-        holding = None                # None = undecided, True = holding, False = passthrough
+        emitted_parts: List[str] = []   # what actually reached the user this round
+        guard = _StreamGuard()
         tool_calls: Dict[int, Dict] = {}
         try:
             for choice, delta in _iter_stream_events(payload):
                 content = delta.get("content")
                 if content:
                     content_parts.append(content)
-                    if holding is None:
-                        lead = ("".join(held) + content).lstrip()
-                        if not lead:
-                            held.append(content)
-                            continue
-                        holding = lead.startswith(("{", "[", "```", "<tool_call", "<function"))
-                        if not holding:
-                            for h in held:
-                                yield {"type": "token", "content": h}
-                            held = []
-                    if holding:
-                        held.append(content)
-                    else:
-                        yield {"type": "token", "content": content}
+                    out = guard.feed(content)
+                    if out:
+                        emitted_parts.append(out)
+                        yield {"type": "token", "content": out}
                 for tc in (delta.get("tool_calls") or []):
                     slot = tool_calls.setdefault(tc.get("index", 0), {"id": None, "name": "", "args": ""})
                     if tc.get("id"):
@@ -1430,9 +1525,15 @@ def generate_with_tools(
             yield {"type": "error", "detail": f"Error during generation: {e}"}
             return
 
-        held_text = "".join(held)
-        recovered = (_parse_textual_tool_calls(held_text, known_names)
-                     if (holding and held_text) else [])
+        # Withheld ordinary prose (pre-marker text, or a short whole message) is
+        # always delivered.
+        tail = guard.flush_pending()
+        if tail:
+            emitted_parts.append(tail)
+            yield {"type": "token", "content": tail}
+
+        held_text = guard.held
+        recovered = _parse_textual_tool_calls(held_text, known_names) if held_text else []
 
         if not tool_calls and recovered and not use_tools:
             # Final forced round and the model STILL answered with a tool call.
@@ -1455,10 +1556,16 @@ def generate_with_tools(
             assistant_content = "".join(content_parts) or None
         else:
             # The model wrote its tool call as plain text; execute it instead of
-            # showing the raw JSON to the user.
+            # showing the blob to the user. History gets the STRUCTURED form (plus
+            # any prose that was streamed) — in-context teaching by example, which
+            # matters more than instructions for weaker/quantized models. The
+            # warning lands in the ring buffer, so read_logs can reveal how often
+            # a model misfires this way.
+            print("Warning: recovered textual tool call(s) from model output: "
+                  + ", ".join(c["name"] for c in recovered))
             ordered = [{"id": None, "name": c["name"], "args": json.dumps(c["args"])}
                        for c in recovered]
-            assistant_content = None
+            assistant_content = "".join(emitted_parts).strip() or None
 
         # Record the assistant's tool-call message, then execute each call.
         messages.append({
@@ -1493,4 +1600,13 @@ def generate_with_tools(
             messages.append({
                 "role": "tool", "tool_call_id": s["id"] or str(i), "content": result,
             })
+
+        # One corrective nudge per turn when a textual call had to be recovered —
+        # the rewritten history shows the right form; this says so explicitly.
+        if not tool_calls and not nudged_about_textual_calls:
+            nudged_about_textual_calls = True
+            messages.append({"role": "system", "content": (
+                "Reminder: your previous tool call was written as plain text in "
+                "your reply and had to be recovered. Invoke tools only through "
+                "the tool-calling interface — reply text never executes.")})
 
