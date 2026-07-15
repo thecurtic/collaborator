@@ -1213,6 +1213,9 @@ def _tool_status_label(name: str, args: Dict) -> str:
     if name == "screenshot_page":
         u = (args.get("url") or "").strip()
         return f"Screenshotting {u[:60]}…" if u else "Taking a screenshot…"
+    if name == "read_logs":
+        g = (args.get("grep") or "").strip()
+        return f"Checking my logs{f' for “{g[:40]}”' if g else ''}…"
     return f"Running {name}…"
 
 

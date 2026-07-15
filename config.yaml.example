@@ -121,6 +121,7 @@ tools:
     web_search: true          # self-gating: active only when web_search.url is set
     fetch_url: true           # read a specific page (pasted links)
     screenshot_page: true     # self-gating: needs webtool_url + screenshot.vision_model
+    read_logs: true           # agent can read its own recent server logs (ring buffer)
   web_search:                 # private SearXNG instance (JSON format must be enabled
     url: "http://<search-vm-ip>"  # in its settings.yml: search.formats: [html, json])
     results: 5                # max results returned to the model

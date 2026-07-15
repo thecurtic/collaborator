@@ -143,6 +143,7 @@ def load_config() -> dict:
                 "web_search": True,    # self-gating: active only when web_search.url is set
                 "fetch_url": True,     # read a specific page (pasted links)
                 "screenshot_page": True,  # self-gating: needs webtool_url + a vision model
+                "read_logs": True,     # agent can read its own recent server logs
             },
             "web_search": {
                 "url": None,           # SearXNG base URL (e.g. tailnet IP); None = tool off
