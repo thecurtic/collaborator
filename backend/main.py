@@ -29,7 +29,7 @@ from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
     get_embedding, embed_texts, synthesize_recall, get_available_models,
     generate_with_tools, synthesize, synthesize_notes, web_search_searxng, fetch_url,
-    generate_title,
+    screenshot_page, generate_title,
     resolve_prompt_layer, DEFAULT_PARAGRAPH_STYLE, DEFAULT_VOICE_STYLE,
     DEFAULT_TOOLS_GUIDANCE, DEFAULT_RECALL_SYNTHESIS_PROMPT,
     DEFAULT_NOTES_SYNTHESIS_PROMPT, DEFAULT_DATETIME_TEXT,
@@ -312,6 +312,12 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                   "pastes or references a URL — read it before discussing it. Also "
                   "useful to open a promising web_search result. Returns the page "
                   "title and readable text (JS-heavy apps may come back empty)."),
+    "screenshot_page": ("Render a web page in a real browser, screenshot it, and get "
+                        "a vision model's analysis of the image. Use when fetch_url "
+                        "returns little/no text, or when the LAYOUT itself matters "
+                        "(charts, tables, images, visual design). Slower than "
+                        "fetch_url — prefer fetch_url first. Optional `question` "
+                        "focuses the analysis on what you need from the page."),
 }
 
 
@@ -451,6 +457,20 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "reason": {"type": "string",
                            "description": "one line: why this edit, shown to the user in review"}},
                 "required": ["title"]}}})
+
+    # screenshot_page is self-gating: it needs both the webtool and a vision model.
+    if (avail.get("screenshot_page", True)
+            and (tcfg.get("fetch_url") or {}).get("webtool_url")
+            and (tcfg.get("screenshot") or {}).get("vision_model")):
+        schemas.append({"type": "function", "function": {
+            "name": "screenshot_page",
+            "description": descs["screenshot_page"],
+            "parameters": {"type": "object", "properties": {
+                "url": {"type": "string", "description": "full http(s) URL to render"},
+                "question": {"type": "string",
+                             "description": "what you want to know from the page "
+                                            "(omit for a general description)"}},
+                "required": ["url"]}}})
 
     def execute(name, args):
         if name in ("recall_semantic", "recall_keyword"):
@@ -606,6 +626,34 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                                             "(tools.fetch_url.same_domain_only); stay on "
                                             f"{state['first_fetch_host']}"})
             result = fetch_url(args.get("url", ""))
+            if "error" not in result:
+                state["fetch_count"] += 1
+                if state["first_fetch_host"] is None:
+                    state["first_fetch_host"] = host
+            return json.dumps(result)
+        if name == "screenshot_page":
+            # Screenshots hit the same webtool as fetches — one shared page budget.
+            fcfg = tcfg.get("fetch_url", {}) or {}
+            budget = fcfg.get("max_per_turn", 3)
+            if state["fetch_count"] >= budget:
+                denied_url = (args.get("url") or "").strip()
+                if denied_url:
+                    state["denied_fetches"].append(denied_url)
+                return json.dumps({
+                    "error": f"fetch budget for this turn is exhausted ({budget} pages)",
+                    "instruction": "Finish your answer with what you already have. Then "
+                                   "end your reply by listing this and any other links "
+                                   "you wanted to follow (title and URL) and ask the "
+                                   "user whether to continue with them.",
+                })
+            from urllib.parse import urlparse
+            host = urlparse(args.get("url", "")).hostname
+            if (fcfg.get("same_domain_only") and state["first_fetch_host"]
+                    and host != state["first_fetch_host"]):
+                return json.dumps({"error": "cross-domain fetches are disabled "
+                                            "(tools.fetch_url.same_domain_only); stay on "
+                                            f"{state['first_fetch_host']}"})
+            result = screenshot_page(args.get("url", ""), args.get("question"))
             if "error" not in result:
                 state["fetch_count"] += 1
                 if state["first_fetch_host"] is None:

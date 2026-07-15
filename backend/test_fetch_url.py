@@ -244,6 +244,91 @@ def test_webtool_empty_page_retries_with_settle():
     print("✓ webtool: near-empty render auto-retries once with 2.5s JS settle")
 
 
+def test_screenshot_page():
+    """screenshot_page: webtool /screenshot -> vision model; gated, budgeted."""
+    cfg = config.get_config._config
+    cfg["tools"]["fetch_url"]["webtool_url"] = "http://search-vm:8200"
+    cfg["tools"]["screenshot"]["vision_model"] = "llava-v1.6-34b"
+    posts = []
+
+    def fake_post(url, json=None, timeout=None, **k):
+        posts.append({"endpoint": url, "body": json})
+        class R:
+            def raise_for_status(self): pass
+            def json(self_inner):
+                if url.endswith("/screenshot"):
+                    return {"url": json["url"], "text": "Pricing: Pro $9/mo",
+                            "screenshot_b64": "aGk="}
+                return {"choices": [{"message": {"content":
+                        "A pricing page with three tiers; Pro is $9/month."}}]}
+        return R()
+
+    orig_post = inference.requests.post
+    inference.requests.post = fake_post
+    try:
+        out = inference.screenshot_page("https://example.com/pricing",
+                                        "what does the pricing table say?")
+        assert out["visual"].startswith("A pricing page")
+        assert out["page_text_excerpt"] == "Pricing: Pro $9/mo"
+        assert out["via"] == "webtool"
+        # First hop: webtool /screenshot. Second: vision chat with image + question.
+        assert posts[0]["endpoint"].endswith("/screenshot")
+        vision = posts[1]["body"]
+        assert vision["model"] == "llava-v1.6-34b"
+        parts = vision["messages"][0]["content"]
+        assert parts[0]["image_url"]["url"] == "data:image/png;base64,aGk="
+        assert parts[1]["text"] == "what does the pricing table say?"
+
+        # Guards still first: private host refused before any request.
+        posts.clear()
+        assert "private/internal" in inference.screenshot_page("http://10.0.0.1/x")["error"]
+        assert posts == []
+    finally:
+        inference.requests.post = orig_post
+        cfg["tools"]["screenshot"]["vision_model"] = None
+        cfg["tools"]["fetch_url"]["webtool_url"] = None
+    print("✓ screenshot_page: webtool + vision chained, question passed, guards first")
+
+
+def test_screenshot_gating_and_shared_budget():
+    cfg = config.get_config._config
+    # Gated off without webtool_url + vision_model.
+    schemas, _, _ = main._build_tools(os.environ["DB_PATH"])
+    assert "screenshot_page" not in {s["function"]["name"] for s in schemas}
+    cfg["tools"]["fetch_url"]["webtool_url"] = "http://search-vm:8200"
+    cfg["tools"]["screenshot"]["vision_model"] = "llava-v1.6-34b"
+    orig_budget = cfg["tools"]["fetch_url"]["max_per_turn"]
+    cfg["tools"]["fetch_url"]["max_per_turn"] = 1
+    try:
+        schemas, execute, state = main._build_tools(os.environ["DB_PATH"])
+        assert "screenshot_page" in {s["function"]["name"] for s in schemas}
+
+        def fake_post(url, json=None, **k):
+            class R:
+                def raise_for_status(self): pass
+                def json(self_inner):
+                    if url.endswith("/screenshot"):
+                        return {"url": json["url"], "text": "t", "screenshot_b64": "aGk="}
+                    return {"choices": [{"message": {"content": "looks fine"}}]}
+            return R()
+        orig_post = inference.requests.post
+        inference.requests.post = fake_post
+        try:
+            out = json.loads(execute("screenshot_page", {"url": "https://a.example/1"}))
+            assert out["visual"] == "looks fine" and state["fetch_count"] == 1
+            # Budget shared with fetch_url: second page (either tool) is denied.
+            out = json.loads(execute("screenshot_page", {"url": "https://b.example/2"}))
+            assert "budget" in out["error"]
+            assert state["denied_fetches"] == ["https://b.example/2"]
+        finally:
+            inference.requests.post = orig_post
+    finally:
+        cfg["tools"]["fetch_url"]["max_per_turn"] = orig_budget
+        cfg["tools"]["screenshot"]["vision_model"] = None
+        cfg["tools"]["fetch_url"]["webtool_url"] = None
+    print("✓ screenshot_page: self-gating + shares the per-turn fetch budget")
+
+
 def test_registry_and_executor():
     schemas, execute, _ = main._build_tools(os.environ["DB_PATH"])
     assert "fetch_url" in {s["function"]["name"] for s in schemas}
@@ -355,6 +440,8 @@ if __name__ == "__main__":
     test_proxy_passed_through()
     test_webtool_routing()
     test_webtool_empty_page_retries_with_settle()
+    test_screenshot_page()
+    test_screenshot_gating_and_shared_budget()
     test_registry_and_executor()
     test_unfollowed_links_sse_event()
     test_tools_work_in_voice_mode()

@@ -120,6 +120,7 @@ tools:
     propose_edit: true        # propose edits to an existing note -> PENDING draft too
     web_search: true          # self-gating: active only when web_search.url is set
     fetch_url: true           # read a specific page (pasted links)
+    screenshot_page: true     # self-gating: needs webtool_url + screenshot.vision_model
   web_search:                 # private SearXNG instance (JSON format must be enabled
     url: "http://<search-vm-ip>"  # in its settings.yml: search.formats: [html, json])
     results: 5                # max results returned to the model
@@ -144,6 +145,14 @@ tools:
     # Without webtool_url, fetches go DIRECT from this machine (pages see this
     # box's IP). A proxy can route that direct path instead:
     # proxy: "socks5h://<tor-or-vpn-host>:9050"   # needs: pip install requests[socks]
+  screenshot:                 # visual page analysis: webtool /screenshot -> vision model
+    vision_model: "qwen/qwen2.5-vl-7b"  # LM Studio loads it on demand (first call is
+                              # slow). Verified working; note llava-v1.6-34b currently
+                              # fails in LM Studio's MLX image preprocessing.
+    temperature: 0.2
+    max_tokens: 512
+    timeout: 180              # headroom for the on-demand model load
+    text_chars: 2000          # page-text excerpt returned alongside the analysis
   synthesis:
     max_tokens: 256
     prompts:                  # per-kind synthesis prompt files (editable/auditable)

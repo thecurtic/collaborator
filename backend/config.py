@@ -142,6 +142,7 @@ def load_config() -> dict:
                 "propose_edit": True,  # edits to existing notes -> PENDING drafts too
                 "web_search": True,    # self-gating: active only when web_search.url is set
                 "fetch_url": True,     # read a specific page (pasted links)
+                "screenshot_page": True,  # self-gating: needs webtool_url + a vision model
             },
             "web_search": {
                 "url": None,           # SearXNG base URL (e.g. tailnet IP); None = tool off
@@ -168,6 +169,16 @@ def load_config() -> dict:
                 # Fallback for DIRECT fetches only (webtool_url unset): route them
                 # through an HTTP/SOCKS proxy (socks needs requests[socks]).
                 "proxy": None,
+            },
+            "screenshot": {
+                # Visual page analysis: webtool /screenshot (full-page PNG via the
+                # search VM's VPN) -> LM Studio vision model. The vision model is
+                # loaded on demand by LM Studio (JIT) — first call is slow.
+                "vision_model": None,   # e.g. "llava-v1.6-34b"; None = tool off
+                "temperature": 0.2,
+                "max_tokens": 512,
+                "timeout": 180,         # headroom for on-demand model load
+                "text_chars": 2000,     # page-text excerpt returned alongside
             },
             "synthesis": {
                 "max_tokens": 256,

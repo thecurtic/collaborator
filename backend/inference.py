@@ -973,6 +973,84 @@ def _fetch_via_webtool(url: str, fcfg: Dict) -> Dict:
     }
 
 
+def screenshot_page(url: str, question: Optional[str] = None) -> Dict:
+    """Screenshot a page via the webtool and analyze it with the local vision model.
+
+    Two hops, both self-hosted: the search VM's Playwright service renders the
+    page (VPN egress, JS executed, full-page PNG) and LM Studio's vision model
+    (tools.screenshot.vision_model, loaded on demand) describes it / answers the
+    model's question about it. Returns {url, visual, page_text_excerpt?}.
+    Reuses fetch_url's URL guards; fails closed like _fetch_via_webtool.
+    """
+    from urllib.parse import urlparse
+
+    fcfg = (_tools_config().get("fetch_url") or {})
+    scfg = (_tools_config().get("screenshot") or {})
+    parsed = urlparse(url or "")
+    if parsed.scheme not in ("http", "https"):
+        return {"error": f"only http(s) URLs can be screenshotted, got {url!r}"}
+    if not fcfg.get("allow_private", False) and _host_is_private(parsed.hostname or ""):
+        return {"error": "refusing to screenshot a private/internal address "
+                         "(enable tools.fetch_url.allow_private for tailnet/LAN URLs)"}
+    base = (fcfg.get("webtool_url") or "").rstrip("/")
+    if not base:
+        return {"error": "screenshots need the webtool (tools.fetch_url.webtool_url)"}
+    vision_model = scfg.get("vision_model")
+    if not vision_model:
+        return {"error": "no vision model configured (tools.screenshot.vision_model)"}
+
+    try:
+        response = requests.post(
+            f"{base}/screenshot",
+            json={"url": url, "text_only": True,
+                  "wait_ms": fcfg.get("webtool_wait_ms", 0)},
+            timeout=fcfg.get("webtool_timeout", 60),
+        )
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException as e:
+        return {"error": f"screenshot failed (webtool at {base}): {e}"}
+    png_b64 = data.get("screenshot_b64") or ""
+    if not png_b64:
+        return {"error": "webtool returned no screenshot"}
+
+    prompt = (question or "").strip() or (
+        "Describe this web page screenshot for someone who cannot see it: the "
+        "layout, the main content, and any text that matters. Transcribe important "
+        "text accurately; say so when text is too small to read.")
+    payload = {
+        "model": vision_model,
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url",
+             "image_url": {"url": f"data:image/png;base64,{png_b64}"}},
+            {"type": "text", "text": prompt},
+        ]}],
+        "temperature": scfg.get("temperature", 0.2),
+        "max_tokens": scfg.get("max_tokens", 512),
+        "stream": False,
+    }
+    try:
+        # Generous timeout: LM Studio JIT-loads the vision model on first use.
+        vr = requests.post(f"{_get_endpoint_url()}/chat/completions",
+                           json=payload, timeout=scfg.get("timeout", 180))
+        vr.raise_for_status()
+        visual = (vr.json()["choices"][0]["message"]["content"] or "").strip()
+    except requests.exceptions.RequestException as e:
+        detail = ""
+        body = getattr(getattr(e, "response", None), "text", "") or ""
+        if body:
+            detail = f" — {body[:200]}"
+        return {"error": f"vision analysis failed ({vision_model}): {e}{detail}"}
+    if not visual:
+        return {"error": f"vision model {vision_model} returned no analysis"}
+
+    out = {"url": data.get("url") or url, "visual": visual, "via": "webtool"}
+    text = (data.get("text") or "").strip()
+    if text:
+        out["page_text_excerpt"] = text[:scfg.get("text_chars", 2000)]
+    return out
+
+
 def fetch_url(url: str) -> Dict:
     """Fetch a URL and return readable text + hyperlinks for the model.
 
@@ -1132,6 +1210,9 @@ def _tool_status_label(name: str, args: Dict) -> str:
     if name == "fetch_url":
         u = (args.get("url") or "").strip()
         return f"Reading {u[:60]}…" if u else "Reading a page…"
+    if name == "screenshot_page":
+        u = (args.get("url") or "").strip()
+        return f"Screenshotting {u[:60]}…" if u else "Taking a screenshot…"
     return f"Running {name}…"
 
 
@@ -1142,7 +1223,7 @@ def _tool_status_fields(name: str, args: Dict) -> Dict:
     q = (args.get("query") or "").strip()
     if q:
         fields["query"] = q
-    if name == "fetch_url" and (args.get("url") or "").strip():
+    if name in ("fetch_url", "screenshot_page") and (args.get("url") or "").strip():
         fields["url"] = args["url"].strip()
     if name in ("get_note", "propose_note", "propose_edit") and (args.get("title") or "").strip():
         fields["title"] = args["title"].strip()
@@ -1177,6 +1258,9 @@ def _tool_outcome_event(name: str, result: str) -> Optional[Dict]:
         title = (data.get("title") or "").strip()
         return {"type": "status", "tool": name, "outcome": "ok",
                 "label": f"Read page{f': “{title[:60]}”' if title else ''}."}
+    if name == "screenshot_page":
+        return {"type": "status", "tool": name, "outcome": "ok",
+                "label": "Screenshot captured and analyzed."}
     return None
 
 
