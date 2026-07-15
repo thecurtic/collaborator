@@ -157,9 +157,16 @@ def load_config() -> dict:
                 "max_links": 40,       # hyperlinks returned per page (enables follow-up fetches)
                 "max_per_turn": 10,    # hard fetch budget per message
                 "same_domain_only": False,  # True: follow-up fetches stay on the first host
-                # PRIVACY: fetches go DIRECT from this box (web_search rides SearXNG's
-                # VPN; fetch_url does not). Set a proxy (http:// or socks5h://, e.g.
-                # Tor/WireGuard on the search box or this host) to route them.
+                # PREFERRED: the search VM's Playwright fetch service ("webtool").
+                # When set, all page fetches go through it — headless Chromium that
+                # egresses via the VM's VPN (pages never see this box's IP) and
+                # renders JS-heavy pages. Fails CLOSED when unreachable (no silent
+                # direct fetch). e.g. "http://<search-vm-ip>:8200"
+                "webtool_url": None,
+                "webtool_timeout": 60,   # >= 45s recommended (30s nav + render)
+                "webtool_wait_ms": 0,    # extra JS settle time; empty pages auto-retry at 2500
+                # Fallback for DIRECT fetches only (webtool_url unset): route them
+                # through an HTTP/SOCKS proxy (socks needs requests[socks]).
                 "proxy": None,
             },
             "synthesis": {

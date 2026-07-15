@@ -133,11 +133,16 @@ tools:
     max_links: 40             # hyperlinks returned per page (lets the model follow links)
     max_per_turn: 10          # hard fetch budget per message (bounds link-following)
     same_domain_only: false   # true: follow-up fetches must stay on the first page's host
-    # PRIVACY (known limitation): fetch_url goes DIRECT from this machine — every
-    # fetched page sees this box's IP. web_search is fine (SearXNG routes outbound
-    # via WireGuard), but page fetches are not. Plan: route fetches through Tor or a
-    # VPN — either via the search box (e.g. its dormant Tor SOCKS at 127.0.0.1:9050,
-    # exposed to the tailnet) or Tor on this webserver. When available, set:
+    # PREFERRED: route page fetches through the search VM's Playwright service
+    # ("webtool") — headless Chromium that egresses via the VM's VPN, so fetched
+    # pages never see this machine's IP, and JS-heavy pages actually render.
+    # Fails CLOSED when the service is unreachable (never silently falls back to
+    # a direct clearnet fetch).
+    webtool_url: "http://<search-vm-ip>:8200"
+    webtool_timeout: 60       # >= 45s recommended (30s nav timeout + render + transfer)
+    webtool_wait_ms: 0        # extra JS settle ms; near-empty pages auto-retry at 2500
+    # Without webtool_url, fetches go DIRECT from this machine (pages see this
+    # box's IP). A proxy can route that direct path instead:
     # proxy: "socks5h://<tor-or-vpn-host>:9050"   # needs: pip install requests[socks]
   synthesis:
     max_tokens: 256

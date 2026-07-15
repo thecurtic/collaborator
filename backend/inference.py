@@ -921,19 +921,70 @@ def _host_is_private(host: str) -> bool:
     return False
 
 
+def _fetch_via_webtool(url: str, fcfg: Dict) -> Dict:
+    """Fetch through the search VM's Playwright service (headless Chromium that
+    egresses via the VM's VPN — the page never sees this machine's IP, and
+    JS-rendered pages actually render).
+
+    Asks for raw HTML (text_only: false) so our own extractor still harvests the
+    hyperlinks that power link-following. FAILS CLOSED: if the webtool is down we
+    return an error — never a silent direct (clearnet) fetch.
+    """
+    base = fcfg["webtool_url"].rstrip("/")
+    timeout = fcfg.get("webtool_timeout", 60)
+    max_chars = fcfg.get("max_chars", 8000)
+
+    def one_fetch(wait_ms):
+        response = requests.post(
+            f"{base}/fetch",
+            json={"url": url, "text_only": False, "wait_ms": wait_ms},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        html = data.get("content") or ""
+        final_url = data.get("url") or url
+        title, body, links = "", html, []
+        try:
+            title, body, links = _HtmlTextExtractor().extract(
+                html, base_url=final_url, max_links=fcfg.get("max_links", 40))
+        except Exception:
+            pass  # fall back to the raw content
+        return final_url, title, body, links
+
+    wait_ms = fcfg.get("webtool_wait_ms", 0)
+    try:
+        final_url, title, body, links = one_fetch(wait_ms)
+        # SPAs often render after DOM load; one retry with settle time when the
+        # first pass came back (near-)empty.
+        if len(body.strip()) < 200 and wait_ms < 2500:
+            final_url, title, body, links = one_fetch(2500)
+    except requests.exceptions.RequestException as e:
+        return {"error": f"fetch failed (webtool at {base}): {e}"}
+
+    truncated = len(body) > max_chars
+    return {
+        "url": final_url,
+        "title": title,
+        "content": body[:max_chars],
+        "truncated": truncated,
+        "links": links,
+        "via": "webtool",
+    }
+
+
 def fetch_url(url: str) -> Dict:
     """Fetch a URL and return readable text + hyperlinks for the model.
 
-    Config: tools.fetch_url {max_chars, timeout, allow_private, max_links, proxy}.
-    Only http(s); private/internal hosts are refused unless allow_private is set
-    (the user may want tailnet docs fetchable). Static HTML / text / JSON only —
-    JS-rendered apps come back mostly empty (that would need a headless browser).
+    Config: tools.fetch_url {max_chars, timeout, allow_private, max_links,
+    webtool_url, proxy}. Only http(s); private/internal hosts are refused unless
+    allow_private is set (the user may want tailnet docs fetchable).
 
-    PRIVACY NOTE: unlike web_search (whose SearXNG instance routes outbound through
-    WireGuard), fetches go DIRECT from this machine by default — every fetched page
-    sees this box's IP. Set tools.fetch_url.proxy (http:// or socks5h://, e.g. Tor
-    on the search box or this host) to route fetches through a VPN/Tor instead.
-    SOCKS proxies need the 'requests[socks]' extra (PySocks).
+    PRIVACY: when tools.fetch_url.webtool_url is set, fetches go through the
+    search VM's Playwright service and exit via its VPN (this also renders
+    JS-heavy pages). Without it, fetches go DIRECT from this machine — every
+    fetched page sees this box's IP (tools.fetch_url.proxy can route the direct
+    path through an HTTP/SOCKS proxy; SOCKS needs the 'requests[socks]' extra).
     """
     from urllib.parse import urlparse
 
@@ -944,6 +995,9 @@ def fetch_url(url: str) -> Dict:
     if not fcfg.get("allow_private", False) and _host_is_private(parsed.hostname or ""):
         return {"error": "refusing to fetch a private/internal address "
                          "(enable tools.fetch_url.allow_private for tailnet/LAN URLs)"}
+
+    if fcfg.get("webtool_url"):
+        return _fetch_via_webtool(url, fcfg)
 
     proxy = fcfg.get("proxy")
     try:

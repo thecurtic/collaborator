@@ -170,6 +170,80 @@ def test_proxy_passed_through():
     print("✓ proxy config routes fetches (privacy hook ready for Tor/VPN)")
 
 
+def _webtool_resp(content, url="https://example.com/page"):
+    class R:
+        def raise_for_status(self): pass
+        def json(self): return {"url": url, "content": content}
+    return R()
+
+
+def test_webtool_routing():
+    """webtool_url set -> fetches go through the Playwright service (POST /fetch,
+    raw HTML), links still extracted, and failures NEVER fall back to direct."""
+    cfg = config.get_config._config
+    cfg["tools"]["fetch_url"]["webtool_url"] = "http://search-vm:8200"
+    posts = []
+    html = ('<html><head><title>VPN Page</title></head><body><p>' + 'word ' * 60 +
+            '</p><a href="/next">Next</a></body></html>')
+
+    def fake_post(url, json=None, timeout=None, **k):
+        posts.append({"endpoint": url, "body": json, "timeout": timeout})
+        return _webtool_resp(html)
+
+    orig_post, orig_get = inference.requests.post, inference.requests.get
+    def no_get(*a, **k):
+        raise AssertionError("direct fetch attempted while webtool configured")
+    inference.requests.post, inference.requests.get = fake_post, no_get
+    try:
+        out = inference.fetch_url("https://example.com/page")
+        assert out["title"] == "VPN Page" and out["via"] == "webtool"
+        assert "word" in out["content"]
+        assert out["links"] == [{"text": "Next", "url": "https://example.com/next"}]
+        assert posts[0]["endpoint"] == "http://search-vm:8200/fetch"
+        assert posts[0]["body"] == {"url": "https://example.com/page",
+                                    "text_only": False, "wait_ms": 0}
+        assert posts[0]["timeout"] == 60
+
+        # Guards run BEFORE the webtool: private hosts still refused, no request.
+        posts.clear()
+        assert "private/internal" in inference.fetch_url("http://127.0.0.1/x")["error"]
+        assert posts == []
+
+        # Webtool down -> error naming the webtool; still no direct fallback.
+        def down(*a, **k):
+            raise inference.requests.exceptions.ConnectionError("refused")
+        inference.requests.post = down
+        out = inference.fetch_url("https://example.com/page")
+        assert "webtool" in out["error"]
+    finally:
+        inference.requests.post, inference.requests.get = orig_post, orig_get
+        cfg["tools"]["fetch_url"]["webtool_url"] = None
+    print("✓ webtool routing: POST /fetch, links preserved, fail-closed, guards first")
+
+
+def test_webtool_empty_page_retries_with_settle():
+    """A near-empty first render triggers one retry with wait_ms=2500 (SPA settle)."""
+    cfg = config.get_config._config
+    cfg["tools"]["fetch_url"]["webtool_url"] = "http://search-vm:8200"
+    calls = []
+    full = "<html><title>App</title><body>" + "loaded content " * 30 + "</body></html>"
+
+    def fake_post(url, json=None, **k):
+        calls.append(json["wait_ms"])
+        return _webtool_resp("<html><body></body></html>" if json["wait_ms"] == 0 else full)
+
+    orig = inference.requests.post
+    inference.requests.post = fake_post
+    try:
+        out = inference.fetch_url("https://app.example/spa")
+        assert calls == [0, 2500]
+        assert "loaded content" in out["content"] and out["title"] == "App"
+    finally:
+        inference.requests.post = orig
+        cfg["tools"]["fetch_url"]["webtool_url"] = None
+    print("✓ webtool: near-empty render auto-retries once with 2.5s JS settle")
+
+
 def test_registry_and_executor():
     schemas, execute, _ = main._build_tools(os.environ["DB_PATH"])
     assert "fetch_url" in {s["function"]["name"] for s in schemas}
@@ -279,6 +353,8 @@ if __name__ == "__main__":
     test_fetch_html_truncation_and_types()
     test_fetch_budget_and_same_domain()
     test_proxy_passed_through()
+    test_webtool_routing()
+    test_webtool_empty_page_retries_with_settle()
     test_registry_and_executor()
     test_unfollowed_links_sse_event()
     test_tools_work_in_voice_mode()

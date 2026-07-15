@@ -612,18 +612,21 @@ The current inventory of prompt files (all at repo root):
 8. **No history.** In-app edits have no undo; either commit-on-edit (git as
    history) or store versions alongside.
 
-## Known Limitation: Web-Fetch Privacy
+## Web-Fetch Privacy: RESOLVED via the search VM's webtool (2026-07-15)
 
-`web_search` is privacy-respecting (the SearXNG instance routes outbound through
-WireGuard), but **`fetch_url` goes direct from the collaborator box** — every page
-the model fetches (including any link it follows) sees this machine's real IP. This
-is a known, accepted limitation for now.
+`web_search` was always privacy-respecting (SearXNG routes outbound through
+WireGuard); `fetch_url` used to go direct from the collaborator box. Resolved: the
+search VM now runs a Playwright fetch service ("webtool", port 8200, tailnet-bound,
+headless Chromium, egresses via the VM's VPN). With `tools.fetch_url.webtool_url`
+set, ALL page fetches route through it — fetched pages see the VPN exit IP, never
+this machine's — and JS-heavy pages actually render. The integration requests raw
+HTML and runs our own extractor, so link-following, budgets, and the SSRF guard are
+unchanged. **Fails closed**: if the webtool is unreachable, fetches error rather
+than silently going clearnet. Verify routing anytime by asking the agent to fetch
+https://ifconfig.me/ip (should show the VPN exit IP).
 
-Planned fix: route fetches through Tor or a VPN via `tools.fetch_url.proxy` —
-either through the search box (its Tor SOCKS proxy is provisioned but dormant at
-`127.0.0.1:9050`; would need exposing to the tailnet) or by putting Tor on the
-webserver itself. The proxy hook is already implemented; this is an ops task, not a
-code task. (SOCKS proxies need `pip install requests[socks]`.)
+The `tools.fetch_url.proxy` hook remains for direct-mode installs (SOCKS proxies
+need `pip install requests[socks]`).
 
 Related injection containment for link-following: per-turn fetch budget
 (`tools.fetch_url.max_per_turn`), SSRF guard on every hop, optional
