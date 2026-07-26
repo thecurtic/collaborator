@@ -16,12 +16,16 @@ PCM_2S = b"\x00" * (16000 * 2 * 2)  # ~2 seconds of PCM16 mono 16kHz
 
 
 def _stub_whisper():
-    main._get_whisper_model = lambda: object()
+    import voice
+    voice.ensure_stt_loaded = lambda: None
 
-    def fake(pcm, language=None):
+    def fake_partial(pcm, language=None):
         secs = len(pcm) // (16000 * 2)
-        return f"{secs}s transcript"
-    main._transcribe_pcm16 = fake
+        return f"{secs}s transcript", []
+
+    voice.decode_partial_pcm = fake_partial
+    voice.decode_final_pcm = (
+        lambda pcm, language=None: f"{len(pcm) // (16000 * 2)}s transcript")
 
 
 def test_partial_then_final():

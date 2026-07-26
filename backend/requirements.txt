@@ -10,5 +10,8 @@ faster-whisper==1.0.3      # speech-to-text (CTranslate2; ~4x faster than openai
 numpy==1.26.4              # PCM16 -> float32 for streaming transcription; recall cosine search
 websockets==13.1           # uvicorn WebSocket support for /api/transcribe/stream
 fastembed==0.3.6           # local recall embeddings (ONNX, no PyTorch); downloads a small model once
+piper-tts>=1.3.0           # server TTS (CPU ONNX). The tts_stream capability only
+                           # activates when voice.tts.voices_dir holds voice files;
+                           # the code tolerates this package being absent entirely.
 # Note: the one-shot POST /api/transcribe still uses the ffmpeg system package to
 # normalize uploaded audio. The streaming WS path takes PCM16 directly (no ffmpeg).

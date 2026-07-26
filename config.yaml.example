@@ -43,10 +43,27 @@ system_prompt:
 
 # Speech-to-text (faster-whisper / CTranslate2). Defaults: CPU, int8, 'base' model.
 # For a GPU box use device: cuda and compute_type: float16.
+# NOTE: superseded by voice.stt below for model names; still honored for
+# device/compute fallbacks on older configs.
 # transcription:
 #   model: "base"          # tiny | base | small | medium | large-v3 (or *.en variants)
 #   device: "cpu"          # cpu | cuda
 #   compute_type: "int8"   # int8 (cpu) | float16 (gpu) | int8_float16
+
+# Server voice tier (streaming STT sessions, in-stream phrase detection, TTS).
+# Advertised via GET /api/health "capabilities"; the frontend uses its on-device
+# stack per engine when a capability is absent. See voice.py.
+# voice:
+#   stt:
+#     partial_model: "small"          # rolling partials (speed matters)
+#     final_model: "large-v3-turbo"   # final pass (accuracy matters)
+#     preload: true                   # warm-load at startup on the voice host
+#   phrases:
+#     silence_ms: 350                 # trailing quiet that confirms a matched phrase
+#   tts:
+#     voices_dir: "backend/data/tts-voices"   # <voice>.onnx + .onnx.json files
+#     default_voice: "en_US-lessac-medium"
+#     preload: true
 
 # Recall (memory). Embeddings run LOCALLY on the backend by default (fastembed,
 # ONNX, no PyTorch). Synthesis always uses the LM Studio chat model. Disabled by

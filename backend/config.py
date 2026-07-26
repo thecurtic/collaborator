@@ -111,6 +111,38 @@ def load_config() -> dict:
             "dedupe_threshold": 0.85,
             "dedupe_context_notes": 30,
         },
+        "voice": {
+            # Server voice tier (see voice.py). Advertised via GET /api/health
+            # capabilities; the frontend falls back to its on-device stack per
+            # engine when a capability is absent.
+            "stt": {
+                "enabled": True,             # False = never advertise/serve streaming STT
+                "partial_model": "small",    # rolling partials (speed matters)
+                "final_model": "small",      # final pass (accuracy matters; e.g. large-v3-turbo)
+                "device": "cpu",             # cpu | cuda
+                "compute_type": "int8",      # int8 (cpu) | float16 (gpu)
+                "preload": False,            # True: warm-load models at startup (recommended on the voice host)
+                "partial_interval_ms": 400,  # decode cadence (per newly received audio)
+                "window_seconds": 15,        # uncommitted rolling window per partial decode
+                "commit_keep_seconds": 6,    # audio kept uncommitted when the window overflows
+                "final_full_pass_seconds": 90,  # sessions up to this get a full final-model re-decode
+            },
+            "phrases": {
+                # In-stream phrase detection (end / interrupt). The silence gate
+                # only CONFIRMS a matched phrase — it never ends a turn by itself.
+                "silence_ms": 350,               # trailing quiet required to fire
+                "max_word_distance": 1,          # per-word edit tolerance (words > 3 chars)
+                "silence_rms_floor": 100,        # absolute int16-RMS silence threshold
+                "silence_floor_multiplier": 2.5,  # x adaptive noise floor, whichever is higher
+            },
+            "tts": {
+                "enabled": True,       # False = never advertise/serve TTS
+                "engine": "piper",     # only piper for now
+                "voices_dir": None,    # dir of <voice>.onnx + .onnx.json; None = TTS off
+                "default_voice": None, # e.g. "en_US-lessac-medium"; None = first found
+                "preload": False,      # True: warm-load the default voice at startup
+            },
+        },
         "titles": {
             # Auto-generated conversation titles on ROOT turns (seeds and trees
             # alike; separate from the user-set name, which always wins in the UI).

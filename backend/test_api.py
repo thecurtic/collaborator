@@ -36,7 +36,8 @@ def test_health_check():
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["status"] == "healthy"
-    assert r.json()["version"] == "0.3.0"
+    assert r.json()["version"] == "0.4.0"
+    assert set(r.json()["capabilities"]) == {"stt_stream", "tts_stream", "phrases"}
 
 
 def test_send_message_streams_and_persists():

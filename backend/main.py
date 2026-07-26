@@ -38,6 +38,7 @@ from export_tree import export_forest, find_tree
 import logbuffer
 logbuffer.install()   # ring buffer behind the read_logs tool; tees, never redirects
 import notes_index
+import voice
 from auth import validate_passkey, create_user_db
 
 app = FastAPI()
@@ -62,6 +63,9 @@ app.add_middleware(
 
 # Initialize database on startup
 init_db()
+
+# Warm-load voice engines (STT/TTS) if configured to — never blocks startup.
+voice.preload_in_background()
 
 
 class UserMessage(BaseModel):
@@ -1087,8 +1091,14 @@ def _stream_turn_response(
 
 @app.get("/api/health")
 async def health_check():
-    """Basic health check endpoint."""
-    return {"status": "healthy", "version": "0.3.0"}
+    """Health check + capability advertisement (the frontend's one probe at app
+    load: which server voice engines exist here, so it can hide/disable server
+    options that would fail and fall back to its on-device stack)."""
+    return {
+        "status": "healthy",
+        "version": "0.4.0",
+        "capabilities": voice.capabilities(),
+    }
 
 
 @app.post("/api/messages")
@@ -2279,55 +2289,13 @@ def transcribe_audio(
 
 
 # --- Streaming transcription (WebSocket) -----------------------------------
-
 # Wire format for WS /api/transcribe/stream: raw PCM16, mono, 16 kHz, little-endian.
-STREAM_SAMPLE_RATE = 16000
-STREAM_BYTES_PER_SAMPLE = 2
-# Re-transcribe (emit a partial) roughly every ~1.5s of newly received audio.
-# faster-whisper makes each pass cheap enough to keep the running transcript close
-# to final by the time the user stops, so the final pass feels instant.
-STREAM_PARTIAL_INTERVAL_BYTES = int(STREAM_SAMPLE_RATE * STREAM_BYTES_PER_SAMPLE * 1.5)
-
-_whisper_model = None
-
-
-def _get_whisper_model():
-    """Load the faster-whisper model once and reuse it across requests/connections.
-
-    Engine is CTranslate2 (no PyTorch). Model/device/compute are configurable under
-    a `transcription` config section; defaults are CPU int8 with the 'base' model.
-    Set device: cuda / compute_type: float16 to use a GPU.
-    """
-    global _whisper_model
-    if _whisper_model is None:
-        from faster_whisper import WhisperModel
-        tcfg = config.get("transcription", {}) or {}
-        _whisper_model = WhisperModel(
-            tcfg.get("model", "base"),
-            device=tcfg.get("device", "cpu"),
-            compute_type=tcfg.get("compute_type", "int8"),
-        )
-    return _whisper_model
+# All model loading/decoding lives in voice.py (shared registry, per-model locks).
 
 
 def _whisper_transcribe(audio, language: Optional[str]) -> str:
-    """Transcribe a file path or a float32 numpy array via faster-whisper.
-
-    faster-whisper returns a generator of segments; join their text.
-    """
-    model = _get_whisper_model()
-    segments, _info = model.transcribe(audio, language=language or "en")
-    return "".join(segment.text for segment in segments).strip()
-
-
-def _transcribe_pcm16(pcm_bytes: bytes, language: Optional[str]) -> str:
-    """Transcribe raw PCM16 mono 16kHz bytes. Runs in a worker thread (blocking)."""
-    if not pcm_bytes:
-        return ""
-    import numpy as np
-    # PCM16 LE -> float32 in [-1, 1], which is what Whisper expects at 16 kHz.
-    audio = np.frombuffer(pcm_bytes, dtype="<i2").astype("float32") / 32768.0
-    return _whisper_transcribe(audio, language)
+    """Transcribe a file path or float32 array with the voice module's final model."""
+    return voice.transcribe_batch(audio, language)
 
 
 async def _ws_send(websocket: WebSocket, payload: dict) -> None:
@@ -2376,17 +2344,28 @@ async def transcribe_stream(
     ticket: Optional[str] = Query(None),
     language: Optional[str] = Query(None),
 ):
-    """Stream mic audio in, get incremental transcripts back.
+    """Continuous streaming STT session with in-stream phrase detection.
 
-    Protocol:
-      - Auth: ?ticket=<one-time ticket from POST /api/auth/ws-ticket>. This is the
-        ONLY auth path (the passkey never rides a URL); the deprecated ?passkey=
-        and first-frame-passkey fallbacks were removed once the frontend moved to
-        tickets. Invalid/missing -> error + close.
-      - Client -> server (binary): raw PCM16, mono, 16 kHz, little-endian.
-      - Client -> server (text): {"type":"end"} to finalize the turn.
-      - Server -> client (text): {"type":"partial","text":...} as it transcribes,
-        {"type":"final","text":...} after end, or {"type":"error","detail":...}.
+    Protocol (superset of the original utterance protocol — old clients that just
+    stream audio and send {"type":"end"} behave exactly as before):
+      - Auth: ?ticket=<one-time ticket from POST /api/auth/ws-ticket> (only path).
+      - Client -> server (binary): raw PCM16, mono, 16 kHz, little-endian,
+        streamed continuously for the whole listening session.
+      - Client -> server (text):
+          {"type":"config","phrases":[{"kind":"end"|"interrupt","text":"..."}]}
+            — optional, at session start (may also update mid-session).
+          {"type":"end"} — manual finalize (Done button).
+      - Server -> client (text):
+          {"type":"partial","text":...}        running transcript (~every 400ms)
+          {"type":"phrase","kind":"end"|"interrupt"}   lexical tail match + ~350ms
+                                               trailing quiet (see voice.py)
+          {"type":"final","text":...}          after end phrase / manual end; end
+                                               phrase stripped from the text
+          {"type":"error","detail":...}
+
+    There is NO VAD endpointing and no idle timeout: long thinking pauses are
+    normal; the session ends only on an end phrase or an explicit end message.
+    An "interrupt" phrase emits its event and the session keeps running.
     """
     await websocket.accept()
 
@@ -2396,16 +2375,44 @@ async def transcribe_stream(
             await websocket.close(code=1008)
             return
 
-    # Make sure Whisper is usable before we start accepting audio.
+    if not (voice.stt_config().get("enabled", True)):
+        await _ws_send(websocket, {"type": "error",
+                                   "detail": "Server STT is disabled (voice.stt.enabled)"})
+        await websocket.close(code=1008)
+        return
+
+    # Make sure the models are usable before we start accepting audio.
     try:
-        await asyncio.to_thread(_get_whisper_model)
+        await asyncio.to_thread(voice.ensure_stt_loaded)
     except Exception as e:
         await _ws_send(websocket, {"type": "error", "detail": f"Whisper unavailable: {e}"})
         await websocket.close(code=1011)
         return
 
-    buffer = bytearray()
-    last_partial_bytes = 0
+    session = voice.StreamSession(language=language)
+    send_lock = asyncio.Lock()   # partial task and main loop both send
+    decode_task: Optional[asyncio.Task] = None
+
+    async def _send(payload: dict) -> None:
+        async with send_lock:
+            await websocket.send_text(json.dumps(payload))
+
+    async def _run_partial() -> None:
+        try:
+            await asyncio.to_thread(session.decode_partial)
+            session.evaluate_phrases()
+            await _send({"type": "partial", "text": session.transcript})
+        except Exception as e:
+            await _send({"type": "error", "detail": f"partial decode failed: {e}"})
+
+    async def _finalize_and_close(phrase_event: Optional[dict] = None) -> None:
+        if decode_task and not decode_task.done():
+            await decode_task
+        if phrase_event:
+            await _send({"type": "phrase", "kind": phrase_event["kind"]})
+        final_text = await asyncio.to_thread(session.finalize)
+        await _send({"type": "final", "text": final_text})
+        await websocket.close()
 
     try:
         while True:
@@ -2416,12 +2423,17 @@ async def transcribe_stream(
 
             data_bytes = message.get("bytes")
             if data_bytes is not None:
-                buffer += data_bytes
-                # Emit a running partial every ~interval of new audio.
-                if len(buffer) - last_partial_bytes >= STREAM_PARTIAL_INTERVAL_BYTES:
-                    last_partial_bytes = len(buffer)
-                    text = await asyncio.to_thread(_transcribe_pcm16, bytes(buffer), language)
-                    await _ws_send(websocket, {"type": "partial", "text": text})
+                session.feed(data_bytes)
+                # Phrase candidates fire on trailing quiet — checked per chunk so
+                # firing doesn't wait for the next decode.
+                event = session.pending_event()
+                if event:
+                    if event["kind"] == "end":
+                        await _finalize_and_close(event)
+                        return
+                    await _send({"type": "phrase", "kind": "interrupt"})
+                if session.need_decode() and (decode_task is None or decode_task.done()):
+                    decode_task = asyncio.create_task(_run_partial())
                 continue
 
             text_frame = message.get("text")
@@ -2430,10 +2442,12 @@ async def transcribe_stream(
                     payload = json.loads(text_frame)
                 except Exception:
                     continue
-                if payload.get("type") == "end":
-                    final_text = await asyncio.to_thread(_transcribe_pcm16, bytes(buffer), language)
-                    await _ws_send(websocket, {"type": "final", "text": final_text})
-                    await websocket.close()
+                if payload.get("type") == "config":
+                    session.set_phrases(payload.get("phrases"))
+                    if payload.get("language"):
+                        session.language = payload["language"]
+                elif payload.get("type") == "end":
+                    await _finalize_and_close()
                     return
 
     except WebSocketDisconnect:
@@ -2444,6 +2458,83 @@ async def transcribe_stream(
             await websocket.close(code=1011)
         except Exception:
             pass
+    finally:
+        if decode_task and not decode_task.done():
+            decode_task.cancel()
+
+
+# --- Streaming TTS (server voice tier) ---------------------------------------
+
+class TtsRequest(BaseModel):
+    text: str
+    voice: Optional[str] = None
+    # "wav" (default): streaming WAV (header + PCM16). "pcm": bare PCM16 LE
+    # (sample rate in the X-Sample-Rate response header) for AudioWorklet playback.
+    format: Optional[str] = None
+
+
+@app.get("/api/tts/voices")
+async def list_tts_voices_endpoint(
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Voices available for POST /api/tts (drives the frontend voice picker)."""
+    _require_auth(passkey)
+    return {
+        "voices": voice.list_tts_voices(),
+        "default": voice.default_tts_voice(),
+        "enabled": voice.capabilities().get("tts_stream", False),
+    }
+
+
+@app.post("/api/tts")
+def tts_endpoint(
+    request: TtsRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Synthesize speech, streamed chunked as it generates (sentence-level).
+
+    Audio starts flowing as soon as the first sentence is synthesized — play it
+    as it arrives; don't buffer the whole response. 503 when TTS isn't
+    configured on this instance (check capabilities in GET /api/health first).
+    """
+    _require_auth(passkey)
+    if not voice.capabilities().get("tts_stream"):
+        raise HTTPException(status_code=503,
+                            detail="TTS is not configured on this server "
+                                   "(voice.tts.voices_dir + piper)")
+    text = (request.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="text must not be empty")
+
+    voice_name = (request.voice or "").strip() or voice.default_tts_voice()
+    if voice_name not in voice.list_tts_voices():
+        raise HTTPException(status_code=404,
+                            detail=f"Unknown voice {voice_name!r}; see GET /api/tts/voices")
+    fmt = (request.format or "wav").strip().lower()
+    if fmt not in ("wav", "pcm"):
+        raise HTTPException(status_code=422, detail="format must be 'wav' or 'pcm'")
+
+    sample_rate = voice.tts_sample_rate(voice_name)
+    if sample_rate is None:
+        raise HTTPException(status_code=500,
+                            detail=f"Voice {voice_name!r} failed to load")
+
+    def gen():
+        if fmt == "wav":
+            yield voice.wav_header(sample_rate)
+        for _rate, pcm in voice.synth_stream(text, voice_name):
+            yield pcm
+
+    return StreamingResponse(
+        gen(),
+        media_type="audio/wav" if fmt == "wav" else "application/octet-stream",
+        headers={
+            "X-Sample-Rate": str(sample_rate),
+            "X-Voice": voice_name,
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 if __name__ == "__main__":
