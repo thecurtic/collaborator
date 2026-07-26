@@ -8,6 +8,7 @@ import {
   Loader2,
   NotebookPen,
   NotebookText,
+  ScrollText,
   Wrench,
   X,
 } from 'lucide-react';
@@ -21,6 +22,7 @@ export function toolIcon(tool: string) {
   if (tool.startsWith('recall')) return Brain;
   if (tool === 'search_notes' || tool === 'get_note') return NotebookText;
   if (tool === 'propose_note') return NotebookPen;
+  if (tool === 'read_logs') return ScrollText;
   return Wrench;
 }
 
