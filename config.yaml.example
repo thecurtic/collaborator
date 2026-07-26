@@ -53,13 +53,33 @@ system_prompt:
 # Server voice tier (streaming STT sessions, in-stream phrase detection, TTS).
 # Advertised via GET /api/health "capabilities"; the frontend uses its on-device
 # stack per engine when a capability is absent. See voice.py.
+#
+# RECOMMENDED deployment: run the models on the inference machine via speaches
+# (https://speaches.ai — OpenAI-compatible /v1/audio server; LM Studio has no
+# audio endpoints) and point backend: openai at it:
+# voice:
+#   stt:
+#     backend: "openai"
+#     api_url: "http://<inference-host>:8000/v1"      # speaches on the inference box
+#     partial_model: "Systran/faster-whisper-small.en"
+#     final_model: "deepdml/faster-whisper-large-v3-turbo-ct2"
+#     preload: true                   # probes the server at startup
+#   phrases:
+#     silence_ms: 350                 # trailing quiet that confirms a matched phrase
+#   tts:
+#     backend: "openai"
+#     api_url: "http://<inference-host>:8000/v1"
+#     model: "speaches-ai/Kokoro-82M-v1.0-ONNX"
+#     default_voice: "af_heart"
+#     remote_voices: ["af_heart", "am_adam", "bf_emma"]
+#     remote_sample_rate: 24000       # Kokoro emits 24 kHz PCM (Piper voices: 22050)
+#
+# ALTERNATIVE (self-contained): run the models inside this backend process:
 # voice:
 #   stt:
 #     partial_model: "small"          # rolling partials (speed matters)
 #     final_model: "large-v3-turbo"   # final pass (accuracy matters)
 #     preload: true                   # warm-load at startup on the voice host
-#   phrases:
-#     silence_ms: 350                 # trailing quiet that confirms a matched phrase
 #   tts:
 #     voices_dir: "backend/data/tts-voices"   # <voice>.onnx + .onnx.json files
 #     default_voice: "en_US-lessac-medium"

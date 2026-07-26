@@ -194,11 +194,83 @@ def test_tts_disabled_and_voices(monkeypatch):
 
 
 def test_health_capabilities():
+    voice._caps_cache = None   # other tests may have poisoned the cache
     c = TestClient(main.app)
     caps = c.get("/api/health").json()["capabilities"]
     assert set(caps) == {"stt_stream", "tts_stream", "phrases"}
     assert all(isinstance(v, bool) for v in caps.values())
     print("✓ health advertises capability booleans")
+
+
+# --- remote ("openai") backend: speaches-style /v1/audio server ------------------
+
+class _FakeResponse:
+    def __init__(self, payload=None, chunks=None):
+        self._payload, self._chunks = payload, chunks or []
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+    def iter_content(self, chunk_size=None):
+        return iter(self._chunks)
+
+
+def test_remote_stt_decode(monkeypatch):
+    import requests
+    cfg = config.get_config()["voice"]["stt"]
+    monkeypatch.setitem(cfg, "backend", "openai")
+    monkeypatch.setitem(cfg, "api_url", "http://m5:8000/v1")
+    monkeypatch.setitem(cfg, "partial_model", "Systran/faster-whisper-small.en")
+
+    seen = {}
+
+    def fake_post(url, files=None, data=None, headers=None, timeout=None, **kw):
+        seen.update(url=url, files=files, data=data)
+        return _FakeResponse(payload={
+            "text": "hello there",
+            "segments": [{"start": 0.0, "end": 1.2, "text": " hello"},
+                         {"start": 1.2, "end": 2.0, "text": " there"}],
+        })
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    text, segs = voice.decode_partial_pcm(SILENCE, "en")
+    assert text == "hello there"
+    assert segs == [(0.0, 1.2, " hello"), (1.2, 2.0, " there")]
+    assert seen["url"] == "http://m5:8000/v1/audio/transcriptions"
+    assert seen["data"]["model"] == "Systran/faster-whisper-small.en"
+    assert seen["data"]["response_format"] == "verbose_json"
+    wav = seen["files"]["file"][1]
+    assert wav.startswith(b"RIFF") and len(wav) == 44 + len(SILENCE)
+    print("✓ remote STT: wav-wrapped upload, verbose_json segments parsed")
+
+
+def test_remote_tts_stream_and_caps(monkeypatch):
+    import requests
+    cfg = config.get_config()["voice"]["tts"]
+    monkeypatch.setitem(cfg, "backend", "openai")
+    monkeypatch.setitem(cfg, "api_url", "http://m5:8000/v1")
+    monkeypatch.setitem(cfg, "model", "speaches-ai/Kokoro-82M-v1.0-ONNX")
+    monkeypatch.setitem(cfg, "default_voice", "af_heart")
+    monkeypatch.setitem(cfg, "remote_voices", ["am_adam"])
+
+    assert voice.list_tts_voices() == ["af_heart", "am_adam"]
+    assert voice.default_tts_voice() == "af_heart"
+    assert voice.tts_sample_rate("af_heart") == 24000
+    assert voice.capabilities(refresh=True)["tts_stream"] is True
+
+    def fake_post(url, json=None, headers=None, stream=None, timeout=None, **kw):
+        assert url == "http://m5:8000/v1/audio/speech"
+        assert json["voice"] == "af_heart" and json["response_format"] == "pcm"
+        return _FakeResponse(chunks=[b"\x01\x02", b"\x03\x04"])
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    chunks = list(voice.synth_stream("hello", "af_heart"))
+    assert chunks == [(24000, b"\x01\x02"), (24000, b"\x03\x04")]
+    voice._caps_cache = None
+    print("✓ remote TTS: /audio/speech proxied as (rate, pcm) chunks; caps on")
 
 
 if __name__ == "__main__":

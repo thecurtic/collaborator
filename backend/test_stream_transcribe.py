@@ -15,6 +15,22 @@ from starlette.testclient import TestClient
 PCM_2S = b"\x00" * (16000 * 2 * 2)  # ~2 seconds of PCM16 mono 16kHz
 
 
+import pytest
+import voice as _voice
+
+# _stub_whisper() rebinds voice module attrs; restore them after every test so
+# the stubs can't leak into other test files (they run in the same process).
+_VOICE_ORIG = (_voice.ensure_stt_loaded, _voice.decode_partial_pcm,
+               _voice.decode_final_pcm)
+
+
+@pytest.fixture(autouse=True)
+def _restore_voice_stubs():
+    yield
+    (_voice.ensure_stt_loaded, _voice.decode_partial_pcm,
+     _voice.decode_final_pcm) = _VOICE_ORIG
+
+
 def _stub_whisper():
     import voice
     voice.ensure_stt_loaded = lambda: None

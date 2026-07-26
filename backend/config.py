@@ -117,11 +117,19 @@ def load_config() -> dict:
             # engine when a capability is absent.
             "stt": {
                 "enabled": True,             # False = never advertise/serve streaming STT
-                "partial_model": "small",    # rolling partials (speed matters)
-                "final_model": "small",      # final pass (accuracy matters; e.g. large-v3-turbo)
-                "device": "cpu",             # cpu | cuda
-                "compute_type": "int8",      # int8 (cpu) | float16 (gpu)
-                "preload": False,            # True: warm-load models at startup (recommended on the voice host)
+                # "local" runs faster-whisper in this process; "openai" delegates to
+                # any OpenAI-compatible /v1/audio server (e.g. speaches on the
+                # inference machine — LM Studio itself has no audio endpoints).
+                "backend": "local",
+                "api_url": None,             # e.g. "http://<inference-host>:8000/v1" (backend: openai)
+                "api_key": None,
+                "remote_partial_timeout": 15,
+                "remote_final_timeout": 120,
+                "partial_model": "small",    # rolling partials (speed matters); remote: the server's model id
+                "final_model": "small",      # final pass (accuracy matters); remote: the server's model id
+                "device": "cpu",             # cpu | cuda (local backend)
+                "compute_type": "int8",      # int8 (cpu) | float16 (gpu) (local backend)
+                "preload": False,            # True: warm-load at startup (remote: probe the server)
                 "partial_interval_ms": 400,  # decode cadence (per newly received audio)
                 "window_seconds": 15,        # uncommitted rolling window per partial decode
                 "commit_keep_seconds": 6,    # audio kept uncommitted when the window overflows
@@ -137,10 +145,19 @@ def load_config() -> dict:
             },
             "tts": {
                 "enabled": True,       # False = never advertise/serve TTS
-                "engine": "piper",     # only piper for now
-                "voices_dir": None,    # dir of <voice>.onnx + .onnx.json; None = TTS off
-                "default_voice": None, # e.g. "en_US-lessac-medium"; None = first found
-                "preload": False,      # True: warm-load the default voice at startup
+                # "local" runs Piper in this process; "openai" proxies an
+                # OpenAI-compatible /v1/audio/speech server (speaches: Kokoro/Piper).
+                "backend": "local",
+                "api_url": None,       # e.g. "http://<inference-host>:8000/v1" (backend: openai)
+                "api_key": None,
+                "model": None,         # remote TTS model id (e.g. "speaches-ai/Kokoro-82M-v1.0-ONNX")
+                "remote_voices": [],   # voice names the picker offers (backend: openai)
+                "remote_sample_rate": 24000,  # PCM rate the remote emits (Kokoro 24000, Piper 22050)
+                "remote_timeout": 120,
+                "engine": "piper",     # local backend engine (only piper for now)
+                "voices_dir": None,    # local: dir of <voice>.onnx + .onnx.json; None = TTS off
+                "default_voice": None, # local: filename stem; remote: server voice name
+                "preload": False,      # local backend: warm-load the default voice at startup
             },
         },
         "titles": {

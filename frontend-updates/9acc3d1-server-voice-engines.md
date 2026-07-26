@@ -138,15 +138,24 @@ text it's synthesizing and can suppress matches against it.
 
 ```bash
 git pull
-.venv/bin/pip install -r requirements.txt    # adds piper-tts
+.venv/bin/pip install -r requirements.txt    # adds piper-tts (local mode only)
 ./restart.sh
 ```
 
-Server config (see `config.yaml.example`): `voice.stt.{partial_model,final_model,preload}`,
-`voice.tts.{voices_dir,default_voice,preload}`. With no `voice:` section the
-capabilities degrade gracefully (STT streams lazily with default models; TTS is
-absent). The old `.config.yaml` `voice.voice_end_phrase` key is dead — phrases
-are session config from you now.
+None of this changes the wire format above — it's backend topology. The voice
+models run in one of two places (`voice.stt.backend` / `voice.tts.backend`):
+
+- **`openai` (recommended prod setup):** the backend delegates decode/synthesis
+  to an OpenAI-compatible `/v1/audio` server — speaches on the inference
+  machine (LM Studio has no audio endpoints). Session, phrase, and RMS logic
+  stay in the backend.
+- **`local` (default):** faster-whisper + Piper inside the backend process, for
+  self-hosters without a separate inference box.
+
+Capabilities in `/api/health` reflect whichever is configured; with no `voice:`
+section, STT streams lazily with small local models and TTS is absent. The old
+`.config.yaml` `voice.voice_end_phrase` key is dead — phrases are session
+config from you now. See `config.yaml.example` for both config shapes.
 
 ## Related files
 

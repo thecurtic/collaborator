@@ -81,8 +81,78 @@ def _get_stt_model(name: str, device: str, compute: str):
     return entry
 
 
+# --- Remote backend ("openai"): any OpenAI-compatible /v1/audio server ---------
+# The recommended deployment runs the voice models on the inference machine via
+# speaches (https://speaches.ai — faster-whisper STT + Kokoro/Piper TTS behind
+# /v1/audio/transcriptions and /v1/audio/speech). LM Studio itself cannot host
+# STT/TTS models (its server speaks only completions/models/embeddings), so this
+# is the sidecar path; if LM Studio ever adds audio endpoints, only api_url
+# changes. Session, phrase, and RMS logic always stay in THIS process — the
+# remote server is a pure decode/synthesize primitive.
+
+def _stt_remote() -> Optional[str]:
+    cfg = stt_config()
+    if (cfg.get("backend") or "local") != "openai":
+        return None
+    return (cfg.get("api_url") or "").rstrip("/") or None
+
+
+def _tts_remote() -> Optional[str]:
+    cfg = tts_config()
+    if (cfg.get("backend") or "local") != "openai":
+        return None
+    return (cfg.get("api_url") or "").rstrip("/") or None
+
+
+def _auth_headers(cfg: Dict) -> Dict:
+    key = cfg.get("api_key")
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
+def pcm_to_wav(pcm: bytes, sample_rate: int = SAMPLE_RATE) -> bytes:
+    """Wrap PCM16 mono in a complete (finite-size) WAV container for upload."""
+    return (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVE"
+            + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, sample_rate,
+                                    sample_rate * BYTES_PER_SAMPLE,
+                                    BYTES_PER_SAMPLE, 16)
+            + b"data" + struct.pack("<I", len(pcm)) + pcm)
+
+
+def _remote_transcribe(base: str, wav_bytes: bytes, model: str,
+                       language: Optional[str], timeout: float,
+                       want_segments: bool = False):
+    """POST /audio/transcriptions -> (text, [(start_s, end_s, text)])."""
+    import requests
+    data = {"model": model,
+            "response_format": "verbose_json" if want_segments else "json"}
+    if language:
+        data["language"] = language
+    r = requests.post(
+        f"{base}/audio/transcriptions",
+        files={"file": ("audio.wav", wav_bytes, "audio/wav")},
+        data=data, headers=_auth_headers(stt_config()), timeout=timeout,
+    )
+    r.raise_for_status()
+    payload = r.json()
+    text = (payload.get("text") or "").strip()
+    segs = [(s.get("start"), s.get("end"), " " + (s.get("text") or "").strip())
+            for s in (payload.get("segments") or [])]
+    return text, segs
+
+
 def ensure_stt_loaded() -> None:
-    """Load both session models (blocking; call off the event loop)."""
+    """Make STT usable before a session starts (blocking; call off the event loop).
+
+    Local backend: load both models. Remote backend: probe the server so a dead
+    sidecar fails the session up front instead of on the first partial.
+    """
+    base = _stt_remote()
+    if base:
+        import requests
+        r = requests.get(f"{base}/models", headers=_auth_headers(stt_config()),
+                         timeout=5)
+        r.raise_for_status()
+        return
     _get_stt_model(*_model_key("partial"))
     _get_stt_model(*_model_key("final"))
 
@@ -101,16 +171,42 @@ def _decode(pcm: bytes, language: Optional[str], which: str):
 
 
 def decode_partial_pcm(pcm: bytes, language: Optional[str] = None):
+    base = _stt_remote()
+    if base:
+        if not pcm:
+            return "", []
+        return _remote_transcribe(
+            base, pcm_to_wav(pcm), _model_key("partial")[0], language,
+            stt_config().get("remote_partial_timeout", 15), want_segments=True)
     return _decode(pcm, language, "partial")
 
 
 def decode_final_pcm(pcm: bytes, language: Optional[str] = None) -> str:
+    base = _stt_remote()
+    if base:
+        if not pcm:
+            return ""
+        return _remote_transcribe(
+            base, pcm_to_wav(pcm), _model_key("final")[0], language,
+            stt_config().get("remote_final_timeout", 120))[0]
     return _decode(pcm, language, "final")[0]
 
 
 def transcribe_batch(audio, language: Optional[str] = None) -> str:
     """One-shot transcription (file path or float32 array) with the final model.
     Used by POST /api/transcribe."""
+    base = _stt_remote()
+    if base:
+        if isinstance(audio, (str, os.PathLike)):
+            with open(audio, "rb") as f:
+                wav = f.read()
+        else:
+            import numpy as np
+            arr = np.clip(np.asarray(audio, dtype="float32"), -1.0, 1.0)
+            wav = pcm_to_wav((arr * 32767.0).astype("<i2").tobytes())
+        return _remote_transcribe(
+            base, wav, _model_key("final")[0], language,
+            stt_config().get("remote_final_timeout", 120))[0]
     model, lock = _get_stt_model(*_model_key("final"))
     with lock:
         segments, _info = model.transcribe(audio, language=language or "en")
@@ -380,7 +476,15 @@ def _voices_dir() -> Optional[str]:
 
 
 def list_tts_voices() -> List[str]:
-    """Voice names = <name>.onnx files in voices_dir (each with its .onnx.json)."""
+    """Local backend: <name>.onnx files in voices_dir. Remote backend: the
+    configured voice names (voice.tts.remote_voices + default_voice)."""
+    if _tts_remote():
+        cfg = tts_config()
+        voices = [str(v) for v in (cfg.get("remote_voices") or [])]
+        default = cfg.get("default_voice")
+        if default and default not in voices:
+            voices.insert(0, default)
+        return voices
     d = _voices_dir()
     if not d or not os.path.isdir(d):
         return []
@@ -418,6 +522,8 @@ def _load_tts_voice(name: str):
 
 
 def tts_sample_rate(name: str) -> Optional[int]:
+    if _tts_remote():
+        return int(tts_config().get("remote_sample_rate", 24000))
     try:
         voice, _lock = _load_tts_voice(name)
         return int(voice.config.sample_rate)
@@ -426,11 +532,31 @@ def tts_sample_rate(name: str) -> Optional[int]:
 
 
 def synth_stream(text: str, voice_name: str):
-    """Yield (sample_rate, pcm16le_bytes) chunks, sentence-by-sentence.
+    """Yield (sample_rate, pcm16le_bytes) chunks as synthesis progresses.
 
-    Holds the voice's lock for the whole generation — TTS requests serialize
-    rather than corrupting shared ONNX state.
+    Remote backend: proxy POST /audio/speech (response_format=pcm) and forward
+    the chunked body as it arrives. Local backend: Piper in-process, holding the
+    voice's lock for the whole generation — TTS requests serialize rather than
+    corrupting shared ONNX state.
     """
+    base = _tts_remote()
+    if base:
+        import requests
+        cfg = tts_config()
+        rate = int(cfg.get("remote_sample_rate", 24000))
+        r = requests.post(
+            f"{base}/audio/speech",
+            json={"model": cfg.get("model"), "voice": voice_name,
+                  "input": text, "response_format": "pcm"},
+            headers=_auth_headers(cfg), stream=True,
+            timeout=cfg.get("remote_timeout", 120),
+        )
+        r.raise_for_status()
+        for chunk in r.iter_content(chunk_size=4096):
+            if chunk:
+                yield rate, chunk
+        return
+
     voice, lock = _load_tts_voice(voice_name)
     with lock:
         if hasattr(voice, "synthesize_stream_raw"):      # legacy 1.2 API
@@ -477,9 +603,14 @@ def capabilities(refresh: bool = False) -> dict:
     """
     global _caps_cache
     if _caps_cache is None or refresh:
-        stt = bool(stt_config().get("enabled", True)) and _importable("faster_whisper")
-        tts = (bool(tts_config().get("enabled", True)) and _importable("piper")
-               and bool(list_tts_voices()))
+        stt = bool(stt_config().get("enabled", True))
+        if not _stt_remote():
+            stt = stt and _importable("faster_whisper")
+        tts = bool(tts_config().get("enabled", True))
+        if _tts_remote():
+            tts = tts and bool(tts_config().get("model")) and bool(list_tts_voices())
+        else:
+            tts = tts and _importable("piper") and bool(list_tts_voices())
         _caps_cache = {"stt_stream": stt, "tts_stream": tts, "phrases": stt}
     return _caps_cache
 
@@ -496,9 +627,10 @@ def preload_in_background() -> None:
         try:
             if want_stt:
                 ensure_stt_loaded()
-                print("Voice: STT models preloaded "
+                where = "remote server probed" if _stt_remote() else "models preloaded"
+                print(f"Voice: STT {where} "
                       f"({_model_key('partial')[0]} + {_model_key('final')[0]})")
-            if want_tts:
+            if want_tts and not _tts_remote():
                 name = default_tts_voice()
                 if name:
                     _load_tts_voice(name)
