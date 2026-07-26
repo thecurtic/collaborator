@@ -88,3 +88,6 @@ backend/data/users/*/notes/
 
 # Worktrees (keep hidden)
 .worktrees/
+
+# TTS voice models (downloaded per-machine)
+backend/data/tts-voices/
