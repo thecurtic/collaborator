@@ -11,15 +11,22 @@ import {
 const DEBUG_KEY = 'collaborator_debug';
 const ENGINE_KEY = 'collaborator_tts_engine';
 const VOICE_KEY = 'collaborator_piper_voice';
+const SERVER_VOICE_KEY = 'collaborator_server_voice';
 const END_WORD_KEY = 'collaborator_end_word';
 const STOP_WORD_KEY = 'collaborator_stop_word';
+const END_PHRASE_KEY = 'collaborator_end_phrase';
+const INTERRUPT_PHRASE_KEY = 'collaborator_interrupt_phrase';
 const STT_KEY = 'collaborator_stt_engine';
 const RECALL_KEY = 'collaborator_recall';
 
 export const DEFAULT_END_WORD = 'go';
 export const DEFAULT_STOP_WORD = 'stop';
+// Server phrase tier (free text, matched in the ASR transcript). Guidance:
+// 2-4 words, phonetically distinctive, nothing you'd say while dictating.
+export const DEFAULT_END_PHRASE = 'that is all';
+export const DEFAULT_INTERRUPT_PHRASE = 'hold on';
 
-export type TtsEngine = 'piper' | 'browser';
+export type TtsEngine = 'server' | 'piper' | 'browser';
 export type SttEngine = 'server' | 'device';
 
 type Listener = () => void;
@@ -61,7 +68,8 @@ export function useDebugEnabled(): boolean {
 
 // --- TTS engine ---
 export function getTtsEngine(): TtsEngine {
-  return read(ENGINE_KEY) === 'browser' ? 'browser' : 'piper';
+  const v = read(ENGINE_KEY);
+  return v === 'browser' || v === 'server' ? v : 'piper';
 }
 export function setTtsEngine(value: TtsEngine): void {
   write(ENGINE_KEY, value);
@@ -103,6 +111,42 @@ export function setPiperVoice(value: string): void {
 }
 export function usePiperVoice(): string {
   return useSyncExternalStore(subscribe, getPiperVoice, () => DEFAULT_PIPER_VOICE);
+}
+
+// --- Server TTS voice ('' = let the server pick its default) ---
+export function getServerVoice(): string {
+  return read(SERVER_VOICE_KEY) ?? '';
+}
+export function setServerVoice(value: string): void {
+  write(SERVER_VOICE_KEY, value);
+}
+export function useServerVoice(): string {
+  return useSyncExternalStore(subscribe, getServerVoice, () => '');
+}
+
+// --- Voice command phrases (server phrase detection in the ASR stream) ---
+export function getEndPhrase(): string {
+  return read(END_PHRASE_KEY)?.trim() || DEFAULT_END_PHRASE;
+}
+export function setEndPhrase(value: string): void {
+  write(END_PHRASE_KEY, value);
+}
+export function useEndPhrase(): string {
+  return useSyncExternalStore(subscribe, getEndPhrase, () => DEFAULT_END_PHRASE);
+}
+
+export function getInterruptPhrase(): string {
+  return read(INTERRUPT_PHRASE_KEY)?.trim() || DEFAULT_INTERRUPT_PHRASE;
+}
+export function setInterruptPhrase(value: string): void {
+  write(INTERRUPT_PHRASE_KEY, value);
+}
+export function useInterruptPhrase(): string {
+  return useSyncExternalStore(
+    subscribe,
+    getInterruptPhrase,
+    () => DEFAULT_INTERRUPT_PHRASE,
+  );
 }
 
 // --- Voice command words (on-device keyword spotting, fixed vocabulary) ---

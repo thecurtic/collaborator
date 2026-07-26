@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/api/collaborator';
+import { setCapabilities } from '@/lib/capabilities';
 import type { HealthStatus } from '@/domain/models';
 
 type HealthState =
@@ -15,6 +16,7 @@ export function useHealth() {
   const check = useCallback(async () => {
     try {
       const health = await api.health();
+      setCapabilities(health.capabilities); // keep the app-wide flags fresh
       setState({ status: 'online', health });
     } catch (err) {
       setState({

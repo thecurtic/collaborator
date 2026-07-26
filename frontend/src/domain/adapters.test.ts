@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ApiRecall, ApiTurn } from '@/api/types';
-import { toRecallBlock, toTurn } from './adapters';
+import { toHealth, toRecallBlock, toTurn } from './adapters';
 
 const baseTurn: ApiTurn = {
   id: 1,
@@ -86,6 +86,33 @@ describe('toRecallBlock', () => {
       similarity: 0,
       score: 0,
       preview: '',
+    });
+  });
+});
+
+describe('toHealth capabilities', () => {
+  it('defaults to all-false when the backend does not advertise them', () => {
+    expect(toHealth({ status: 'healthy', version: '0.3.0' }).capabilities).toEqual({
+      sttStream: false,
+      ttsStream: false,
+      phrases: false,
+    });
+  });
+
+  it('maps advertised flags and tolerates 0/1 serialization', () => {
+    const h = toHealth({
+      status: 'healthy',
+      version: '0.4.0',
+      capabilities: {
+        stt_stream: true,
+        tts_stream: 1 as unknown as boolean, // SQLite-style truthiness
+        phrases: 0 as unknown as boolean,
+      },
+    });
+    expect(h.capabilities).toEqual({
+      sttStream: true,
+      ttsStream: true,
+      phrases: false,
     });
   });
 });

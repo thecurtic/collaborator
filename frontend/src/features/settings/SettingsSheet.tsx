@@ -4,22 +4,32 @@ import { api } from '@/api/collaborator';
 import { ApiRequestError } from '@/api/http';
 import { Button } from '@/components/ui/button';
 import { useModalA11y } from '@/lib/useModalA11y';
+import { useCapabilities } from '@/lib/capabilities';
 import { KEYWORD_OPTIONS } from '@/features/voice/keywordSpotter';
 import { PIPER_VOICES } from '@/features/voice/piperVoices';
 import { webSpeechSupported } from '@/features/voice/speech';
 import { cn } from '@/lib/utils';
+import type { TtsVoices } from '@/domain/models';
 import {
+  DEFAULT_END_PHRASE,
+  DEFAULT_INTERRUPT_PHRASE,
   setDebugEnabled,
+  setEndPhrase,
   setEndWord,
+  setInterruptPhrase,
   setPiperVoice,
   setRecallEnabled,
+  setServerVoice,
   setStopWord,
   setSttEngine,
   setTtsEngine,
   useDebugEnabled,
+  useEndPhrase,
   useEndWord,
+  useInterruptPhrase,
   usePiperVoice,
   useRecallEnabled,
+  useServerVoice,
   useStopWord,
   useSttEngine,
   useTtsEngine,
@@ -136,6 +146,53 @@ function ModelPicker() {
   );
 }
 
+/**
+ * Server TTS voice picker (shown only when the server engine is selected).
+ * Fetched per open; '' = let the server use its configured default.
+ */
+function ServerVoicePicker() {
+  const serverVoice = useServerVoice();
+  const [roster, setRoster] = useState<TtsVoices | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .getTtsVoices()
+      .then(setRoster)
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'Could not load voices'),
+      );
+  }, []);
+
+  if (error) return <p className="text-xs text-destructive">{error}</p>;
+  if (!roster) {
+    return (
+      <p className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading voices…
+      </p>
+    );
+  }
+  return (
+    <label className="block">
+      <span className="text-xs text-muted-foreground">Server voice</span>
+      <select
+        value={serverVoice}
+        onChange={(e) => setServerVoice(e.target.value)}
+        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <option value="">
+          Server default{roster.defaultVoice ? ` (${roster.defaultVoice})` : ''}
+        </option>
+        {roster.voices.map((v) => (
+          <option key={v} value={v}>
+            {v}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
   const debug = useDebugEnabled();
   const recall = useRecallEnabled();
@@ -144,6 +201,12 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
   const piperVoice = usePiperVoice();
   const endWord = useEndWord();
   const stopWord = useStopWord();
+  const endPhrase = useEndPhrase();
+  const interruptPhrase = useInterruptPhrase();
+  const caps = useCapabilities();
+  // Server phrase tier: commands are free-text phrases matched in the ASR
+  // stream instead of the on-device keyword classifier's fixed vocabulary.
+  const phraseTier = caps.phrases && sttEngine === 'server';
 
   // Focus trap + Escape-to-close + focus restore.
   const dialogRef = useModalA11y<HTMLDivElement>(open, onClose);
@@ -181,48 +244,89 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
         {/* Chat model (server-backed; applies immediately). */}
         <ModelPicker />
 
-        {/* Voice commands — on-device keyword spotting (fixed vocabulary). */}
+        {/* Voice commands — server phrases (free text, matched in the ASR
+            transcript) or on-device keyword spotting (fixed vocabulary). */}
         <div className="mt-5 space-y-3 border-t border-border pt-4">
           <p className="text-sm font-medium">Voice commands</p>
-          <p className="text-xs text-muted-foreground">
-            Spoken on-device. Limited to recognizable command words. Note: the
-            microphone stays on while the assistant reads aloud so the stop
-            word can interrupt it — audio never leaves this device.
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block">
-              <span className="text-xs text-muted-foreground">
-                End my turn (call mode)
-              </span>
-              <select
-                value={endWord}
-                onChange={(e) => setEndWord(e.target.value)}
-                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {KEYWORD_OPTIONS.map((w) => (
-                  <option key={w} value={w}>
-                    {w}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block">
-              <span className="text-xs text-muted-foreground">
-                Stop speaking
-              </span>
-              <select
-                value={stopWord}
-                onChange={(e) => setStopWord(e.target.value)}
-                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {KEYWORD_OPTIONS.map((w) => (
-                  <option key={w} value={w}>
-                    {w}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          {phraseTier ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Detected in the transcript on your server — only these exact
+                phrases act; other speech and noise are ignored. Pick 2–4
+                distinctive words you wouldn't say mid-thought. The microphone
+                stays on while the assistant speaks so the stop phrase can
+                interrupt it.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs text-muted-foreground">
+                    End my turn (call mode)
+                  </span>
+                  <input
+                    type="text"
+                    value={endPhrase}
+                    placeholder={DEFAULT_END_PHRASE}
+                    onChange={(e) => setEndPhrase(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs text-muted-foreground">
+                    Stop speaking
+                  </span>
+                  <input
+                    type="text"
+                    value={interruptPhrase}
+                    placeholder={DEFAULT_INTERRUPT_PHRASE}
+                    onChange={(e) => setInterruptPhrase(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                </label>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Spoken on-device. Limited to recognizable command words. Note:
+                the microphone stays on while the assistant reads aloud so the
+                stop word can interrupt it — audio never leaves this device.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs text-muted-foreground">
+                    End my turn (call mode)
+                  </span>
+                  <select
+                    value={endWord}
+                    onChange={(e) => setEndWord(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {KEYWORD_OPTIONS.map((w) => (
+                      <option key={w} value={w}>
+                        {w}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs text-muted-foreground">
+                    Stop speaking
+                  </span>
+                  <select
+                    value={stopWord}
+                    onChange={(e) => setStopWord(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {KEYWORD_OPTIONS.map((w) => (
+                      <option key={w} value={w}>
+                        {w}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Transcription (speech-to-text). */}
@@ -259,6 +363,17 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
         <div className="mt-5 space-y-3 border-t border-border pt-4">
           <p className="text-sm font-medium">Voice (text-to-speech)</p>
           <div className="flex gap-2">
+            {caps.ttsStream && (
+              <Button
+                type="button"
+                variant={ttsEngine === 'server' ? 'default' : 'outline'}
+                size="sm"
+                className="flex-1"
+                onClick={() => setTtsEngine('server')}
+              >
+                Server
+              </Button>
+            )}
             <Button
               type="button"
               variant={ttsEngine === 'piper' ? 'default' : 'outline'}
@@ -280,10 +395,14 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            {ttsEngine === 'piper'
-              ? 'Consistent neural voice, runs on-device (downloads the voice once; slower on phones).'
-              : 'Instant on-device system voice; quality varies by device.'}
+            {ttsEngine === 'server'
+              ? 'Synthesized on your server (Piper) and streamed here — fast start, no on-device downloads.'
+              : ttsEngine === 'piper'
+                ? 'Consistent neural voice, runs on-device (downloads the voice once; slower on phones).'
+                : 'Instant on-device system voice; quality varies by device.'}
           </p>
+
+          {ttsEngine === 'server' && caps.ttsStream && <ServerVoicePicker />}
 
           {ttsEngine === 'piper' && (
             <label className="block">

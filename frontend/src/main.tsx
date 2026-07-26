@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { probeCapabilities } from './lib/capabilities';
 import { setupPWA } from './pwa';
 import './index.css';
 
@@ -18,3 +19,6 @@ createRoot(rootEl).render(
 
 // Register the service worker (no-op in dev — devOptions is disabled).
 setupPWA();
+
+// Learn the backend's voice capabilities before anyone opens Settings/a call.
+probeCapabilities();

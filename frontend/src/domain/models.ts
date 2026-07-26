@@ -99,9 +99,30 @@ export interface BranchInput {
   recall?: boolean;
 }
 
+/**
+ * Optional server voice features (9acc3d1). All false on backends that don't
+ * advertise them — server engine options should be hidden then.
+ */
+export interface ServerCapabilities {
+  /** WS /api/transcribe/stream serves the session protocol. */
+  sttStream: boolean;
+  /** POST /api/tts will synthesize (piper installed + a voice on disk). */
+  ttsStream: boolean;
+  /** In-stream phrase detection (always equals sttStream today). */
+  phrases: boolean;
+}
+
 export interface HealthStatus {
   status: string;
   version: string;
+  capabilities: ServerCapabilities;
+}
+
+/** GET /api/tts/voices — server TTS voice roster for the picker. */
+export interface TtsVoices {
+  voices: string[];
+  defaultVoice: string | null;
+  enabled: boolean;
 }
 
 export interface TurnsPage {

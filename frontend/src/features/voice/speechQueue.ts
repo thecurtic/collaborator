@@ -17,13 +17,19 @@ interface Item {
   text: string;
 }
 
+/** Synthesize sanitized text to a playable audio blob. */
+export type SynthFn = (text: string) => Promise<Blob>;
+
 /**
- * Piper speech session. Speaks streamed text sentence-by-sentence with pipelined
- * synthesis (the next sentence is synthesized while the current one plays) so
- * there are no gaps. Markdown is stripped before synthesis. `onProgress` reports
- * the cumulative count of original characters spoken (for read-along);
- * `onFailed` reports the [start, end) original-char range of a sentence that
- * could not be synthesized.
+ * Blob-playback speech session. Speaks streamed text sentence-by-sentence with
+ * pipelined synthesis (the next sentence is synthesized while the current one
+ * plays) so there are no gaps. Markdown is stripped before synthesis.
+ * `onProgress` reports the cumulative count of original characters spoken (for
+ * read-along); `onFailed` reports the [start, end) original-char range of a
+ * sentence that could not be synthesized.
+ *
+ * Synthesis defaults to in-browser Piper (vits-web); pass `synthFn` to swap
+ * the backend (server /api/tts) while keeping the queue/playback behavior.
  */
 export class SpeechQueue implements SpeechSession {
   private buffer = '';
@@ -40,6 +46,7 @@ export class SpeechQueue implements SpeechSession {
     private onIdle?: () => void,
     private onProgress?: (chars: number) => void,
     private onFailed?: (start: number, end: number) => void,
+    private synthFn: SynthFn = synthesize,
   ) {}
 
   push(chunk: string): void {
@@ -72,7 +79,7 @@ export class SpeechQueue implements SpeechSession {
   private synth(text: string): Promise<SynthResult> {
     const clean = sanitizeForSpeech(text);
     if (!clean) return Promise.resolve({ blob: null, failed: false });
-    return synthesize(clean).then(
+    return this.synthFn(clean).then(
       (blob) => ({ blob, failed: false }),
       () => ({ blob: null, failed: true }),
     );

@@ -12,6 +12,19 @@ export type ApiRole = 'user' | 'assistant';
 export interface ApiHealth {
   status: string;
   version: string;
+  /** Server voice tier feature flags (9acc3d1); absent on older backends. */
+  capabilities?: {
+    stt_stream?: boolean;
+    tts_stream?: boolean;
+    phrases?: boolean;
+  };
+}
+
+/** GET /api/tts/voices */
+export interface ApiTtsVoices {
+  voices: string[];
+  default: string;
+  enabled: boolean;
 }
 
 /**

@@ -8,6 +8,7 @@ import type {
   ApiTree,
   ApiTreeNode,
   ApiTurn,
+  ApiTtsVoices,
   ApiTurnTool,
   ApiTurnsResponse,
 } from '@/api/types';
@@ -21,6 +22,7 @@ import type {
   RecallBlock,
   ToolActivity,
   TreeNode,
+  TtsVoices,
   Turn,
   TurnsPage,
 } from './models';
@@ -144,7 +146,24 @@ export function toTurnsPage(api: ApiTurnsResponse): TurnsPage {
 }
 
 export function toHealth(api: ApiHealth): HealthStatus {
-  return { status: api.status, version: api.version };
+  // Boolean() (not === true): tolerate 0/1 serialization like `committed`.
+  return {
+    status: api.status,
+    version: api.version,
+    capabilities: {
+      sttStream: Boolean(api.capabilities?.stt_stream),
+      ttsStream: Boolean(api.capabilities?.tts_stream),
+      phrases: Boolean(api.capabilities?.phrases),
+    },
+  };
+}
+
+export function toTtsVoices(api: ApiTtsVoices): TtsVoices {
+  return {
+    voices: api.voices ?? [],
+    defaultVoice: api.default || null,
+    enabled: Boolean(api.enabled),
+  };
 }
 
 export function toNoteDraft(api: ApiNoteDraft): NoteDraft {

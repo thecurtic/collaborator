@@ -6,11 +6,19 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { getStopWord, getTtsEngine } from '@/features/settings/uiPrefs';
+import {
+  getInterruptPhrase,
+  getStopWord,
+  getSttEngine,
+  getTtsEngine,
+} from '@/features/settings/uiPrefs';
+import { getCapabilities } from '@/lib/capabilities';
 import { listenForWords } from './keywordSpotter';
+import { startPcmStream, type PcmStream } from './pcmStreamer';
 import { downloadVoice, isVoiceStored } from './piperTts';
 import { createSpeechSession, webSpeechSupported } from './speech';
 import { splitParagraphs, type SpeechSession } from './speechUtils';
+import { TranscriptionStream } from './transcriptionStream';
 
 export type SpeechStatus = 'idle' | 'preparing' | 'speaking';
 
@@ -64,6 +72,55 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
     reset();
   }, [reset]);
 
+  // Server phrase tier: watch the mic for the interrupt phrase during
+  // read-aloud. The teardown is registered in kwsStopRef as soon as the mic
+  // opens (and re-checked after every await) so a stop() mid-setup can't
+  // leak the stream. Failure degrades to tap-to-stop.
+  const listenForInterruptPhrase = useCallback(
+    async (req: number) => {
+      let media: MediaStream | null = null;
+      let pcm: PcmStream | null = null;
+      let ws: TranscriptionStream | null = null;
+      const teardown = () => {
+        pcm?.stop();
+        pcm = null;
+        ws?.close();
+        ws = null;
+        media?.getTracks().forEach((t) => t.stop());
+        media = null;
+      };
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          // echoCancellation keeps the TTS playback out of the ASR's ears.
+          audio: { echoCancellation: true, noiseSuppression: true },
+        });
+        media = stream;
+        if (reqRef.current !== req) {
+          teardown();
+          return;
+        }
+        kwsStopRef.current = teardown;
+        const session = new TranscriptionStream(() => {}, {
+          phrases: [{ kind: 'interrupt', text: getInterruptPhrase() }],
+          onPhrase: (kind) => {
+            if (kind === 'interrupt' && reqRef.current === req) stop();
+          },
+        });
+        ws = session;
+        await session.ready();
+        if (reqRef.current !== req) {
+          teardown();
+          return;
+        }
+        pcm = await startPcmStream(stream, (buf) => ws?.sendPcm(buf));
+        if (reqRef.current !== req) teardown();
+      } catch {
+        teardown();
+      }
+    },
+    [stop],
+  );
+
   // Speak fullText from a character offset; reports read-along relative to base.
   const startSpeaking = useCallback(
     (id: number, fullText: string, base: number) => {
@@ -101,29 +158,36 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
           session.push(fullText.slice(base));
           session.finish();
 
-          // Barge-in: listen for the stop word while speaking, then mic off.
-          // Strict threshold — the agent's own audio must not false-trigger it.
-          void listenForWords(
-            [getStopWord()],
-            () => {
-              if (reqRef.current === req) stop();
-            },
-            0.97,
-          )
-            .then((s) => {
-              if (reqRef.current !== req) {
-                s();
-                return;
-              }
-              kwsStopRef.current = s;
-            })
-            .catch(() => {});
+          // Voice stop while speaking (mic on only while speaking; failure
+          // degrades to tap-to-stop). Server phrase tier: the interrupt
+          // phrase matched in a streaming ASR session. On-device tier: KWS
+          // stop word, strict threshold so the agent's own audio must not
+          // false-trigger it.
+          if (getSttEngine() === 'server' && getCapabilities().phrases) {
+            void listenForInterruptPhrase(req);
+          } else {
+            void listenForWords(
+              [getStopWord()],
+              () => {
+                if (reqRef.current === req) stop();
+              },
+              0.97,
+            )
+              .then((s) => {
+                if (reqRef.current !== req) {
+                  s();
+                  return;
+                }
+                kwsStopRef.current = s;
+              })
+              .catch(() => {});
+          }
         } catch {
           if (reqRef.current === req) reset();
         }
       })();
     },
-    [reset, stop],
+    [reset, stop, listenForInterruptPhrase],
   );
 
   const toggle = useCallback(

@@ -11,11 +11,13 @@ import type {
   ReindexResult,
   SendMessageInput,
   SynthesisResult,
+  TtsVoices,
   TurnsPage,
   WebSearch,
 } from '@/domain/models';
 import {
   toHealth,
+  toTtsVoices,
   toNote,
   toNoteDraft,
   toNoteMeta,
@@ -41,6 +43,7 @@ import type {
   ApiSendMessageResponse,
   ApiSynthesisResponse,
   ApiTree,
+  ApiTtsVoices,
   ApiTurnsResponse,
   ApiWebSearchResponse,
   ApiWsTicket,
@@ -301,6 +304,17 @@ export interface CollaboratorApi {
   /** Short-lived single-use ticket for WS auth (fetch right before opening). */
   getWsTicket(): Promise<string>;
 
+  // --- Server voice tier (9acc3d1) — gate on health capabilities ---
+  /** Server TTS voice roster for the picker (capabilities.ttsStream only). */
+  getTtsVoices(): Promise<TtsVoices>;
+  /**
+   * Synthesize text to a playable audio Blob (POST /api/tts, streaming WAV).
+   * Callers pipeline sentence-by-sentence, so awaiting each small body whole
+   * keeps first-audio latency low without MediaSource plumbing.
+   * 503 = TTS not configured; 404 = unknown voice; 422 = empty text.
+   */
+  synthesizeSpeech(text: string, voice?: string): Promise<Blob>;
+
   // --- Notes pipeline ---
   /**
    * One LLM pass over a tree (root id) or branch (any committed turn id) →
@@ -490,6 +504,18 @@ class HttpCollaboratorApi implements CollaboratorApi {
       method: 'POST',
     });
     return res.ticket;
+  }
+
+  async getTtsVoices(): Promise<TtsVoices> {
+    return toTtsVoices(await request<ApiTtsVoices>('/api/tts/voices'));
+  }
+
+  async synthesizeSpeech(text: string, voice?: string): Promise<Blob> {
+    const res = await requestStream('/api/tts', {
+      method: 'POST',
+      body: JSON.stringify({ text, ...(voice ? { voice } : {}), format: 'wav' }),
+    });
+    return res.blob();
   }
 
   async synthesizeNotes(treeId: number): Promise<SynthesisResult> {

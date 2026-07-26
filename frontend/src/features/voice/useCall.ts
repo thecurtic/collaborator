@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
 import {
+  getEndPhrase,
   getEndWord,
+  getInterruptPhrase,
   getRecallEnabled,
   getStopWord,
   getSttEngine,
 } from '@/features/settings/uiPrefs';
+import { getCapabilities } from '@/lib/capabilities';
 import { holdPwaUpdates } from '@/pwa';
 import { startCallService, stopCallService } from '@/native/nativeShell';
 import { saveTurnSources } from '@/features/chat/sourcesStore';
@@ -62,11 +65,16 @@ interface Controls {
 }
 
 /**
- * Call loop with on-device keyword spotting (TF.js) and streaming transcription:
- *   listen (stream PCM16 to WS, show live partials, spot the end word) → on
- *   end-of-turn take the final transcript → stream the reply and speak it (while
- *   spotting the stop word for barge-in) → listen again.
- * "Done" button and a max-duration are fallbacks for ending a turn.
+ * Call loop: listen (stream PCM16, show live partials) → on end-of-turn take
+ * the final transcript → stream the reply and speak it → listen again.
+ *
+ * Turn control comes in two tiers:
+ * - Server phrases (server STT + `phrases` capability, 9acc3d1): the end
+ *   phrase is detected server-side in the ASR transcript; while the reply
+ *   plays, a second WS session listens for the interrupt phrase. No TF.js.
+ * - On-device keyword spotting (TF.js) otherwise: end word while listening,
+ *   stop word while speaking.
+ * The "Done" button always ends a turn regardless of tier.
  */
 export function useCall(
   open: boolean,
@@ -140,9 +148,17 @@ export function useCall(
     let transcriber: Transcriber | null = null;
     let endWord = getEndWord();
     let stopWord = getStopWord();
+    let endPhrase = getEndPhrase();
+    let interruptPhrase = getInterruptPhrase();
     let queue: SpeechSession | null = null;
     let finalizing = false;
     let streamAbort: AbortController | null = null;
+    // True while the CURRENT listen session uses server phrase detection —
+    // the server strips the end phrase, so no client-side word stripping.
+    let phraseMode = false;
+    // Server tier: does this call use phrase detection instead of TF.js KWS?
+    const usePhrases = () =>
+      getSttEngine() === 'server' && getCapabilities().phrases;
 
     // Keyword listener management (one active at a time, token-guarded).
     let kwsStop: (() => void) | null = null;
@@ -187,11 +203,51 @@ export function useCall(
       pcm = null;
     };
 
+    // Server phrase tier: while the reply plays, a second WS session watches
+    // the mic for the interrupt phrase ("hold on") — the phrase-tier
+    // replacement for stop-word KWS. Failure degrades to no voice interrupt
+    // (tap-to-skip and Done still work); the reply keeps playing either way.
+    let monitor: TranscriptionStream | null = null;
+    let monitorPcm: PcmStream | null = null;
+    const stopInterruptMonitor = () => {
+      monitorPcm?.stop();
+      monitorPcm = null;
+      monitor?.close();
+      monitor = null;
+    };
+    const startInterruptMonitor = async () => {
+      if (!active || !stream) return;
+      stopInterruptMonitor();
+      const m = new TranscriptionStream(() => {}, {
+        phrases: [{ kind: 'interrupt', text: interruptPhrase }],
+        onPhrase: (kind) => {
+          if (kind === 'interrupt' && active && monitor === m) {
+            log(`interrupt phrase "${interruptPhrase}" → interrupt`);
+            interrupt();
+          }
+        },
+      });
+      monitor = m;
+      try {
+        await withTimeout(m.ready(), 15_000, 'interrupt monitor timed out');
+        if (!active || monitor !== m) {
+          m.close();
+          return;
+        }
+        monitorPcm = await startPcmStream(stream, (buf) => monitor?.sendPcm(buf));
+      } catch (e) {
+        log(`interrupt monitor FAIL: ${e instanceof Error ? e.message : e}`);
+        if (monitor === m) monitor = null;
+        m.close();
+      }
+    };
+
     const cleanup = () => {
       active = false;
       releaseUpdateHold();
       void stopCallService();
       stopKws();
+      stopInterruptMonitor();
       streamAbort?.abort();
       stopCapture();
       transcriber?.close();
@@ -221,13 +277,27 @@ export function useCall(
       // is open and PCM is actually flowing, or we'd drop the start of speech.
       setPhase('connecting');
       const device = getSttEngine() === 'device';
+      phraseMode = usePhrases();
       try {
         const onPartial = (t: string) => {
           if (active && !finalizing) setPartial(t);
         };
         transcriber = device
           ? new DeviceTranscriber(onPartial)
-          : new TranscriptionStream(onPartial);
+          : new TranscriptionStream(
+              onPartial,
+              phraseMode
+                ? {
+                    phrases: [{ kind: 'end', text: endPhrase }],
+                    onPhrase: (kind) => {
+                      if (kind === 'end' && active) {
+                        log(`end phrase "${endPhrase}" → finish`);
+                        void finalize();
+                      }
+                    },
+                  }
+                : {},
+            );
         // Never hang in "connecting" — fail into the error phase, where the
         // Try again button re-runs listen() with a fresh transcriber.
         await withTimeout(
@@ -258,15 +328,18 @@ export function useCall(
       }
       setPhase('listening');
       chimeListenStart(); // audible: mic now listening
-      // No auto-timeout — the turn ends only on the end word or the Done button.
-      startKws(
-        [endWord],
-        () => {
-          log(`end word "${endWord}" → finish`);
-          void finalize();
-        },
-        END_WORD_THRESHOLD,
-      );
+      // No auto-timeout — the turn ends only on the end phrase/word or the
+      // Done button (thinking pauses never end a turn).
+      if (!phraseMode) {
+        startKws(
+          [endWord],
+          () => {
+            log(`end word "${endWord}" → finish`);
+            void finalize();
+          },
+          END_WORD_THRESHOLD,
+        );
+      }
     };
 
     const finalize = async () => {
@@ -285,7 +358,8 @@ export function useCall(
       transcriber?.close();
       transcriber = null;
       if (!active) return;
-      const clean = stripTrailingWord(text, endWord);
+      // Phrase tier: the server already stripped the end phrase from `final`.
+      const clean = phraseMode ? text.trim() : stripTrailingWord(text, endWord);
       log(`heard(${text.trim().length}) → "${clean.slice(0, 40)}"`);
       if (clean) {
         await respond(clean);
@@ -301,6 +375,7 @@ export function useCall(
       setSpokenChars(0);
       setSpeakBase(0);
       stopKws();
+      stopInterruptMonitor();
       void listen();
     };
 
@@ -336,22 +411,30 @@ export function useCall(
       setSpokenChars(0);
       setPhase('responding');
       queue = makeSession(aid, 0);
-      // Barge-in: spot the stop word while the assistant is speaking. Strict
-      // threshold so the agent's own audio / room noise doesn't false-trigger.
-      startKws(
-        [stopWord],
-        () => {
-          log(`stop word "${stopWord}" → interrupt`);
-          interrupt();
-        },
-        STOP_WORD_THRESHOLD,
-      );
+      // Barge-in while the assistant speaks: interrupt phrase (server tier)
+      // or stop-word KWS (on-device tier, strict threshold so the agent's own
+      // audio / room noise doesn't false-trigger).
+      if (usePhrases()) {
+        void startInterruptMonitor();
+      } else {
+        startKws(
+          [stopWord],
+          () => {
+            log(`stop word "${stopWord}" → interrupt`);
+            interrupt();
+          },
+          STOP_WORD_THRESHOLD,
+        );
+      }
       streamAbort = new AbortController();
+      // Capture this turn's session: tap-to-skip reassigns `queue`, and the
+      // still-streaming reply must not push tokens into the new session.
+      const session = queue;
       let full = '';
       const onToken = (c: string) => {
         full += c;
         updateTurn(aid, full);
-        queue?.push(c);
+        session?.push(c);
       };
       try {
         if (pendingBranch) {
@@ -399,12 +482,13 @@ export function useCall(
             saveTurnSources(res.id, activityRef.current);
           }
         }
-        queue?.finish();
+        session?.finish();
       } catch (err) {
         const aborted = err instanceof DOMException && err.name === 'AbortError';
         if (!aborted && active) {
           queue?.stop();
           stopKws();
+          stopInterruptMonitor();
           setError(err instanceof Error ? err.message : 'Something went wrong.');
           setPhase('error');
         }
@@ -414,6 +498,7 @@ export function useCall(
 
     const interrupt = () => {
       stopKws();
+      stopInterruptMonitor();
       streamAbort?.abort();
       queue?.stop();
       queue = null;
@@ -433,6 +518,7 @@ export function useCall(
       if (!slice) return;
       log(`skip → ¶${fromParagraph}`);
       stopKws();
+      stopInterruptMonitor();
       stopCapture();
       transcriber?.close();
       transcriber = null;
@@ -443,14 +529,18 @@ export function useCall(
       setSpokenChars(0);
       setPhase('responding');
       queue = makeSession(turnId, base);
-      startKws(
-        [stopWord],
-        () => {
-          log(`stop word "${stopWord}" → interrupt`);
-          interrupt();
-        },
-        STOP_WORD_THRESHOLD,
-      );
+      if (usePhrases()) {
+        void startInterruptMonitor();
+      } else {
+        startKws(
+          [stopWord],
+          () => {
+            log(`stop word "${stopWord}" → interrupt`);
+            interrupt();
+          },
+          STOP_WORD_THRESHOLD,
+        );
+      }
       queue.push(slice);
       queue.finish();
     };
@@ -459,11 +549,19 @@ export function useCall(
       try {
         endWord = getEndWord();
         stopWord = getStopWord();
-        log(`end="${endWord}" stop="${stopWord}"`);
+        endPhrase = getEndPhrase();
+        interruptPhrase = getInterruptPhrase();
+        log(
+          usePhrases()
+            ? `phrases end="${endPhrase}" interrupt="${interruptPhrase}"`
+            : `end="${endWord}" stop="${stopWord}"`,
+        );
         if (!navigator.mediaDevices?.getUserMedia) {
           throw new Error('Microphone not supported in this browser.');
         }
         stream = await navigator.mediaDevices.getUserMedia({
+          // echoCancellation also keeps server TTS playback out of the
+          // interrupt-monitor mic stream (the ASR must not hear the agent).
           audio: { echoCancellation: true, noiseSuppression: true },
         });
         if (!active) {
@@ -471,10 +569,12 @@ export function useCall(
           stream = null;
           return;
         }
-        try {
-          await warmUpKeywordSpotter(); // preload model so detection is instant
-        } catch (e) {
-          log(`keyword model failed: ${e instanceof Error ? e.message : e}`);
+        if (!usePhrases()) {
+          try {
+            await warmUpKeywordSpotter(); // preload model so detection is instant
+          } catch (e) {
+            log(`keyword model failed: ${e instanceof Error ? e.message : e}`);
+          }
         }
         if (!active) return;
         log('ready (streaming PCM16 16k)');
