@@ -76,6 +76,26 @@ def test_search_and_get_note_executors():
     print("✓ executors: search_notes (keyword), get_note with backlinks, miss -> error")
 
 
+def test_search_notes_tag_filter_executor():
+    c, cfg, dbp = _fresh()
+    _seed_note(cfg, dbp, "Curtis runs a homelab", "profile fact", tags=["user-profile"])
+    _seed_note(cfg, dbp, "Sam", "friend from the maker space", tags=["social-graph"])
+    _seed_note(cfg, dbp, "Loose idea", "no category")
+
+    _, execute, _ = main._build_tools(dbp)
+
+    # Tag + empty query = whole category listing (the full user profile).
+    hits = json.loads(execute("search_notes", {"query": "", "tag": "user-profile"}))
+    assert [h["title"] for h in hits] == ["Curtis runs a homelab"]
+
+    # Tag constrains a keyword search.
+    hits = json.loads(execute("search_notes",
+                              {"query": "friend idea fact", "mode": "keyword",
+                               "tag": "social-graph"}))
+    assert [h["title"] for h in hits] == ["Sam"]
+    print("✓ search_notes executor: tag filter + tag-only category listing")
+
+
 def test_propose_note_creates_pending_draft_only():
     c, cfg, dbp = _fresh()
     _, execute, state = main._build_tools(dbp)

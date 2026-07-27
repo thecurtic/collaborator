@@ -327,8 +327,12 @@ DEFAULT_TOOL_DESCRIPTIONS = {
     "synthesize": ("Synthesize retrieved items into a concise block. Call after a search "
                    "tool to produce a memory block for the user."),
     "search_notes": ("Search the user's atomic notes (their curated knowledge base) by "
-                     "meaning or keyword. Use when the user refers to their notes or when "
-                     "curated knowledge would ground the answer better than raw history."),
+                     "meaning or keyword, optionally filtered by tag. Category tags hold "
+                     "the user's extended cognition: user-profile, social-graph, memory, "
+                     "goal, decision, question, project — pass tag with an empty query to "
+                     "list a whole category (e.g. the full user profile). Use when the "
+                     "user refers to their notes, their people, their goals, or when "
+                     "curated knowledge grounds the answer better than raw history."),
     "get_note": ("Fetch one note by exact title: full body plus backlinks (notes that "
                  "link to it). Use after search_notes to read or traverse the graph."),
     "propose_note": ("Propose a new atomic note. Creates a PENDING DRAFT the user must "
@@ -443,9 +447,16 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             "name": "search_notes",
             "description": descs["search_notes"],
             "parameters": {"type": "object", "properties": {
-                "query": {"type": "string", "description": "what to search for"},
+                "query": {"type": "string",
+                          "description": "what to search for (may be empty when "
+                                         "tag is given, to list ALL notes with "
+                                         "that tag)"},
                 "mode": {"type": "string", "enum": ["semantic", "keyword"],
-                         "description": "retrieval strategy (default semantic)"}},
+                         "description": "retrieval strategy (default semantic)"},
+                "tag": {"type": "string",
+                        "description": "only notes carrying this tag — category "
+                                       "tags: user-profile, social-graph, memory, "
+                                       "goal, decision, question, project"}},
                 "required": ["query"]}}})
     if avail.get("get_note", True):
         schemas.append({"type": "function", "function": {
@@ -557,14 +568,19 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             return block or "(no synthesis produced)"
         if name == "search_notes":
             query = args.get("query", "")
+            tag = (args.get("tag") or "").strip() or None
+            # Tag-only listing ("the totality of notes tagged X") gets more room.
+            limit = 20 if (tag and not query.strip()) else 8
             conn = sqlite3.connect(db_path)
             try:
-                if args.get("mode") == "keyword":
-                    results = notes_index.search_notes_keyword(conn, query, limit=8)
+                if args.get("mode") == "keyword" or not query.strip():
+                    results = notes_index.search_notes_keyword(
+                        conn, query, limit=limit, tag=tag)
                 else:
                     vec = get_embedding(query)
-                    results = (notes_index.search_notes_semantic(conn, vec, limit=8)
-                               if vec else notes_index.search_notes_keyword(conn, query, limit=8))
+                    results = (notes_index.search_notes_semantic(conn, vec, limit=limit, tag=tag)
+                               if vec else notes_index.search_notes_keyword(
+                                   conn, query, limit=limit, tag=tag))
             finally:
                 conn.close()
             return json.dumps([{
@@ -1623,21 +1639,26 @@ async def list_vault_notes(
 
 @app.get("/api/notes/search")
 async def search_vault_notes(
-    q: str,
+    q: str = "",
     mode: str = "semantic",
     limit: int = 10,
+    tag: Optional[str] = None,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
-    """Search notes: mode=semantic (embeddings) or mode=keyword (lexical)."""
+    """Search notes: mode=semantic (embeddings) or mode=keyword (lexical).
+
+    Optional ?tag= filters to notes carrying the tag; with an empty q it lists
+    the whole category (e.g. ?tag=user-profile = the full user profile).
+    """
     _require_auth(passkey)
     try:
         conn = sqlite3.connect(_resolve_db_path(passkey))
         try:
-            if mode == "keyword":
-                results = notes_index.search_notes_keyword(conn, q, limit=limit)
+            if mode == "keyword" or not q.strip():
+                results = notes_index.search_notes_keyword(conn, q, limit=limit, tag=tag)
             else:
                 vec = get_embedding(q)
-                results = notes_index.search_notes_semantic(conn, vec, limit=limit) if vec else []
+                results = notes_index.search_notes_semantic(conn, vec, limit=limit, tag=tag) if vec else []
         finally:
             conn.close()
         for n in results:

@@ -34,10 +34,15 @@ snippets to synthesize.
 
 ## search_notes
 Search the user's atomic notes — their curated, user-approved knowledge base — by
-meaning (default) or exact keyword. Notes are higher-signal than raw conversation
-history: they are ideas the user chose to keep. Use this when the user refers to their
-notes, or when a question touches something they may have already distilled. Returns
-titles, tags, link edges, and a body preview.
+meaning (default) or exact keyword, optionally filtered by tag. Notes are
+higher-signal than raw conversation history: they are ideas the user chose to keep.
+Use this when the user refers to their notes, or when a question touches something
+they may have already distilled. Category tags hold the user's extended cognition:
+user-profile (facts about the user), social-graph (people in their network — one
+note per person), memory (salient events), goal, decision, question, project. Pass
+`tag` with an EMPTY query to list a whole category — e.g. tag "user-profile" with
+no query returns the user's full profile; tag "social-graph" lists their people.
+Returns titles, tags, link edges, and a body preview.
 
 ## get_note
 Fetch one note by its exact title: the full body, tags, outgoing [[wikilinks]], and
@@ -92,8 +97,11 @@ when an idea clearly worth keeping emerges and the user has invited suggestions.
 Follow the note rules: title is a SHORT declarative claim or honest question — 3–7
 words, a clean [[wikilink]] handle like "Transit is freedom",
 never a full sentence (details and qualifiers belong in the body); body is 50–200
-words in the user's first-person voice, self-contained, no dialogue form. After
-calling it, tell the user the draft is awaiting their review.
+words in the user's first-person voice, self-contained, no dialogue form. When the
+note belongs to an extended-cognition category, tag it accordingly: user-profile,
+social-graph (title = the person's name), memory, goal, decision, question, or
+project (see tools guidance for the trigger patterns). After calling it, tell the
+user the draft is awaiting their review.
 
 ## propose_edit
 Propose changes to an EXISTING atomic note: its title, body, tags, or any combination.

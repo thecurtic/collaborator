@@ -93,6 +93,27 @@ frontmatter. v1 keys:
   may go stale if source conversations are deleted — dangling ids are harmless.
 - Unknown/extra keys must be preserved by all tooling (forward compatibility).
 
+### Reserved tag vocabulary (extended-cognition categories, agreed 2026-07-27)
+
+The agent is the user's extended cognition: it accumulates perceptions, tracks
+relationships, and surfaces context at request time. All special categories are
+**just tags on notes** — no new primitives. These tag names are reserved for that
+system; don't reuse them for unrelated organic tagging:
+
+| tag | holds | notes |
+|---|---|---|
+| `user-profile` | facts about the user; accumulated perceptions | the full profile is the totality of notes with this tag; ALWAYS approval-gated |
+| `social-graph` | one note per person/entity in the user's network | note title = the person's name (a graph node; renames rewrite wikilinks) |
+| `memory` | salient events, statements, context worth remembering | agent-initiated (salience), not necessarily user-initiated |
+| `goal` | stated intentions with a lifecycle | states (proposed/started/finished/discarded) arrive in Phase 2 frontmatter; a finished goal graduates to `memory` |
+| `decision` | explicit choices **with their reasoning** | "I'm going with X because Y" — the Y is the point |
+| `question` | unresolved queries, expressed uncertainty, open threads | |
+| `project` | container grouping related notes/goals/memories | membership = wikilinks from the project note |
+
+Every entry in every category passes through the drafts review queue — the agent
+proposes, the user approves. The agent can never silently update its model of the
+user or anyone else. (`expertise` is deliberately deferred: no crisp trigger yet.)
+
 ### Body
 
 - First line: `# <Title>` — identical to the filename (minus `.md`).

@@ -126,6 +126,30 @@ def test_search_semantic_and_keyword():
     print("✓ semantic + keyword search over the index")
 
 
+def test_search_tag_filter_and_tag_only_listing():
+    _, vault, dbp = _fresh()
+    _write(vault, "Curtis prefers tailnet deploys", "profile fact", tags=["user-profile"])
+    _write(vault, "Sam", "friend from the maker space", tags=["social-graph"])
+    _write(vault, "Unrelated idea", "no category tag here")
+    conn = sqlite3.connect(dbp)
+    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+
+    # Keyword search constrained to a tag never returns untagged notes.
+    res = notes_index.search_notes_keyword(conn, "idea fact friend", tag="user-profile")
+    assert [n["title"] for n in res] == ["Curtis prefers tailnet deploys"]
+
+    # Tag with no query = the whole category ("the full user profile").
+    res = notes_index.search_notes_keyword(conn, "", tag="social-graph")
+    assert [n["title"] for n in res] == ["Sam"]
+    assert notes_index.search_notes_keyword(conn, "", tag=None) == []
+
+    # Semantic search honors the same filter.
+    res = notes_index.search_notes_semantic(conn, [10.0, 1.0], limit=5, tag="user-profile")
+    assert [n["title"] for n in res] == ["Curtis prefers tailnet deploys"]
+    conn.close()
+    print("✓ tag filter: scoped search + tag-only category listing")
+
+
 def test_endpoints_and_approve_hook():
     c, vault, dbp = _fresh()
     main.embed_texts = _fake_embed

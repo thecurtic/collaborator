@@ -247,8 +247,12 @@ def get_backlinks(conn, title: str):
     return result
 
 
-def search_notes_semantic(conn, query_vector, limit: int = 10):
-    """Cosine similarity over indexed note embeddings."""
+def _note_has_tag(note: dict, tag: str) -> bool:
+    return tag.lower() in [t.lower() for t in note.get("tags") or []]
+
+
+def search_notes_semantic(conn, query_vector, limit: int = 10, tag: str = None):
+    """Cosine similarity over indexed note embeddings. Optional tag filter."""
     if not query_vector:
         return []
     import numpy as np
@@ -269,24 +273,36 @@ def search_notes_semantic(conn, query_vector, limit: int = 10):
         if denom == 0:
             continue
         note = _row_to_note(row[:-1])
+        if tag and not _note_has_tag(note, tag):
+            continue
         note["score"] = float(np.dot(q, vec) / denom)
         scored.append(note)
     scored.sort(key=lambda n: n["score"], reverse=True)
     return scored[:limit]
 
 
-def search_notes_keyword(conn, query: str, limit: int = 10):
-    """Lexical search over title/body/tags by term overlap."""
+def search_notes_keyword(conn, query: str, limit: int = 10, tag: str = None):
+    """Lexical search over title/body/tags by term overlap. Optional tag filter.
+
+    With a tag and NO query terms, returns every note carrying the tag (the
+    "totality of notes tagged X" retrieval — e.g. the full user profile).
+    """
     terms = [t.lower() for t in re.split(r"\W+", query or "") if len(t) >= 2]
-    if not terms:
+    if not terms and not tag:
         return []
     scored = []
     for row in conn.cursor().execute(f"SELECT {_COLS} FROM notes_index").fetchall():
         note = _row_to_note(row)
+        if tag and not _note_has_tag(note, tag):
+            continue
+        if not terms:
+            note["score"] = 1
+            scored.append(note)
+            continue
         haystack = f"{note['title']}\n{note['body']}\n{' '.join(note['tags'])}".lower()
         hits = sum(1 for t in set(terms) if t in haystack)
         if hits:
             note["score"] = hits
             scored.append(note)
-    scored.sort(key=lambda n: n["score"], reverse=True)
+    scored.sort(key=lambda n: (-n["score"], n["title"]))
     return scored[:limit]
