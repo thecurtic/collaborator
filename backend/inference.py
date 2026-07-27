@@ -794,7 +794,7 @@ def web_search_searxng(query: str, limit: Optional[int] = None) -> Dict:
     limit = limit or wcfg.get("results", 5)
     out = {"results": [{
         "title": r.get("title"),
-        "url": r.get("url"),
+        "url": strip_tracking_params(r["url"]) if r.get("url") else r.get("url"),
         "snippet": (r.get("content") or "")[:300],
         "engine": r.get("engine"),
     } for r in (data.get("results") or [])[:limit]]}
@@ -817,6 +817,33 @@ def web_search_searxng(query: str, limit: Optional[int] = None) -> Dict:
                            for e in unresponsive[:6])
         return {"error": f"web search failed — no engines responded ({detail})"}
     return out
+
+
+# --- URL hygiene ----------------------------------------------------------------
+
+# Tracking params stripped from every URL the model encounters (fetch targets,
+# web-search results, links harvested from pages). Mirrors the frontend's list
+# for user-pasted URLs. Conservative: known trackers only, never functional
+# params.
+_TRACKING_PARAMS = {
+    "fbclid", "gclid", "dclid", "gbraid", "wbraid", "msclkid", "yclid",
+    "twclid", "igshid", "si", "mc_cid", "mc_eid", "_hsenc", "_hsmi",
+    "mkt_tok", "vero_id", "oly_anon_id", "oly_enc_id", "s_cid",
+}
+
+
+def strip_tracking_params(url: str) -> str:
+    """Remove known tracking query params (utm_* + click/share ids) from a URL."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    if not url or "?" not in url:
+        return url
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if not (k.lower().startswith("utm_") or k.lower() in _TRACKING_PARAMS)]
+    return urlunsplit(parts._replace(query=urlencode(kept, doseq=True)))
 
 
 # --- URL fetching (read a page the user pasted) --------------------------------
@@ -894,6 +921,7 @@ class _HtmlTextExtractor:
             absolute = urldefrag(urljoin(base_url, href) if base_url else href)[0]
             if not absolute.startswith(("http://", "https://")):
                 continue  # drops javascript:, mailto:, tel:, data:, relative w/o base
+            absolute = strip_tracking_params(absolute)
             if absolute in seen:
                 continue
             seen.add(absolute)
@@ -986,7 +1014,8 @@ def screenshot_page(url: str, question: Optional[str] = None) -> Dict:
 
     fcfg = (_tools_config().get("fetch_url") or {})
     scfg = (_tools_config().get("screenshot") or {})
-    parsed = urlparse(url or "")
+    url = strip_tracking_params((url or "").strip())
+    parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         return {"error": f"only http(s) URLs can be screenshotted, got {url!r}"}
     if not fcfg.get("allow_private", False) and _host_is_private(parsed.hostname or ""):
@@ -1067,7 +1096,8 @@ def fetch_url(url: str) -> Dict:
     from urllib.parse import urlparse
 
     fcfg = (_tools_config().get("fetch_url") or {})
-    parsed = urlparse(url or "")
+    url = strip_tracking_params((url or "").strip())
+    parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         return {"error": f"only http(s) URLs can be fetched, got {url!r}"}
     if not fcfg.get("allow_private", False) and _host_is_private(parsed.hostname or ""):
@@ -1213,6 +1243,8 @@ def _tool_status_label(name: str, args: Dict) -> str:
     if name == "screenshot_page":
         u = (args.get("url") or "").strip()
         return f"Screenshotting {u[:60]}…" if u else "Taking a screenshot…"
+    if name == "list_events":
+        return "Checking your calendar…"
     if name == "read_logs":
         g = (args.get("grep") or "").strip()
         return f"Checking my logs{f' for “{g[:40]}”' if g else ''}…"

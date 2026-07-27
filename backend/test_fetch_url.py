@@ -13,6 +13,24 @@ importlib.reload(db)
 importlib.reload(main)
 
 
+def test_strip_tracking_params():
+    from inference import strip_tracking_params as strip
+    assert (strip("https://x.com/a?utm_source=nl&id=5&fbclid=abc")
+            == "https://x.com/a?id=5")
+    assert strip("https://x.com/a?gclid=1") == "https://x.com/a"
+    assert strip("https://youtu.be/xyz?si=share123") == "https://youtu.be/xyz"
+    assert (strip("https://x.com/search?q=utm+tags&page=2")
+            == "https://x.com/search?q=utm+tags&page=2")   # functional params kept
+    assert strip("https://x.com/a") == "https://x.com/a"
+    assert strip("") == ""
+    # Links harvested from pages come back stripped too.
+    html = ('<html><body><a href="https://ex.com/read?id=7&utm_campaign=x">a</a>'
+            "</body></html>")
+    _, _, links = inference._HtmlTextExtractor().extract(html)
+    assert links == [{"text": "a", "url": "https://ex.com/read?id=7"}]
+    print("✓ tracking params stripped from URLs and harvested links")
+
+
 def test_html_extraction():
     html = """<html><head><title>My Page</title><style>p{color:red}</style>
     <script>alert('hi')</script></head><body>

@@ -99,9 +99,21 @@ words, a clean [[wikilink]] handle like "Transit is freedom",
 never a full sentence (details and qualifiers belong in the body); body is 50–200
 words in the user's first-person voice, self-contained, no dialogue form. When the
 note belongs to an extended-cognition category, tag it accordingly: user-profile,
-social-graph (title = the person's name), memory, goal, decision, question, or
-project (see tools guidance for the trigger patterns). After calling it, tell the
-user the draft is awaiting their review.
+social-graph (title = the person's name), memory, goal, decision, question,
+project, or event (see tools guidance for the trigger patterns). Calendar events
+(tag "event") additionally require start — ISO 8601, local wall-clock, resolved to
+a real date (never "next Tuesday") — plus end and all_day when known; put the
+people involved as [[wikilinks]] in the body. After calling it, tell the user the
+draft is awaiting their review.
+
+## list_events
+List the user's calendar events — notes tagged "event" — within a date window,
+sorted by start time. This is the tool for schedule, obligation, and availability
+questions: "what's on this week?", "what are my obligations?", "am I free
+Thursday afternoon?". Today is {today}: resolve relative ranges ("this week",
+"tomorrow", "next month") against THIS date before calling. Defaults: from =
+today, to = 14 days out. Returns each event's title, start/end, all_day flag,
+tags, wikilinks (people/projects involved), and description.
 
 ## propose_edit
 Propose changes to an EXISTING atomic note: its title, body, tags, or any combination.

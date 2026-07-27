@@ -96,6 +96,86 @@ def test_search_notes_tag_filter_executor():
     print("✓ search_notes executor: tag filter + tag-only category listing")
 
 
+def test_propose_event_validated_and_approved_to_frontmatter():
+    c, cfg, dbp = _fresh()
+    _, execute, _ = main._build_tools(dbp)
+
+    # Fuzzy dates are rejected with a model-facing error (strict ISO only).
+    bad = json.loads(execute("propose_note", {
+        "title": "Dinner with Sam", "body": "At the taqueria.",
+        "tags": ["event"], "start": "next tuesday"}))
+    assert "ISO 8601" in bad["error"]
+    # An event tag without a start is rejected.
+    bad = json.loads(execute("propose_note", {
+        "title": "Dinner with Sam", "body": "At the taqueria.", "tags": ["event"]}))
+    assert "start" in bad["error"]
+    # all_day mismatch is rejected.
+    bad = json.loads(execute("propose_note", {
+        "title": "Dinner with Sam", "body": "x", "tags": ["event"],
+        "start": "2026-08-02T19:00", "all_day": True}))
+    assert "all-day" in bad["error"] or "all_day" in bad["error"]
+
+    # Valid timed event -> draft with typed fields (no YAML from the model).
+    ok = json.loads(execute("propose_note", {
+        "title": "Dinner with Sam", "body": "Taqueria with [[Sam]].",
+        "tags": ["event"], "start": "2026-08-02T19:00",
+        "end": "2026-08-02T21:00"}))
+    assert ok["status"] == "pending"
+    import db as _db, sqlite3 as _sq
+    conn = _sq.connect(dbp)
+    draft = _db.get_note_draft(conn, ok["draft_id"])
+    conn.close()
+    assert draft["fields"] == {"start": "2026-08-02T19:00",
+                               "end": "2026-08-02T21:00", "all_day": False}
+
+    # Approval writes app-serialized frontmatter, stamping the local offset.
+    r = c.post(f"/api/notes/drafts/{ok['draft_id']}/approve")
+    assert r.status_code == 200
+    raw = open(r.json()["path"], encoding="utf-8").read()
+    import re as _re
+    assert _re.search(r"start: 2026-08-02T19:00[+-]\d{2}:\d{2}", raw)
+    assert "all_day" not in raw          # false -> omitted
+
+    # The approved event is immediately visible to list_events.
+    listing = json.loads(execute("list_events", {"from": "2026-08-01",
+                                                 "to": "2026-08-03"}))
+    assert listing["count"] == 1
+    ev = listing["events"][0]
+    assert ev["title"] == "Dinner with Sam" and ev["links"] == ["Sam"]
+    assert ev["start"].startswith("2026-08-02T19:00")
+    print("✓ event proposal: strict validation, typed fields, offset stamped, listed")
+
+
+def test_events_ics_export():
+    c, cfg, dbp = _fresh()
+    vault = cfg["notes"]["vault_dir"]
+    os.makedirs(vault, exist_ok=True)
+    with open(os.path.join(vault, "Team offsite.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntags: [event]\nstart: 2026-08-05\nend: 2026-08-06\n"
+                "all_day: true\n---\n\n# Team offsite\n\nTwo days, with [[Sam]].\n")
+    with open(os.path.join(vault, "Dentist.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntags: [event]\nstart: 2026-08-02T14:00-05:00\n---\n\n"
+                "# Dentist\n\nCheckup; note the , and ; escaping.\n")
+    conn = sqlite3.connect(dbp)
+    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+    conn.close()
+
+    r = c.get("/api/events.ics")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/calendar")
+    text = r.text
+    assert text.count("BEGIN:VEVENT") == 2
+    assert "SUMMARY:Team offsite" in text
+    assert "DTSTART;VALUE=DATE:20260805" in text
+    assert "DTEND;VALUE=DATE:20260807" in text          # all-day DTEND exclusive
+    assert "DTSTART:20260802T190000Z" in text           # 14:00-05:00 -> UTC
+    assert "\\," in text and "\\;" in text              # DESCRIPTION escaping
+    # Windowed export filters.
+    r2 = c.get("/api/events.ics?from=2026-08-04&to=2026-08-08")
+    assert r2.text.count("BEGIN:VEVENT") == 1 and "Team offsite" in r2.text
+    print("✓ .ics export: all-day + timed-UTC forms, escaping, windowing")
+
+
 def test_propose_note_creates_pending_draft_only():
     c, cfg, dbp = _fresh()
     _, execute, state = main._build_tools(dbp)

@@ -10,7 +10,7 @@ import json
 import time
 import secrets
 from typing import List, Optional
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
 
 from pydantic import BaseModel
 from config import get_config, resolve_path
@@ -159,6 +159,9 @@ class NoteDraftUpdate(BaseModel):
     body: Optional[str] = None
     tags: Optional[List[str]] = None
     links: Optional[List[str]] = None
+    # Whitelisted structured fields (event start/end/all_day) — editable during
+    # review like everything else on the draft.
+    fields: Optional[dict] = None
 
 
 class ModelRequest(BaseModel):
@@ -358,6 +361,12 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                         "(charts, tables, images, visual design). Slower than "
                         "fetch_url — prefer fetch_url first. Optional `question` "
                         "focuses the analysis on what you need from the page."),
+    "list_events": ("List the user's calendar events (notes tagged 'event') within "
+                    "a date window, sorted by start time. Use for schedule, "
+                    "obligation, and availability questions — 'what's on this "
+                    "week?', 'am I free Thursday?'. Today is {today}; resolve "
+                    "relative ranges ('this week', 'tomorrow') against THIS date. "
+                    "Defaults: from=today, to=+14 days."),
     "read_logs": ("Read the backend server's own recent logs (since last restart). "
                   "Use when something seems broken — a tool failing repeatedly, "
                   "empty results that shouldn't be empty, errors you can't explain "
@@ -490,7 +499,17 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "tags": {"type": "array", "items": {"type": "string"},
                          "description": "1-4 lowercase-hyphenated tags"},
                 "links": {"type": "array", "items": {"type": "string"},
-                          "description": "titles of related notes"}},
+                          "description": "titles of related notes"},
+                "start": {"type": "string",
+                          "description": "calendar events (tag 'event') only: "
+                                         "start, ISO 8601 — YYYY-MM-DDTHH:MM "
+                                         "(local wall-clock; offset optional) "
+                                         "or YYYY-MM-DD with all_day"},
+                "end": {"type": "string",
+                        "description": "event end, same format as start "
+                                       "(omit when unknown)"},
+                "all_day": {"type": "boolean",
+                            "description": "true for date-only events"}},
                 "required": ["title", "body"]}}})
     if avail.get("propose_edit", True):
         schemas.append({"type": "function", "function": {
@@ -507,9 +526,28 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                          "description": "proposed full replacement body (omit to keep)"},
                 "tags": {"type": "array", "items": {"type": "string"},
                          "description": "proposed full replacement tag list (omit to keep)"},
+                "start": {"type": "string",
+                          "description": "events only: new start (ISO 8601; omit to keep)"},
+                "end": {"type": "string",
+                        "description": "events only: new end (ISO 8601; omit to keep)"},
+                "all_day": {"type": "boolean",
+                            "description": "events only: change all-day flag (omit to keep)"},
                 "reason": {"type": "string",
                            "description": "one line: why this edit, shown to the user in review"}},
                 "required": ["title"]}}})
+
+    if avail.get("list_events", True):
+        schemas.append({"type": "function", "function": {
+            "name": "list_events",
+            "description": descs["list_events"],
+            "parameters": {"type": "object", "properties": {
+                "from": {"type": "string",
+                         "description": "window start, ISO date YYYY-MM-DD "
+                                        "(default: today)"},
+                "to": {"type": "string",
+                       "description": "window end, ISO date, inclusive "
+                                      "(default: from + 14 days)"}},
+                "required": []}}})
 
     if avail.get("read_logs", True):
         schemas.append({"type": "function", "function": {
@@ -607,15 +645,24 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             body = (args.get("body") or "").strip()
             if not title or not body:
                 return json.dumps({"error": "propose_note needs a title and a body"})
+            tags = [str(t) for t in (args.get("tags") or [])]
+            fields, ferr = _normalize_event_fields(args)
+            if ferr:
+                return json.dumps({"error": ferr})
+            if any(_normalize_tag(t) == "event" for t in tags) and not fields:
+                return json.dumps({"error": "notes tagged 'event' need a start "
+                                            "(ISO 8601) — pass start (and end/"
+                                            "all_day as appropriate)"})
             conn = sqlite3.connect(db_path)
             try:
                 dupes = _find_duplicate_notes(conn, title, body)
                 draft = create_note_draft(
                     conn, title, body,
-                    tags=[str(t) for t in (args.get("tags") or [])],
+                    tags=tags,
                     links=[str(l) for l in (args.get("links") or [])],
                     run_id=state["chat_run_id"],
                     duplicate_of=dupes,
+                    fields=fields or None,
                 )
             finally:
                 conn.close()
@@ -658,15 +705,20 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 tags = args.get("tags")
                 tags = ([str(t) for t in tags] if isinstance(tags, list)
                         else (note.get("tags") or []))
+                fields, ferr = _normalize_event_fields(args)
+                if ferr:
+                    return json.dumps({"error": ferr})
                 if (new_title == note["title"] and body == parsed["body"]
-                        and tags == (note.get("tags") or [])):
+                        and tags == (note.get("tags") or []) and not fields):
                     return json.dumps({"error": "the proposed edit changes nothing — "
-                                                "pass new_title, body, and/or tags"})
+                                                "pass new_title, body, tags, and/or "
+                                                "event fields"})
                 draft = create_note_draft(
                     conn, new_title, body, tags=tags,
                     run_id=state["chat_run_id"], kind="edit",
                     target_title=note["title"],
-                    reason=(args.get("reason") or "").strip() or None)
+                    reason=(args.get("reason") or "").strip() or None,
+                    fields=fields or None)
             finally:
                 conn.close()
             state.setdefault("proposed_drafts", []).append(
@@ -733,6 +785,30 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 if state["first_fetch_host"] is None:
                     state["first_fetch_host"] = host
             return json.dumps(result)
+        if name == "list_events":
+            from datetime import date, timedelta
+            start = (args.get("from") or "").strip() or time.strftime("%Y-%m-%d")
+            end = (args.get("to") or "").strip()
+            try:
+                if not end:
+                    end = (date.fromisoformat(start[:10]) + timedelta(days=14)).isoformat()
+            except ValueError:
+                return json.dumps({"error": "from must be an ISO date (YYYY-MM-DD)"})
+            conn = sqlite3.connect(db_path)
+            try:
+                events = notes_index.list_events(conn, start, end)
+            finally:
+                conn.close()
+            return json.dumps({"from": start, "to": end, "count": len(events),
+                               "events": [{
+                                   "title": e["title"],
+                                   "start": e["event_start"],
+                                   "end": e["event_end"],
+                                   "all_day": e["event_all_day"],
+                                   "tags": e["tags"],
+                                   "links": e["links"],
+                                   "description": (e.get("body") or "")[:300],
+                               } for e in events]})
         if name == "read_logs":
             lines = logbuffer.get_lines(args.get("lines") or 100,
                                         (args.get("grep") or "").strip() or None)
@@ -829,6 +905,78 @@ def _relevant_existing_notes(conn, tree: dict) -> List[dict]:
             for n in notes_index.list_notes(conn)[:limit]]
 
 
+# --- Event fields (whitelisted structured frontmatter, NOTES-FORMAT.md) --------
+# The model proposes structure through typed tool parameters only; the app alone
+# writes frontmatter. start/end/all_day are content-derived (the user said when),
+# validated here and serialized at approval.
+
+import re as _re_mod
+
+_EVENT_DATE_RE = _re_mod.compile(r"^\d{4}-\d{2}-\d{2}$")
+_EVENT_DT_RE = _re_mod.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?([+-]\d{2}:\d{2}|Z)?$")
+
+
+def _normalize_event_fields(args: dict):
+    """Validate proposed event fields. Returns (fields, error).
+
+    fields = {} when none were proposed; error is a model-facing message when
+    the proposal is malformed (strict ISO — no 'next Tuesday'; the model must
+    resolve dates itself using the current-date grounding).
+    """
+    out = {}
+    all_day = args.get("all_day")
+    for key in ("start", "end"):
+        value = args.get(key)
+        if value in (None, ""):
+            continue
+        value = str(value).strip()
+        if not (_EVENT_DATE_RE.match(value) or _EVENT_DT_RE.match(value)):
+            return {}, (f"{key} must be ISO 8601 — YYYY-MM-DD (all-day) or "
+                        f"YYYY-MM-DDTHH:MM (optionally :SS and a timezone "
+                        f"offset); got {value!r}")
+        out[key] = value
+    if not out:
+        if all_day is not None:
+            return {}, "an event needs a start (ISO 8601)"
+        return {}, None
+    if "start" not in out:
+        return {}, "an event needs a start (ISO 8601); end alone is not enough"
+    if all_day is None:
+        all_day = len(out["start"]) == 10
+    all_day = bool(all_day)
+    for key in ("start", "end"):
+        if key not in out:
+            continue
+        if all_day and len(out[key]) != 10:
+            return {}, f"all-day events use date-only {key} (YYYY-MM-DD)"
+        if not all_day and len(out[key]) == 10:
+            return {}, (f"timed events need a time in {key} "
+                        "(YYYY-MM-DDTHH:MM); pass all_day=true for date-only")
+    out["all_day"] = all_day
+    return out, None
+
+
+def _finalize_event_fields(fields: dict) -> dict:
+    """Approval-time normalization: attach the server's local UTC offset to timed
+    values that lack one. The model proposes wall-clock time; the app stamps the
+    offset (DST-correct for the event's own date)."""
+    import datetime as _dt
+    out = dict(fields or {})
+    for key in ("start", "end"):
+        value = out.get(key)
+        if (not value or len(value) == 10 or value.endswith("Z")
+                or _re_mod.search(r"[+-]\d{2}:\d{2}$", value)):
+            continue
+        try:
+            local = _dt.datetime.fromisoformat(value).astimezone()
+            off = local.strftime("%z")
+            out[key] = f"{value[:16]}{off[:3]}:{off[3:]}"
+        except ValueError:
+            pass
+    return out
+
+
 # Characters that break filesystems or Obsidian [[wikilinks]] (NOTES-FORMAT.md).
 _TITLE_FORBIDDEN = set('/\\:*?"<>|#^[]')
 
@@ -858,7 +1006,8 @@ def _normalize_tag(tag: str) -> str:
 
 
 def _write_note_file(vault_dir: str, title: str, body: str,
-                     tags: List[str], source_turns: List[int]) -> str:
+                     tags: List[str], source_turns: List[int],
+                     fields: Optional[dict] = None) -> str:
     """Write an approved note into the vault. Returns the file path.
 
     Frontmatter is app-stamped here (the curation hook) — the LLM never emits it.
@@ -886,6 +1035,14 @@ def _write_note_file(vault_dir: str, title: str, body: str,
         front.append(f"tags: [{', '.join(norm_tags)}]")
     if source_turns:
         front.append(f"source_turns: [{', '.join(str(i) for i in source_turns)}]")
+    # Whitelisted structured fields (event start/end/all_day), normalized at
+    # approval — the only frontmatter whose values originate from the model.
+    fields = _finalize_event_fields(fields or {})
+    for key in ("start", "end"):
+        if fields.get(key):
+            front.append(f"{key}: {fields[key]}")
+    if fields.get("all_day"):
+        front.append("all_day: true")
     front.append("---")
 
     content = "\n".join(front) + f"\n\n# {title}\n\n{clean_body}\n"
@@ -1497,7 +1654,7 @@ async def edit_draft(
                 raise HTTPException(status_code=409, detail=f"Draft {draft_id} is {draft['status']}, not editable")
             draft = update_note_draft(
                 conn, draft_id, title=request.title, body=request.body,
-                tags=request.tags, links=request.links,
+                tags=request.tags, links=request.links, fields=request.fields,
             )
         finally:
             conn.close()
@@ -1541,7 +1698,8 @@ async def approve_draft(
                                "the draft or re-propose against the current note")
                 applied = _apply_note_edit(conn, vault, target,
                                            new_title=draft["title"],
-                                           body=draft["body"], tags=draft["tags"])
+                                           body=draft["body"], tags=draft["tags"],
+                                           fields=draft.get("fields"))
                 draft = set_note_draft_status(conn, draft_id, "approved")
                 filename = applied["note"]["filename"]
                 return {"draft": draft, "path": os.path.join(vault, filename),
@@ -1550,7 +1708,8 @@ async def approve_draft(
 
             title = _validate_note_title(draft["title"])
             path = _write_note_file(vault, title, draft["body"],
-                                    draft["tags"], draft["source_turns"])
+                                    draft["tags"], draft["source_turns"],
+                                    fields=draft.get("fields"))
             draft = set_note_draft_status(conn, draft_id, "approved")
             # Index the new note immediately (best-effort; reindex reconciles).
             try:
@@ -1643,18 +1802,24 @@ async def search_vault_notes(
     mode: str = "semantic",
     limit: int = 10,
     tag: Optional[str] = None,
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
     """Search notes: mode=semantic (embeddings) or mode=keyword (lexical).
 
     Optional ?tag= filters to notes carrying the tag; with an empty q it lists
     the whole category (e.g. ?tag=user-profile = the full user profile).
+    ?from=/&to= (ISO dates, inclusive) window events by start/end — the
+    calendar screen's query (?tag=event&from=&to=).
     """
     _require_auth(passkey)
     try:
         conn = sqlite3.connect(_resolve_db_path(passkey))
         try:
-            if mode == "keyword" or not q.strip():
+            if from_ or to:
+                results = notes_index.list_events(conn, from_, to)
+            elif mode == "keyword" or not q.strip():
                 results = notes_index.search_notes_keyword(conn, q, limit=limit, tag=tag)
             else:
                 vec = get_embedding(q)
@@ -1664,6 +1829,84 @@ async def search_vault_notes(
         for n in results:
             n.pop("body", None)
         return {"results": results, "count": len(results), "mode": mode}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _ics_escape(text: str) -> str:
+    return (text.replace("\\", "\\\\").replace(";", "\\;")
+            .replace(",", "\\,").replace("\r\n", "\\n").replace("\n", "\\n"))
+
+
+def _ics_datetime(value: str) -> str:
+    """ISO local/offset datetime -> ICS form (UTC Z when the offset is known,
+    floating local when not)."""
+    from datetime import datetime, timezone
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        return dt.strftime("%Y%m%dT%H%M%S")
+    return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _events_to_ics(events: List[dict]) -> str:
+    """Render event notes as a standard iCalendar (RFC 5545) document."""
+    import hashlib
+    from datetime import date, timedelta
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0",
+             "PRODID:-//Collaborator//events//EN", "CALSCALE:GREGORIAN"]
+    for e in events:
+        start = e["event_start"]
+        end = e.get("event_end")
+        uid = hashlib.sha256(e["filename"].encode("utf-8")).hexdigest()[:24]
+        lines += ["BEGIN:VEVENT", f"UID:{uid}@collaborator", f"DTSTAMP:{stamp}",
+                  "SUMMARY:" + _ics_escape(e["title"])]
+        if e.get("event_all_day") or len(start) == 10:
+            lines.append(f"DTSTART;VALUE=DATE:{start[:10].replace('-', '')}")
+            # ICS all-day DTEND is exclusive: the day after the last day.
+            last = date.fromisoformat((end or start)[:10]) + timedelta(days=1)
+            lines.append(f"DTEND;VALUE=DATE:{last.strftime('%Y%m%d')}")
+        else:
+            lines.append(f"DTSTART:{_ics_datetime(start)}")
+            if end and len(end) > 10:
+                lines.append(f"DTEND:{_ics_datetime(end)}")
+        body = (e.get("body") or "").strip()
+        if body:
+            lines.append("DESCRIPTION:" + _ics_escape(body[:800]))
+        lines.append("END:VEVENT")
+    lines.append("END:VCALENDAR")
+
+    folded = []
+    for line in lines:   # RFC 5545 line folding (continuation lines start with a space)
+        while len(line) > 74:
+            folded.append(line[:74])
+            line = " " + line[74:]
+        folded.append(line)
+    return "\r\n".join(folded) + "\r\n"
+
+
+@app.get("/api/events.ics")
+async def export_events_ics(
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Export event notes as a standard .ics calendar (optionally windowed) —
+    importable into any calendar app."""
+    _require_auth(passkey)
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            events = notes_index.list_events(conn, from_, to)
+        finally:
+            conn.close()
+        return Response(
+            content=_events_to_ics(events),
+            media_type="text/calendar",
+            headers={"Content-Disposition": 'attachment; filename="collaborator.ics"'},
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -1697,7 +1940,8 @@ async def get_vault_note(
 def _apply_note_edit(conn, vault: str, title: str,
                      new_title: Optional[str] = None,
                      body: Optional[str] = None,
-                     tags: Optional[List[str]] = None) -> dict:
+                     tags: Optional[List[str]] = None,
+                     fields: Optional[dict] = None) -> dict:
     """Apply an edit to an approved vault note: body, tags, and/or title (rename).
 
     Shared by the user's PATCH /api/notes/{title} and edit-draft approval, so both
@@ -1721,6 +1965,16 @@ def _apply_note_edit(conn, vault: str, title: str,
     new_body = body if body is not None else parsed["body"]
     if tags is not None:
         front["tags"] = [t for t in (_normalize_tag(t) for t in tags) if t]
+    if fields:
+        finalized = _finalize_event_fields(fields)
+        for key in ("start", "end"):
+            if finalized.get(key):
+                front[key] = finalized[key]
+        if "all_day" in finalized:
+            if finalized["all_day"]:
+                front["all_day"] = True
+            else:
+                front.pop("all_day", None)
 
     new_title = " ".join((new_title or old_title).split())
     renamed = new_title != old_title

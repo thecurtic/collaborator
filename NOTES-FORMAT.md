@@ -109,10 +109,46 @@ system; don't reuse them for unrelated organic tagging:
 | `decision` | explicit choices **with their reasoning** | "I'm going with X because Y" — the Y is the point |
 | `question` | unresolved queries, expressed uncertainty, open threads | |
 | `project` | container grouping related notes/goals/memories | membership = wikilinks from the project note |
+| `event` | calendar events: appointments, meetings, deadlines | structured `start`/`end`/`all_day` frontmatter (below); exportable via `GET /api/events.ics` |
 
 Every entry in every category passes through the drafts review queue — the agent
 proposes, the user approves. The agent can never silently update its model of the
 user or anyone else. (`expertise` is deliberately deferred: no crisp trigger yet.)
+
+### The frontmatter boundary (agreed 2026-07-27)
+
+The precise rule behind "frontmatter is app-managed":
+
+1. The model **never authors frontmatter** — no YAML ever comes from an LLM. It
+   proposes structure exclusively through **typed tool parameters** (JSON), which
+   are validated, stored on the draft, reviewed by the user, and serialized to
+   YAML by the app at approval.
+2. **App-authoritative keys** (`created`, `source_turns`) record system actions;
+   they are never delegated to the model.
+3. **Content-derived keys** (tags; event `start`/`end`/`all_day`; later goal
+   `state`) carry facts from the conversation the model legitimately knows.
+   These follow the propose → review → app-writes pipeline.
+4. The whitelist of content-derived keys grows only deliberately — every new key
+   is a design decision, made here.
+
+### Event notes (`event` tag)
+
+Frontmatter keys (whitelisted, machine-parseable from day one):
+
+| key | format | notes |
+|---|---|---|
+| `start` | ISO 8601 — `2026-08-02T14:00-05:00`; date-only `2026-08-02` when all-day | required for events. The model proposes local wall-clock time; the app stamps the timezone offset at approval (DST-correct for the event's date) |
+| `end` | same format as `start` | optional |
+| `all_day` | boolean | written only when true; a date-only `start` implies it |
+
+- People and projects are referenced as normal `[[wikilinks]]` in the body — the
+  graph edges are the connections; no special fields.
+- Description = the body, like any note.
+- **No recurrence** (v1): a repeating event is separate notes. RRULE only if
+  genuinely needed later.
+- Export: `GET /api/events.ics` (standard iCalendar; all-day and timed both);
+  date-window queries via `GET /api/notes/search?tag=event&from=&to=` and the
+  agent's `list_events` tool.
 
 ### Body
 

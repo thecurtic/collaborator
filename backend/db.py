@@ -144,6 +144,9 @@ def ensure_conversation_schema(conn) -> None:
             body TEXT,
             content_hash TEXT,
             mtime REAL,
+            event_start TEXT,
+            event_end TEXT,
+            event_all_day INTEGER,
             embedding BLOB
         )
     """)
@@ -167,7 +170,8 @@ def ensure_conversation_schema(conn) -> None:
             decided_at TEXT,
             kind TEXT NOT NULL DEFAULT 'new',
             target_title TEXT,
-            reason TEXT
+            reason TEXT,
+            fields TEXT
         )
     """)
     # Migrate older draft tables (columns added later).
@@ -180,6 +184,17 @@ def ensure_conversation_schema(conn) -> None:
         cursor.execute("ALTER TABLE note_drafts ADD COLUMN kind TEXT NOT NULL DEFAULT 'new'")
         cursor.execute("ALTER TABLE note_drafts ADD COLUMN target_title TEXT")
         cursor.execute("ALTER TABLE note_drafts ADD COLUMN reason TEXT")
+    # fields = JSON dict of whitelisted structured frontmatter the draft proposes
+    # (event start/end/all_day; later: goal state). The model proposes structure
+    # through typed tool parameters only; the app alone writes frontmatter at
+    # approval (NOTES-FORMAT.md boundary).
+    if "fields" not in draft_cols:
+        cursor.execute("ALTER TABLE note_drafts ADD COLUMN fields TEXT")
+    # Event columns on the notes index (parsed from frontmatter at index time).
+    ni_cols = {row[1] for row in cursor.execute("PRAGMA table_info(notes_index)").fetchall()}
+    for col in ("event_start TEXT", "event_end TEXT", "event_all_day INTEGER"):
+        if ni_cols and col.split()[0] not in ni_cols:
+            cursor.execute(f"ALTER TABLE notes_index ADD COLUMN {col}")
     conn.commit()
 
     _migrate_turns_branching(conn)
@@ -852,7 +867,7 @@ def clear_current_recall(db) -> None:
 NOTE_DRAFT_COLUMNS = [
     "id", "run_id", "tree_root_id", "title", "body", "tags", "links",
     "source_turns", "duplicate_of", "status", "created_at", "decided_at",
-    "kind", "target_title", "reason",
+    "kind", "target_title", "reason", "fields",
 ]
 _DRAFT_COLS = ", ".join(NOTE_DRAFT_COLUMNS)
 
@@ -864,6 +879,12 @@ def _row_to_draft(row) -> Dict:
             d[key] = _json.loads(d[key]) if d[key] else []
         except Exception:
             d[key] = []
+    try:
+        d["fields"] = _json.loads(d["fields"]) if d.get("fields") else {}
+        if not isinstance(d["fields"], dict):
+            d["fields"] = {}
+    except Exception:
+        d["fields"] = {}
     return d
 
 
@@ -876,7 +897,8 @@ def create_note_draft(db, title: str, body: str,
                       duplicate_of: Optional[List[dict]] = None,
                       kind: str = "new",
                       target_title: Optional[str] = None,
-                      reason: Optional[str] = None) -> dict:
+                      reason: Optional[str] = None,
+                      fields: Optional[dict] = None) -> dict:
     """Insert a pending note draft. duplicate_of lists near-duplicate existing
     notes ([{title, score}]) so the user can reject/merge during review.
 
@@ -888,13 +910,14 @@ def create_note_draft(db, title: str, body: str,
         """
         INSERT INTO note_drafts
             (run_id, tree_root_id, title, body, tags, links, source_turns,
-             duplicate_of, kind, target_title, reason)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             duplicate_of, kind, target_title, reason, fields)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (run_id, tree_root_id, title, body,
          _json.dumps(tags or []), _json.dumps(links or []),
          _json.dumps(source_turns or []), _json.dumps(duplicate_of or []),
-         kind, target_title, reason),
+         kind, target_title, reason,
+         _json.dumps(fields) if fields else None),
     )
     db.commit()
     return get_note_draft(db, cursor.lastrowid)
@@ -936,8 +959,9 @@ def list_note_drafts(db, status: Optional[str] = None,
 def update_note_draft(db, draft_id: int, *, title: Optional[str] = None,
                       body: Optional[str] = None,
                       tags: Optional[List[str]] = None,
-                      links: Optional[List[str]] = None) -> Optional[dict]:
-    """Edit a draft during review (title/body/tags/links). Returns updated draft."""
+                      links: Optional[List[str]] = None,
+                      fields: Optional[dict] = None) -> Optional[dict]:
+    """Edit a draft during review (title/body/tags/links/fields). Returns updated draft."""
     if get_note_draft(db, draft_id) is None:
         return None
     sets, params = [], []
@@ -949,6 +973,8 @@ def update_note_draft(db, draft_id: int, *, title: Optional[str] = None,
         sets.append("tags = ?"); params.append(_json.dumps(tags))
     if links is not None:
         sets.append("links = ?"); params.append(_json.dumps(links))
+    if fields is not None:
+        sets.append("fields = ?"); params.append(_json.dumps(fields) if fields else None)
     if sets:
         params.append(draft_id)
         db.cursor().execute(f"UPDATE note_drafts SET {', '.join(sets)} WHERE id = ?", params)

@@ -192,6 +192,7 @@ def load_config() -> dict:
                 "web_search": True,    # self-gating: active only when web_search.url is set
                 "fetch_url": True,     # read a specific page (pasted links)
                 "screenshot_page": True,  # self-gating: needs webtool_url + a vision model
+                "list_events": True,   # calendar window over notes tagged 'event'
                 "read_logs": True,     # agent can read its own recent server logs
             },
             "web_search": {

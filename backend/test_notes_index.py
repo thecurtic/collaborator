@@ -150,6 +150,40 @@ def test_search_tag_filter_and_tag_only_listing():
     print("✓ tag filter: scoped search + tag-only category listing")
 
 
+def test_event_fields_indexed_and_windowed():
+    _, vault, dbp = _fresh()
+    os.makedirs(vault, exist_ok=True)
+    def _event(title, front_lines, body="details"):
+        with open(os.path.join(vault, f"{title}.md"), "w", encoding="utf-8") as f:
+            f.write("---\n" + "\n".join(front_lines) + "\n---\n\n"
+                    f"# {title}\n\n{body}\n")
+    _event("Dentist", ["tags: [event]", "start: 2026-08-02T14:00-05:00",
+                       "end: 2026-08-02T15:00-05:00"])
+    _event("Conference", ["tags: [event]", "start: 2026-08-01", "end: 2026-08-10",
+                          "all_day: true"])
+    _event("Later dinner", ["tags: [event]", "start: 2026-09-01T19:00-05:00"])
+    _event("Dated but not event", ["tags: [memory]", "start: 2026-08-02"])
+    _event("Event without start", ["tags: [event]"])
+    conn = sqlite3.connect(dbp)
+    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+
+    # YAML hands back datetime/date objects; both normalize to ISO strings.
+    dentist = notes_index.get_note_by_title(conn, "Dentist")
+    assert dentist["event_start"] == "2026-08-02T14:00-05:00"
+    assert dentist["event_all_day"] is False
+    conf = notes_index.get_note_by_title(conn, "Conference")
+    assert conf["event_start"] == "2026-08-01" and conf["event_all_day"] is True
+
+    # Window: overlapping events only, tagged 'event' only, sorted by start.
+    events = notes_index.list_events(conn, "2026-08-02", "2026-08-04")
+    assert [e["title"] for e in events] == ["Conference", "Dentist"]
+    assert notes_index.list_events(conn, "2026-08-20", "2026-08-25") == []
+    assert [e["title"] for e in notes_index.list_events(conn)] == [
+        "Conference", "Dentist", "Later dinner"]
+    conn.close()
+    print("✓ event frontmatter indexed; window overlap + tag gating + sorting")
+
+
 def test_endpoints_and_approve_hook():
     c, vault, dbp = _fresh()
     main.embed_texts = _fake_embed

@@ -23,6 +23,7 @@ WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 NOTES_INDEX_COLUMNS = [
     "filename", "title", "created", "tags", "source_turns", "links",
     "body", "content_hash", "mtime",
+    "event_start", "event_end", "event_all_day",
 ]
 _COLS = ", ".join(NOTES_INDEX_COLUMNS)
 
@@ -35,6 +36,24 @@ def extract_wikilinks(body: str):
         if target and target not in targets:
             targets.append(target)
     return targets
+
+
+def _norm_when(value):
+    """Frontmatter start/end -> normalized ISO string (YAML may hand us date or
+    datetime objects). Timed: YYYY-MM-DDTHH:MM[±HH:MM]; all-day: YYYY-MM-DD."""
+    import datetime as _dt
+    if value is None:
+        return None
+    if isinstance(value, _dt.datetime):
+        s = value.strftime("%Y-%m-%dT%H:%M")
+        if value.utcoffset() is not None:
+            off = value.strftime("%z")
+            s += f"{off[:3]}:{off[3:]}"
+        return s
+    if isinstance(value, _dt.date):
+        return value.isoformat()
+    s = str(value).strip()
+    return s or None
 
 
 def parse_note_file(path: str) -> dict:
@@ -70,6 +89,12 @@ def parse_note_file(path: str) -> dict:
     if not isinstance(source_turns, list):
         source_turns = []
 
+    event_start = _norm_when(front.get("start"))
+    event_end = _norm_when(front.get("end"))
+    # Date-only start implies all-day even without the explicit flag.
+    event_all_day = bool(event_start) and (bool(front.get("all_day"))
+                                           or len(event_start) == 10)
+
     return {
         "filename": os.path.basename(path),
         "title": title,
@@ -80,6 +105,9 @@ def parse_note_file(path: str) -> dict:
         "body": body,
         "content_hash": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         "mtime": os.path.getmtime(path),
+        "event_start": event_start,
+        "event_end": event_end,
+        "event_all_day": event_all_day,
         # Full frontmatter dict (incl. unknown keys) — NOT indexed; used by editing
         # so tooling preserves keys it doesn't understand (NOTES-FORMAT.md rule).
         "front": front,
@@ -115,6 +143,7 @@ def _row_to_note(row) -> dict:
             d[key] = json.loads(d[key]) if d[key] else []
         except Exception:
             d[key] = []
+    d["event_all_day"] = bool(d.get("event_all_day"))
     return d
 
 
@@ -123,19 +152,23 @@ def _upsert(conn, note: dict, embedding=None) -> None:
         """
         INSERT INTO notes_index
             (filename, title, created, tags, source_turns, links, body,
-             content_hash, mtime, embedding)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             content_hash, mtime, event_start, event_end, event_all_day, embedding)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(filename) DO UPDATE SET
             title = excluded.title, created = excluded.created,
             tags = excluded.tags, source_turns = excluded.source_turns,
             links = excluded.links, body = excluded.body,
             content_hash = excluded.content_hash, mtime = excluded.mtime,
+            event_start = excluded.event_start, event_end = excluded.event_end,
+            event_all_day = excluded.event_all_day,
             embedding = COALESCE(excluded.embedding, notes_index.embedding)
         """,
         (note["filename"], note["title"], note["created"],
          json.dumps(note["tags"]), json.dumps(note["source_turns"]),
          json.dumps(note["links"]), note["body"],
-         note["content_hash"], note["mtime"], embedding),
+         note["content_hash"], note["mtime"],
+         note.get("event_start"), note.get("event_end"),
+         1 if note.get("event_all_day") else 0, embedding),
     )
     conn.commit()
 
@@ -279,6 +312,36 @@ def search_notes_semantic(conn, query_vector, limit: int = 10, tag: str = None):
         scored.append(note)
     scored.sort(key=lambda n: n["score"], reverse=True)
     return scored[:limit]
+
+
+def list_events(conn, window_start: str = None, window_end: str = None):
+    """Notes tagged 'event' with a start, optionally within an inclusive window.
+
+    window_start/window_end are ISO dates (YYYY-MM-DD) or datetimes; an event
+    overlaps the window if any part of its [start, end-or-start] span does.
+    Comparison is on local wall-clock strings (offsets ignored) — fine for a
+    single-user, single-timezone corpus. Sorted by start.
+    """
+    events = []
+    for row in conn.cursor().execute(f"SELECT {_COLS} FROM notes_index").fetchall():
+        note = _row_to_note(row)
+        if not note.get("event_start") or not _note_has_tag(note, "event"):
+            continue
+        start = note["event_start"]
+        end = note.get("event_end") or start
+        s_cmp = start[:16] if len(start) > 10 else start + "T00:00"
+        e_cmp = end[:16] if len(end) > 10 else end + "T23:59"
+        if window_start:
+            ws = window_start[:16] if len(window_start) > 10 else window_start + "T00:00"
+            if e_cmp < ws:
+                continue
+        if window_end:
+            we = window_end[:16] if len(window_end) > 10 else window_end + "T23:59"
+            if s_cmp > we:
+                continue
+        events.append(note)
+    events.sort(key=lambda n: (n["event_start"], n["title"]))
+    return events
 
 
 def search_notes_keyword(conn, query: str, limit: int = 10, tag: str = None):
