@@ -355,6 +355,8 @@ export interface CollaboratorApi {
     q: string,
     mode?: 'semantic' | 'keyword',
     limit?: number,
+    /** Scope results to one reserved category tag (5b3e491). */
+    tag?: string,
   ): Promise<NoteMeta[]>;
   getNote(title: string): Promise<Note>;
   /** Reconcile the index with the vault (after external Obsidian edits). */
@@ -592,8 +594,10 @@ class HttpCollaboratorApi implements CollaboratorApi {
     q: string,
     mode: 'semantic' | 'keyword' = 'semantic',
     limit = 20,
+    tag?: string,
   ): Promise<NoteMeta[]> {
     const search = new URLSearchParams({ q, mode, limit: String(limit) });
+    if (tag) search.set('tag', tag); // 5b3e491: category-scoped search
     const res = await request<ApiNoteSearchResponse>(
       `/api/notes/search?${search.toString()}`,
     );

@@ -15,6 +15,7 @@ import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Note, NoteMeta } from '@/domain/models';
+import { NOTE_CATEGORIES } from './categories';
 import { GraphView } from './GraphView';
 import { InboxView } from './InboxView';
 import { NoteBody } from './NoteBody';
@@ -308,6 +309,8 @@ export function NotesView({
   const [screen, setScreen] = useState<Screen>({ kind: 'list' });
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'semantic' | 'keyword'>('semantic');
+  // Reserved-category chip (5b3e491): null = all notes.
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [notes, setNotes] = useState<NoteMeta[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reindexing, setReindexing] = useState(false);
@@ -327,8 +330,8 @@ export function NotesView({
       setError(null);
       try {
         const result = q
-          ? await api.searchNotes(q, mode)
-          : await api.listNotes();
+          ? await api.searchNotes(q, mode, 20, tagFilter ?? undefined)
+          : await api.listNotes(tagFilter ?? undefined);
         if (searchSeq.current === seq) setNotes(result);
       } catch (err) {
         if (searchSeq.current === seq) {
@@ -343,12 +346,13 @@ export function NotesView({
     }
     const t = setTimeout(() => void run(), 300);
     return () => clearTimeout(t);
-  }, [query, mode]);
+  }, [query, mode, tagFilter]);
 
   // Fresh full list (used after a reindex; also clears any active search).
   const reload = useCallback(() => {
     searchSeq.current++;
     setQuery('');
+    setTagFilter(null);
     void (async () => {
       try {
         setNotes(await api.listNotes());
@@ -413,7 +417,7 @@ export function NotesView({
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <h2 className="text-2xl font-semibold">Notes</h2>
+        <h2 className="text-2xl font-semibold">Mind</h2>
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"
@@ -476,6 +480,39 @@ export function NotesView({
               {mode}
             </button>
           )}
+        </div>
+        {/* Category chips (reserved extended-cognition tags, 5b3e491).
+            A chip alone browses the category; with a query it scopes search. */}
+        <div className="-mx-1 mt-2 flex gap-1.5 overflow-x-auto px-1 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <button
+            type="button"
+            onClick={() => setTagFilter(null)}
+            className={cn(
+              'shrink-0 rounded-full border px-2.5 py-1 text-xs',
+              tagFilter === null
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-border text-muted-foreground hover:text-foreground',
+            )}
+          >
+            All
+          </button>
+          {NOTE_CATEGORIES.map((c) => (
+            <button
+              key={c.tag}
+              type="button"
+              onClick={() =>
+                setTagFilter((t) => (t === c.tag ? null : c.tag))
+              }
+              className={cn(
+                'shrink-0 rounded-full border px-2.5 py-1 text-xs',
+                tagFilter === c.tag
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {c.label}
+            </button>
+          ))}
         </div>
         {reindexNotice && (
           <p className="mt-1.5 text-xs text-muted-foreground">{reindexNotice}</p>

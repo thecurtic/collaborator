@@ -1,13 +1,14 @@
 import {
+  Brain,
   ChevronLeft,
   List,
   Loader2,
   NotebookPen,
-  NotebookText,
   Pencil,
   Plus,
   RefreshCw,
   Sprout,
+  StickyNote,
   TreePine,
   X,
 } from 'lucide-react';
@@ -38,6 +39,7 @@ import type { BranchTarget } from '@/features/chat/branchTarget';
 import { rootLabel, type TreeNode } from '@/domain/models';
 import { NotesView } from '@/features/notes/NotesView';
 import { usePendingDrafts } from '@/features/notes/usePendingDrafts';
+import { ScratchView } from '@/features/scratch/ScratchView';
 import { SettingsSheet } from '@/features/settings/SettingsSheet';
 import { CallScreen } from '@/features/voice/CallScreen';
 import { SpeechProvider } from '@/features/voice/SpeechContext';
@@ -53,8 +55,11 @@ export default function App() {
   );
 }
 
-/** Home tabs: conversation list (default) · tree map · chats (seeds) · notes. */
-type Tab = 'conversations' | 'map' | 'chats' | 'notes';
+/**
+ * Home tabs: conversations (default; the tree map lives behind it, like the
+ * graph behind Mind) · chats (seeds) · scratch (notes-to-self) · mind (vault).
+ */
+type Tab = 'conversations' | 'chats' | 'scratch' | 'mind';
 
 /** One backgrounded synthesis run (at most one at a time). */
 interface SynthState {
@@ -107,6 +112,8 @@ function AppShell() {
   const { gate, signOut } = useAuth();
   const convo = useConversation(0);
   const [tab, setTab] = useState<Tab>('conversations');
+  // Tree map, pushed within the Conversations tab (mirrors Mind's graph).
+  const [mapOpen, setMapOpen] = useState(false);
   // The chat screen is "pushed" over the tabs (back arrow returns to them).
   const [chatOpen, setChatOpen] = useState(false);
   // References (prompt viewer) and Web Search push over whatever is showing.
@@ -161,10 +168,10 @@ function AppShell() {
     if (convo.proposedDrafts.length > 0) void refreshDrafts();
   }, [convo.proposedDrafts, refreshDrafts]);
 
-  /** Open the Notes tab on the inbox, optionally filtered to one run. */
+  /** Open the Mind tab on the inbox, optionally filtered to one run. */
   const openInbox = useCallback((runId: string | null) => {
     setChatOpen(false);
-    setTab('notes');
+    setTab('mind');
     setInboxRequest((prev) => ({ runId, nonce: (prev?.nonce ?? 0) + 1 }));
   }, []);
 
@@ -523,7 +530,7 @@ function AppShell() {
             draftSeed={chatDraft}
             onDraftSeedConsumed={() => setChatDraft(null)}
           />
-        ) : tab === 'notes' ? (
+        ) : tab === 'mind' ? (
           <NotesView
             pendingCount={pendingDrafts}
             inboxRequest={inboxRequest}
@@ -539,33 +546,59 @@ function AppShell() {
             Loading…
           </div>
         ) : tab === 'conversations' ? (
-          <div className="flex h-full flex-col">
-            <div className="border-b border-border px-4 py-3">
-              <h2 className="text-2xl font-semibold">Conversations</h2>
-            </div>
-            <div className="min-h-0 flex-1">
-              <RootList
-                roots={treeRoots}
-                emptyTitle="No conversations yet"
-                emptyHint="Chats graduate here when you promote them (or branch from them)."
-                onOpen={openRoot}
+          mapOpen ? (
+            // The tree map, pushed within this tab (like Mind's Graph View).
+            <div className="relative h-full">
+              <TreeMap
+                tree={mapTree}
+                activeIds={convo.activeIds}
+                onSelect={convo.selectPathTo}
+                onDeleteSubtree={handleDeleteSubtree}
                 onRename={(id, name) => void convo.renameTurn(id, name)}
+                onOpenConversation={() => setChatOpen(true)}
                 onSynthesize={startSynthesis}
-                onRegenerateTitle={regenerateTitle}
-                onDelete={handleDeleteSubtree}
               />
+              <Button
+                variant="secondary"
+                size="icon"
+                aria-label="Back to the conversation list"
+                onClick={() => setMapOpen(false)}
+                className="absolute left-3 top-3 z-10 h-9 w-9 rounded-full shadow-md"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </Button>
             </div>
-          </div>
-        ) : tab === 'map' ? (
-          <TreeMap
-            tree={mapTree}
-            activeIds={convo.activeIds}
-            onSelect={convo.selectPathTo}
-            onDeleteSubtree={handleDeleteSubtree}
-            onRename={(id, name) => void convo.renameTurn(id, name)}
-            onOpenConversation={() => setChatOpen(true)}
-            onSynthesize={startSynthesis}
-          />
+          ) : (
+            <div className="flex h-full flex-col">
+              <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+                <h2 className="text-2xl font-semibold">Conversations</h2>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Tree map"
+                  title="Tree map — every conversation as a metro line"
+                  onClick={() => setMapOpen(true)}
+                  className="h-8 w-8 text-muted-foreground"
+                >
+                  <TreePine className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1">
+                <RootList
+                  roots={treeRoots}
+                  emptyTitle="No conversations yet"
+                  emptyHint="Chats graduate here when you promote them (or branch from them)."
+                  onOpen={openRoot}
+                  onRename={(id, name) => void convo.renameTurn(id, name)}
+                  onSynthesize={startSynthesis}
+                  onRegenerateTitle={regenerateTitle}
+                  onDelete={handleDeleteSubtree}
+                />
+              </div>
+            </div>
+          )
+        ) : tab === 'scratch' ? (
+          <ScratchView />
         ) : (
           <div className="relative flex h-full flex-col">
             <div className="border-b border-border px-4 py-3">
@@ -620,23 +653,23 @@ function AppShell() {
               onClick={() => setTab('conversations')}
             />
             <TabButton
-              icon={TreePine}
-              label="Map"
-              active={tab === 'map'}
-              onClick={() => setTab('map')}
-            />
-            <TabButton
               icon={Sprout}
               label="Chats"
               active={tab === 'chats'}
               onClick={() => setTab('chats')}
             />
             <TabButton
-              icon={NotebookText}
-              label="Notes"
-              active={tab === 'notes'}
+              icon={StickyNote}
+              label="Scratch"
+              active={tab === 'scratch'}
+              onClick={() => setTab('scratch')}
+            />
+            <TabButton
+              icon={Brain}
+              label="Mind"
+              active={tab === 'mind'}
               badge={pendingDrafts}
-              onClick={() => setTab('notes')}
+              onClick={() => setTab('mind')}
             />
           </div>
         </nav>

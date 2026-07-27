@@ -13,6 +13,7 @@ import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Note, NoteDraft } from '@/domain/models';
+import { categoryOf } from './categories';
 import { lineDiff } from './lineDiff';
 import { NoteBody } from './NoteBody';
 
@@ -483,14 +484,24 @@ export function InboxView({
                           possible duplicate
                         </span>
                       )}
-                      {d.tags.slice(0, 4).map((t) => (
-                        <span
-                          key={t}
-                          className="rounded bg-accent px-1 py-px text-[10px] text-accent-foreground"
-                        >
-                          {t}
+                      {/* Reserved category tag → prominent badge (5b3e491);
+                          remaining tags keep the plain pills. */}
+                      {categoryOf(d.tags) && (
+                        <span className="rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground">
+                          {categoryOf(d.tags)!.label}
                         </span>
-                      ))}
+                      )}
+                      {d.tags
+                        .filter((t) => t !== categoryOf(d.tags)?.tag)
+                        .slice(0, 4)
+                        .map((t) => (
+                          <span
+                            key={t}
+                            className="rounded bg-accent px-1 py-px text-[10px] text-accent-foreground"
+                          >
+                            {t}
+                          </span>
+                        ))}
                     </span>
                   </span>
                   <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
