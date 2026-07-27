@@ -18,7 +18,7 @@ import {
   setEndWord,
   setInterruptPhrase,
   setPiperVoice,
-  setRecallEnabled,
+  setToolsEnabled,
   setServerVoice,
   setStopWord,
   setSttEngine,
@@ -28,7 +28,7 @@ import {
   useEndWord,
   useInterruptPhrase,
   usePiperVoice,
-  useRecallEnabled,
+  useToolsEnabled,
   useServerVoice,
   useStopWord,
   useSttEngine,
@@ -195,7 +195,7 @@ function ServerVoicePicker() {
 
 export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
   const debug = useDebugEnabled();
-  const recall = useRecallEnabled();
+  const tools = useToolsEnabled();
   const ttsEngine = useTtsEngine();
   const sttEngine = useSttEngine();
   const piperVoice = usePiperVoice();
@@ -422,30 +422,31 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
           )}
         </div>
 
-        {/* Memory / recall. */}
+        {/* Tools (agent mode) — renamed from "recall", which gated the whole
+            tool loop (9aee10b). */}
         <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
           <div className="pr-3">
-            <p className="text-sm font-medium">Memory (recall)</p>
+            <p className="text-sm font-medium">Tools (agent mode)</p>
             <p className="text-xs text-muted-foreground">
-              Search past turns and inject relevant memories into context. Shown as
-              a recall block above the reply.
+              Let the model use its tools: web search, page reading, your
+              notes, and memory recall. Off = plain chat with no tool calls.
             </p>
           </div>
           <button
             type="button"
             role="switch"
-            aria-checked={recall}
-            aria-label="Memory recall"
-            onClick={() => setRecallEnabled(!recall)}
+            aria-checked={tools}
+            aria-label="Tools (agent mode)"
+            onClick={() => setToolsEnabled(!tools)}
             className={cn(
               'relative h-6 w-11 shrink-0 rounded-full transition-colors',
-              recall ? 'bg-primary' : 'bg-muted',
+              tools ? 'bg-primary' : 'bg-muted',
             )}
           >
             <span
               className={cn(
                 'block h-5 w-5 rounded-full bg-white transition-transform',
-                recall ? 'translate-x-5' : 'translate-x-0.5',
+                tools ? 'translate-x-5' : 'translate-x-0.5',
               )}
             />
           </button>

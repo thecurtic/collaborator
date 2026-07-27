@@ -171,6 +171,64 @@ async function consumeStream(
   let buffer = '';
   let text = '';
   let done: Record<string, unknown> = {};
+  const handleEvent = (evt: Record<string, unknown>) => {
+    if (evt.type === 'token' && typeof evt.content === 'string') {
+      text += evt.content;
+      onToken(evt.content);
+    } else if (evt.type === 'recall_block' || evt.type === 'recall') {
+      // 9aee10b event (old `recall` kept for pre-tool-loop backends).
+      // toRecallBlock guards every field — SSE payloads are unvalidated.
+      onRecall?.(toRecallBlock(evt as unknown as ApiRecall));
+    } else if (evt.type === 'status') {
+      // Tool activity: start events (what it's doing) and outcome events
+      // (how it went) — discriminated by the presence of `outcome`.
+      const str = (k: string) =>
+        typeof evt[k] === 'string' ? (evt[k] as string) : undefined;
+      const rawOutcome = str('outcome');
+      onStatus?.({
+        tool: str('tool') ?? '',
+        label: firstString(evt, ['label', 'content', 'message', 'text']),
+        query: str('query'),
+        url: str('url'),
+        title: str('title'),
+        outcome:
+          rawOutcome === 'ok' ||
+          rawOutcome === 'empty' ||
+          rawOutcome === 'error'
+            ? rawOutcome
+            : undefined,
+        count: typeof evt.count === 'number' ? evt.count : undefined,
+        urls: Array.isArray(evt.urls)
+          ? (evt.urls as unknown[]).filter(
+              (u): u is string => typeof u === 'string',
+            )
+          : undefined,
+        error: str('error'),
+        isOutcome: 'outcome' in evt,
+      });
+    } else if (evt.type === 'tool_result') {
+      // Reserved — optional "show steps" view (tools.show_step_results); off
+      // by default. Not rendered yet.
+    } else if (evt.type === 'drafts_proposed') {
+      // The model called propose_note this turn — pending drafts await
+      // review in the inbox (it can never write the vault directly).
+      const drafts = toProposedDrafts(evt);
+      if (drafts.length) onDrafts?.(drafts);
+    } else if (evt.type === 'unfollowed_links') {
+      // Fetch budget hit with links left over — offer one-tap follow-ups.
+      const links = Array.isArray(evt.links)
+        ? evt.links.filter((l): l is string => typeof l === 'string')
+        : [];
+      if (links.length) onUnfollowedLinks?.(links);
+    } else if (evt.type === 'done') {
+      done = evt;
+    } else if (evt.type === 'error') {
+      throw new ApiRequestError(
+        typeof evt.detail === 'string' ? evt.detail : 'Stream error',
+        500,
+      );
+    }
+  };
   try {
     for (;;) {
       const { done: streamDone, value } = await reader.read();
@@ -180,64 +238,15 @@ async function consumeStream(
       buffer = lines.pop() ?? '';
       for (const line of lines) {
         const evt = parseSseData(line);
-        if (!evt) continue;
-        if (evt.type === 'token' && typeof evt.content === 'string') {
-          text += evt.content;
-          onToken(evt.content);
-        } else if (evt.type === 'recall') {
-          // toRecallBlock guards every field — SSE payloads are unvalidated.
-          onRecall?.(toRecallBlock(evt as unknown as ApiRecall));
-        } else if (evt.type === 'status') {
-          // Tool activity: start events (what it's doing) and outcome events
-          // (how it went) — discriminated by the presence of `outcome`.
-          const str = (k: string) =>
-            typeof evt[k] === 'string' ? (evt[k] as string) : undefined;
-          const rawOutcome = str('outcome');
-          onStatus?.({
-            tool: str('tool') ?? '',
-            label: firstString(evt, ['label', 'content', 'message', 'text']),
-            query: str('query'),
-            url: str('url'),
-            title: str('title'),
-            outcome:
-              rawOutcome === 'ok' ||
-              rawOutcome === 'empty' ||
-              rawOutcome === 'error'
-                ? rawOutcome
-                : undefined,
-            count: typeof evt.count === 'number' ? evt.count : undefined,
-            urls: Array.isArray(evt.urls)
-              ? (evt.urls as unknown[]).filter(
-                  (u): u is string => typeof u === 'string',
-                )
-              : undefined,
-            error: str('error'),
-            isOutcome: 'outcome' in evt,
-          });
-        } else if (evt.type === 'tool_result') {
-          // Reserved — optional "show steps" view (tools.show_step_results); off
-          // by default. Not rendered yet.
-        } else if (evt.type === 'drafts_proposed') {
-          // The model called propose_note this turn — pending drafts await
-          // review in the inbox (it can never write the vault directly).
-          const drafts = toProposedDrafts(evt);
-          if (drafts.length) onDrafts?.(drafts);
-        } else if (evt.type === 'unfollowed_links') {
-          // Fetch budget hit with links left over — offer one-tap follow-ups.
-          const links = Array.isArray(evt.links)
-            ? evt.links.filter((l): l is string => typeof l === 'string')
-            : [];
-          if (links.length) onUnfollowedLinks?.(links);
-        } else if (evt.type === 'done') {
-          done = evt;
-        } else if (evt.type === 'error') {
-          throw new ApiRequestError(
-            typeof evt.detail === 'string' ? evt.detail : 'Stream error',
-            500,
-          );
-        }
+        if (evt) handleEvent(evt);
       }
     }
+    // Flush the tail: a final event with no trailing newline (or a split
+    // multi-byte char in the last chunk) would otherwise be dropped —
+    // losing the `done` metadata for the whole stream.
+    buffer += decoder.decode();
+    const tail = parseSseData(buffer);
+    if (tail) handleEvent(tail);
   } finally {
     reader.releaseLock();
   }
@@ -427,7 +436,8 @@ class HttpCollaboratorApi implements CollaboratorApi {
         commit: input.commit,
         user_id: input.userId,
         mode: input.mode,
-        recall: input.recall,
+        // 9aee10b: `tools` supersedes the misnamed `recall` alias.
+        tools: input.tools,
         state: input.state,
       }),
       signal,
@@ -453,7 +463,8 @@ class HttpCollaboratorApi implements CollaboratorApi {
         context_turns: input.contextTurns,
         commit: input.commit,
         mode: input.mode,
-        recall: input.recall,
+        // 9aee10b: `tools` supersedes the misnamed `recall` alias.
+        tools: input.tools,
       }),
       signal,
     });

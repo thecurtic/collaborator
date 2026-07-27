@@ -11,7 +11,7 @@ import type {
   ToolActivity,
   TreeNode,
 } from '@/domain/models';
-import { getRecallEnabled } from '@/features/settings/uiPrefs';
+import { getToolsEnabled } from '@/features/settings/uiPrefs';
 import { saveTurnSources } from './sourcesStore';
 import { foldToolEvent } from './toolActivity';
 import {
@@ -250,7 +250,7 @@ export function useConversation(reloadSignal: number) {
           {
             message: trimmed,
             parentTurnId: leafRef.current ?? undefined,
-            recall: getRecallEnabled(),
+            tools: getToolsEnabled(),
           },
           handlers,
           signal,
@@ -293,7 +293,7 @@ export function useConversation(reloadSignal: number) {
             parentTurnId,
             message: trimmed,
             paragraphIndex,
-            recall: getRecallEnabled(),
+            tools: getToolsEnabled(),
             // "Without context" → fresh branch, no prior turns injected.
             ...(withContext ? {} : { contextTurns: 0 }),
           },
@@ -356,7 +356,7 @@ export function useConversation(reloadSignal: number) {
                 parentTurnId: parentId,
                 message: trimmed,
                 paragraphIndex: u.paragraphIndex ?? undefined,
-                recall: getRecallEnabled(),
+                tools: getToolsEnabled(),
                 ...(u.contextBoundary ? { contextTurns: 0 } : {}),
               },
               handlers,
@@ -366,7 +366,7 @@ export function useConversation(reloadSignal: number) {
               {
                 message: trimmed,
                 parentTurnId: isRoot ? undefined : (parentId ?? undefined),
-                recall: getRecallEnabled(),
+                tools: getToolsEnabled(),
                 ...(keepState ? { state: keepState } : {}),
               },
               handlers,

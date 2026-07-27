@@ -2,6 +2,7 @@ import { Brain, Link as LinkIcon, Loader2, NotebookPen } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/Markdown';
 import { useModalA11y } from '@/lib/useModalA11y';
+import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import type { RecallBlock } from '@/domain/models';
 import type { BranchTarget } from './branchTarget';
 import { Composer, type ComposerHandle } from './Composer';
@@ -108,6 +109,8 @@ export function ChatView({
     cycleFork,
     remove,
   } = convo;
+  // Gates the in-flight recall-block card (diagnostic display, 9aee10b).
+  const debug = useDebugEnabled();
   // Pending branch point awaiting a with/without-context choice.
   const [branchChoice, setBranchChoice] = useState<BranchPoint | null>(null);
   // Regenerate: the leaf reply to replace — the next send deletes the old
@@ -433,8 +436,10 @@ export function ChatView({
                   <UserText text={streaming.user} />
                 </div>
               </div>
-              {/* In-flight recall: between the user message and the reply. */}
-              {recall && <RecallCard recall={recall} />}
+              {/* In-flight recall: between the user message and the reply.
+                  Every semantic fire produces a block now (9aee10b) — shown
+                  only with Developer diagnostics on, per the contract. */}
+              {recall && debug && <RecallCard recall={recall} />}
               <div className="flex w-full justify-start">
                 <div className="w-full rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:text-sm">
                   {/* Live tool activity: one row per call, resolved in place

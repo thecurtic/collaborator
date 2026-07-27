@@ -4,9 +4,9 @@ import {
   getEndPhrase,
   getEndWord,
   getInterruptPhrase,
-  getRecallEnabled,
   getStopWord,
   getSttEngine,
+  getToolsEnabled,
 } from '@/features/settings/uiPrefs';
 import { getCapabilities } from '@/lib/capabilities';
 import { holdPwaUpdates } from '@/pwa';
@@ -450,7 +450,7 @@ export function useCall(
               commit: true,
               mode: 'voice',
               // Tools (web/notes/recall) on voice turns — same toggle as text.
-              recall: getRecallEnabled(),
+              tools: getToolsEnabled(),
               ...(pb.withContext ? {} : { contextTurns: 0 }),
             },
             { onToken, onStatus: onToolEvent },
@@ -470,7 +470,7 @@ export function useCall(
               commit: true,
               mode: 'voice',
               // Tools (web/notes/recall) on voice turns — same toggle as text.
-              recall: getRecallEnabled(),
+              tools: getToolsEnabled(),
             },
             // Other voice event rendering is server-side (spoken citations,
             // drafts announced verbally); tool activity shows in the call UI.

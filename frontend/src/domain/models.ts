@@ -95,8 +95,11 @@ export interface BranchInput {
   contextTurns?: number;
   commit?: boolean;
   mode?: 'voice' | 'text';
-  /** Opt-in: search memory and inject a synthesized recall block into context. */
-  recall?: boolean;
+  /**
+   * Offer the model its tools this turn (web/notes/recall — the whole agent
+   * loop, 9aee10b). Omit to use the server default; explicit false disables.
+   */
+  tools?: boolean;
 }
 
 /**
@@ -289,8 +292,11 @@ export interface PromptInfo {
 
 export interface SendMessageInput {
   message: string;
-  /** Opt-in: search memory and inject a synthesized recall block into context. */
-  recall?: boolean;
+  /**
+   * Offer the model its tools this turn (web/notes/recall — the whole agent
+   * loop, 9aee10b). Omit to use the server default; explicit false disables.
+   */
+  tools?: boolean;
   /**
    * The active leaf turn id to continue from (its ancestor chain = context).
    * Omit ONLY for a brand-new conversation; omitting on an existing convo starts

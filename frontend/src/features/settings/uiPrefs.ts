@@ -17,7 +17,9 @@ const STOP_WORD_KEY = 'collaborator_stop_word';
 const END_PHRASE_KEY = 'collaborator_end_phrase';
 const INTERRUPT_PHRASE_KEY = 'collaborator_interrupt_phrase';
 const STT_KEY = 'collaborator_stt_engine';
-const RECALL_KEY = 'collaborator_recall';
+const TOOLS_KEY = 'collaborator_tools';
+/** Pre-9aee10b name for the tools toggle ("recall" gated the whole tool loop). */
+const LEGACY_RECALL_KEY = 'collaborator_recall';
 
 export const DEFAULT_END_WORD = 'go';
 export const DEFAULT_STOP_WORD = 'stop';
@@ -78,15 +80,19 @@ export function useTtsEngine(): TtsEngine {
   return useSyncExternalStore(subscribe, getTtsEngine, () => 'piper');
 }
 
-// --- Recall (memory): inject synthesized memories into context (opt-in) ---
-export function getRecallEnabled(): boolean {
-  return read(RECALL_KEY) === '1';
+// --- Tools (agent mode): offer the model its tools each turn (9aee10b).
+// Renamed from "recall", which had been gating the ENTIRE tool loop — the old
+// key seeds the new one so an existing choice survives the rename. Default ON
+// (matches the server's `tools.enabled: true`).
+export function getToolsEnabled(): boolean {
+  const v = read(TOOLS_KEY) ?? read(LEGACY_RECALL_KEY);
+  return v !== '0';
 }
-export function setRecallEnabled(value: boolean): void {
-  write(RECALL_KEY, value ? '1' : '0');
+export function setToolsEnabled(value: boolean): void {
+  write(TOOLS_KEY, value ? '1' : '0');
 }
-export function useRecallEnabled(): boolean {
-  return useSyncExternalStore(subscribe, getRecallEnabled, () => false);
+export function useToolsEnabled(): boolean {
+  return useSyncExternalStore(subscribe, getToolsEnabled, () => true);
 }
 
 // --- Speech-to-text engine (server Whisper vs on-device Transformers.js) ---
