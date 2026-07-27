@@ -1,4 +1,11 @@
-import { NotebookPen, Pencil, RefreshCw, Sprout, TreePine } from 'lucide-react';
+import {
+  NotebookPen,
+  Pencil,
+  RefreshCw,
+  Sprout,
+  Trash2,
+  TreePine,
+} from 'lucide-react';
 import { useState } from 'react';
 import { ActionSheet, type SheetAction } from '@/components/ActionSheet';
 import { RenameSheet } from '@/components/RenameSheet';
@@ -19,6 +26,8 @@ interface RootListProps {
   onSynthesize?: (rootId: number, label: string) => void;
   /** Regenerate the LLM-generated title for this conversation. */
   onRegenerateTitle?: (rootId: number) => void;
+  /** Delete this conversation and everything in it (permanent, no confirm). */
+  onDelete?: (rootId: number) => void;
 }
 
 /** Count all turns in a subtree (shown as light row metadata). */
@@ -86,6 +95,7 @@ export function RootList({
   onPromote,
   onSynthesize,
   onRegenerateTitle,
+  onDelete,
 }: RootListProps) {
   const [menuRoot, setMenuRoot] = useState<TreeNode | null>(null);
   const [renaming, setRenaming] = useState<TreeNode | null>(null);
@@ -123,6 +133,16 @@ export function RootList({
                 label: 'Regenerate title',
                 icon: RefreshCw,
                 onSelect: () => onRegenerateTitle(menuRoot.id),
+              },
+            ]
+          : []),
+        ...(onDelete
+          ? [
+              {
+                label: 'Delete',
+                icon: Trash2,
+                destructive: true,
+                onSelect: () => onDelete(menuRoot.id),
               },
             ]
           : []),

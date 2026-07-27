@@ -15,7 +15,7 @@ import {
   Trash2,
   Volume2,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ActionSheet } from '@/components/ActionSheet';
 import { ActivityRow } from '@/components/ActivityRow';
@@ -24,6 +24,7 @@ import { getTurnSources } from './sourcesStore';
 import { Button } from '@/components/ui/button';
 import { useSpeech } from '@/features/voice/SpeechContext';
 import { splitParagraphs } from '@/features/voice/speechUtils';
+import { useLongPress } from '@/lib/useLongPress';
 import { useModalA11y } from '@/lib/useModalA11y';
 import { cn } from '@/lib/utils';
 import type { TreeNode } from '@/domain/models';
@@ -49,7 +50,8 @@ interface TreeBubbleProps {
     paragraphIndex: number | undefined,
     label: string,
   ) => void;
-  onDelete: (turnId: number) => void;
+  /** subtree=true deletes this turn and everything downstream of it. */
+  onDelete: (turnId: number, subtree: boolean) => void;
   /** Quote this paragraph into the composer (stackable multi-quote replies). */
   onQuote?: (text: string) => void;
   /** Share this turn or the current context window (assistant turns). */
@@ -214,6 +216,59 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+// Drag distance (px) that arms the swipe-down subtree delete.
+const SUBTREE_DRAG_PX = 48;
+
+/**
+ * Delete with a gesture: tap = this turn only (children reparent up); press,
+ * drag DOWN past the threshold, release = this turn and everything downstream.
+ * The icon turns red while the subtree delete is armed. No confirm dialogs.
+ */
+function DeleteButton({ onDelete }: { onDelete: (subtree: boolean) => void }) {
+  const startY = useRef<number | null>(null);
+  const [armed, setArmed] = useState(false);
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label="Delete this turn (hold and swipe down: with everything after)"
+      title="Delete — tap: this turn · hold + swipe down: this turn and everything after"
+      onPointerDown={(e) => {
+        startY.current = e.clientY;
+        setArmed(false);
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        if (startY.current != null) {
+          setArmed(e.clientY - startY.current > SUBTREE_DRAG_PX);
+        }
+      }}
+      onPointerUp={(e) => {
+        if (startY.current == null) return;
+        const subtree = e.clientY - startY.current > SUBTREE_DRAG_PX;
+        startY.current = null;
+        setArmed(false);
+        onDelete(subtree);
+      }}
+      onPointerCancel={() => {
+        startY.current = null;
+        setArmed(false);
+      }}
+      onClick={(e) => {
+        // Keyboard activation (Enter/Space) produces a detail-0 click with no
+        // preceding pointerup — treat it as a single-turn delete.
+        if (e.detail === 0) onDelete(false);
+      }}
+      className={cn(
+        '-my-1 h-9 w-9 touch-none opacity-70 hover:opacity-100',
+        armed && 'text-destructive opacity-100',
+      )}
+    >
+      <Trash2 className="h-4 w-4" />
+    </Button>
+  );
+}
+
 /** Share button: the same bottom ActionSheet as everywhere else in the app. */
 function ShareButton({ onShare }: { onShare: (scope: ShareScope) => void }) {
   const [open, setOpen] = useState(false);
@@ -263,6 +318,22 @@ export function TreeBubble({
   inContext = true,
 }: TreeBubbleProps) {
   const isUser = node.role === 'user';
+  // Hold the message text to copy the whole turn (buttons stay tap-only).
+  const [copiedAll, setCopiedAll] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
+  const copyPress = useLongPress(() => {
+    void navigator.clipboard?.writeText(node.content).then(() => {
+      setCopiedAll(true);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopiedAll(false), 1200);
+    });
+  });
   const speech = useSpeech();
   const isActive = speech.activeId === node.id;
   const ttsLoading = isActive && speech.status === 'preparing';
@@ -290,7 +361,7 @@ export function TreeBubble({
     <div className={cn('flex w-full', isUser ? 'justify-end' : 'justify-start')}>
       <div
         className={cn(
-          'rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed sm:text-sm',
+          'relative rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed sm:text-sm',
           // Agent turns take the full width (margins match left/right); user
           // turns keep the classic right-aligned offset.
           isUser
@@ -298,6 +369,11 @@ export function TreeBubble({
             : 'w-full border border-border bg-card text-card-foreground',
         )}
       >
+        {copiedAll && (
+          <span className="absolute -top-2 right-3 z-10 rounded-full bg-primary px-2 py-0.5 text-[10px] font-medium text-primary-foreground shadow">
+            Copied
+          </span>
+        )}
         {reading ? (
           <div className={cn('space-y-1.5', !inContext && 'opacity-60')}>
             {splitParagraphs(node.content).map(({ text: p, start }, i) =>
@@ -336,12 +412,23 @@ export function TreeBubble({
                       'bg-primary/10 px-2 py-1 ring-1 ring-primary/30',
                   )}
                 >
+                  {/* Hold the text to copy the whole turn. select-none only on
+                      touch-first sizes so desktop text selection still works
+                      (drag past the tolerance cancels the hold anyway). */}
                   {isUser ? (
-                    <div className="min-w-0 flex-1">
+                    <div
+                      {...copyPress}
+                      className="min-w-0 flex-1 select-none [-webkit-touch-callout:none] sm:select-text"
+                    >
                       <UserText text={block} />
                     </div>
                   ) : (
-                    <Markdown className="min-w-0 flex-1">{block}</Markdown>
+                    <div
+                      {...copyPress}
+                      className="min-w-0 flex-1 select-none [-webkit-touch-callout:none] sm:select-text"
+                    >
+                      <Markdown>{block}</Markdown>
+                    </div>
                   )}
                   <span className="flex shrink-0 flex-col">
                     <button
@@ -426,16 +513,7 @@ export function TreeBubble({
             )}
             {!isUser && <CopyButton text={node.content} />}
             {!isUser && onShare && <ShareButton onShare={onShare} />}
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Delete this turn"
-              title="Delete this turn"
-              onClick={() => onDelete(node.id)}
-              className="-my-1 h-9 w-9 opacity-70 hover:opacity-100"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            <DeleteButton onDelete={(subtree) => onDelete(node.id, subtree)} />
           </span>
         </div>
       </div>

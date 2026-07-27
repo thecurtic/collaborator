@@ -83,6 +83,7 @@ export function useCall(
   activeLeafId?: number | null,
   onBranchConsumed?: () => void,
   onBranchCreated?: (parentTurnId: number) => void,
+  onLeafChanged?: (leafId: number) => void,
 ) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
   const [partial, setPartial] = useState('');
@@ -109,6 +110,8 @@ export function useCall(
   onBranchConsumedRef.current = onBranchConsumed;
   const onBranchCreatedRef = useRef(onBranchCreated);
   onBranchCreatedRef.current = onBranchCreated;
+  const onLeafChangedRef = useRef(onLeafChanged);
+  onLeafChangedRef.current = onLeafChanged;
 
   useEffect(() => {
     if (!open) return;
@@ -459,6 +462,7 @@ export function useCall(
           if (res.id != null) {
             leafId = res.id; // continue off the new branch
             saveTurnSources(res.id, activityRef.current);
+            onLeafChangedRef.current?.(res.id);
           }
           // Graduation signal: the app promotes the seed this forked from.
           onBranchCreatedRef.current?.(pb.turnId);
@@ -480,6 +484,7 @@ export function useCall(
           if (res.id != null) {
             leafId = res.id;
             saveTurnSources(res.id, activityRef.current);
+            onLeafChangedRef.current?.(res.id);
           }
         }
         session?.finish();

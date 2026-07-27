@@ -132,12 +132,29 @@ function AppShell() {
     runId: string | null;
     nonce: number;
   } | null>(null);
+  // Transient app-level feedback (e.g. title regeneration progress/result).
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showNotice = useCallback((message: string, ms = 4000) => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    setNotice(message);
+    noticeTimer.current =
+      ms > 0 ? setTimeout(() => setNotice(null), ms) : null;
+  }, []);
+  useEffect(
+    () => () => {
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    },
+    [],
+  );
+  // Latest turn id spoken in the current call — where the chat lands on close.
+  const callLeafRef = useRef<number | null>(null);
 
   const { count: pendingDrafts, refresh: refreshDrafts } = usePendingDrafts(
     gate === 'open',
   );
 
-  const { reload, rootOfTurn, promote } = convo;
+  const { reload, rootOfTurn, promote, selectPathTo } = convo;
 
   // Model-proposed drafts land in the inbox server-side — keep the badge live.
   useEffect(() => {
@@ -187,11 +204,17 @@ function AppShell() {
   );
 
   // Closing a call refreshes the tree so the spoken exchange (persisted with
-  // commit:true) shows up in the text history.
+  // commit:true) shows up in the text history — then lands the chat on the
+  // call's conversation (a call started from "New chat" would otherwise dump
+  // the user back on an empty chat instead of what they just talked about).
   const closeCall = useCallback(() => {
     setCallOpen(false);
-    void reload();
-  }, [reload]);
+    const leaf = callLeafRef.current;
+    callLeafRef.current = null;
+    void reload().then(() => {
+      if (leaf != null) selectPathTo(leaf);
+    });
+  }, [reload, selectPathTo]);
 
   // Branching in a call is a graduation signal too (same as typed branches).
   const handleCallBranched = useCallback(
@@ -237,12 +260,9 @@ function AppShell() {
     setChatDraft((prev) => ({ text, nonce: (prev?.nonce ?? 0) + 1 }));
   };
 
+  // No confirm — deletes are deliberate here (hold-menu / map action).
   const handleDeleteSubtree = (turnId: number) => {
-    if (
-      window.confirm('Delete this branch and all its replies? This is permanent.')
-    ) {
-      void convo.remove(turnId, true);
-    }
+    void convo.remove(turnId, true);
   };
 
   const chatTitle = chatOpen
@@ -252,14 +272,34 @@ function AppShell() {
     : null;
 
   // Regenerate the LLM title, then refresh so lists/headers pick it up.
+  // Generation is an LLM call (seconds on local inference) and can 502 —
+  // always say what happened; silence here read as "the button does nothing".
   const regenerateTitle = useCallback(
     (rootId: number) => {
+      showNotice('Regenerating title…', 0);
       void api
         .regenerateTitle(rootId)
-        .catch(() => {}) // 502 = generation failed; the old title stands
-        .finally(() => void reload());
+        .then(async (title) => {
+          await reload();
+          // A manual name always outranks the title (name ?? title ?? preview)
+          // — surface that instead of looking like a no-op.
+          const named = rootOfTurn(rootId)?.name;
+          showNotice(
+            named
+              ? `New title "${title}" is hidden by the name "${named}" — clear the name to show it`
+              : `Title: ${title}`,
+          );
+        })
+        .catch((err: unknown) => {
+          void reload();
+          showNotice(
+            err instanceof Error && err.message
+              ? `Title generation failed: ${err.message}`
+              : 'Title generation failed — the old title stands',
+          );
+        });
     },
-    [reload],
+    [reload, rootOfTurn, showNotice],
   );
 
   // Hold the chat title for conversation actions (rename/promote/synthesize).
@@ -438,6 +478,9 @@ function AppShell() {
         activeLeafId={convo.activeLeafId}
         onBranchConsumed={() => setBranchTarget(null)}
         onBranchCreated={handleCallBranched}
+        onLeafChanged={(id) => {
+          callLeafRef.current = id;
+        }}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       {/* After CallScreen so it stacks on top when opened mid-call. */}
@@ -509,6 +552,7 @@ function AppShell() {
                 onRename={(id, name) => void convo.renameTurn(id, name)}
                 onSynthesize={startSynthesis}
                 onRegenerateTitle={regenerateTitle}
+                onDelete={handleDeleteSubtree}
               />
             </div>
           </div>
@@ -536,6 +580,7 @@ function AppShell() {
                 onRename={(id, name) => void convo.renameTurn(id, name)}
                 onPromote={(id) => void convo.promote(id)}
                 onRegenerateTitle={regenerateTitle}
+                onDelete={handleDeleteSubtree}
               />
             </div>
             {/* Floating pill, sitting just above the tab bar. */}
@@ -554,6 +599,13 @@ function AppShell() {
       {!chatOpen && !referencesOpen && !searchOpen && gate === 'open' && convo.error && (
         <div className="border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-center text-sm text-destructive">
           {convo.error}
+        </div>
+      )}
+
+      {/* Transient feedback (title regeneration etc.) — any screen. */}
+      {gate === 'open' && notice && (
+        <div className="border-t border-border bg-muted/60 px-4 py-2 text-center text-sm text-muted-foreground">
+          {notice}
         </div>
       )}
 

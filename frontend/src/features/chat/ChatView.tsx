@@ -271,10 +271,10 @@ export function ChatView({
     setEditTarget(null); // branch and regenerate are mutually exclusive
   };
 
-  const handleDelete = (turnId: number) => {
-    if (window.confirm('Delete this turn? This is permanent.')) {
-      void remove(turnId, false);
-    }
+  // No confirm by design. subtree=true (delete-button hold + swipe down)
+  // removes the turn and everything downstream; false reparents children up.
+  const handleDelete = (turnId: number, subtree: boolean) => {
+    void remove(turnId, subtree);
   };
 
   // A without-context branch is a fresh chat: show only from its start (the most

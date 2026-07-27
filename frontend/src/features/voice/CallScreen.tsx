@@ -28,6 +28,11 @@ interface CallScreenProps {
   onBranchConsumed?: () => void;
   /** Fired after a spoken branch is created (the app promotes seed roots). */
   onBranchCreated?: (parentTurnId: number) => void;
+  /**
+   * Fired as each spoken exchange commits, with the new leaf turn id — the
+   * app uses the last one to land the chat on this conversation at call end.
+   */
+  onLeafChanged?: (leafId: number) => void;
   /** Open the settings sheet on top of the call (engine/voice/debug toggles). */
   onOpenSettings?: () => void;
 }
@@ -166,6 +171,7 @@ export function CallScreen({
   activeLeafId = null,
   onBranchConsumed,
   onBranchCreated,
+  onLeafChanged,
   onOpenSettings,
 }: CallScreenProps) {
   const {
@@ -190,6 +196,7 @@ export function CallScreen({
     activeLeafId,
     onBranchConsumed,
     onBranchCreated,
+    onLeafChanged,
   );
   useWakeLock(open); // keep the screen on for the whole call
   const showDebug = useDebugEnabled();
