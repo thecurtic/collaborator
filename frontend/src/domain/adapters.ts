@@ -186,6 +186,13 @@ export function toNoteDraft(api: ApiNoteDraft): NoteDraft {
       title: d.title,
       score: d.score,
     })),
+    fields: api.fields
+      ? {
+          start: typeof api.fields.start === 'string' ? api.fields.start : null,
+          end: typeof api.fields.end === 'string' ? api.fields.end : null,
+          allDay: Boolean(api.fields.all_day),
+        }
+      : null,
   };
 }
 

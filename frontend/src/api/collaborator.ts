@@ -338,7 +338,14 @@ export interface CollaboratorApi {
   /** Edit a PENDING draft (409 once decided). */
   updateDraft(
     id: number,
-    patch: { title?: string; body?: string; tags?: string[]; links?: string[] },
+    patch: {
+      title?: string;
+      body?: string;
+      tags?: string[];
+      links?: string[];
+      /** Event drafts: corrected times (85c508c). */
+      fields?: { start?: string; end?: string | null; all_day?: boolean };
+    },
   ): Promise<void>;
   /**
    * Approve: writes the vault file (new drafts) or applies the change to the
@@ -558,7 +565,14 @@ class HttpCollaboratorApi implements CollaboratorApi {
 
   async updateDraft(
     id: number,
-    patch: { title?: string; body?: string; tags?: string[]; links?: string[] },
+    patch: {
+      title?: string;
+      body?: string;
+      tags?: string[];
+      links?: string[];
+      /** Event drafts: corrected times (85c508c). */
+      fields?: { start?: string; end?: string | null; all_day?: boolean };
+    },
   ): Promise<void> {
     await request<unknown>(`/api/notes/drafts/${id}`, {
       method: 'PATCH',

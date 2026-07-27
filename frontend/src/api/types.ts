@@ -177,6 +177,15 @@ export interface ApiNoteDraft {
   created_at: string;
   decided_at: string | null;
   duplicate_of?: ApiDuplicateRef[];
+  /**
+   * Structured fields on event drafts (85c508c): wall-clock ISO times the
+   * backend validates and serializes into frontmatter at approval.
+   */
+  fields?: {
+    start?: string | null;
+    end?: string | null;
+    all_day?: boolean;
+  } | null;
 }
 
 /** GET /api/notes/drafts */

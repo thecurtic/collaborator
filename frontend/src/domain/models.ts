@@ -192,6 +192,18 @@ export interface NoteDraft {
   decidedAt: string | null;
   /** Near-duplicate vault notes — flagged, never dropped. */
   duplicateOf: DuplicateRef[];
+  /** Structured event times (event drafts, 85c508c); null otherwise. */
+  fields: EventDraftFields | null;
+}
+
+/**
+ * Event-draft fields: wall-clock ISO strings (no offset — the backend stamps
+ * the offset at approval). `start` date-only when allDay.
+ */
+export interface EventDraftFields {
+  start: string | null;
+  end: string | null;
+  allDay: boolean;
 }
 
 /** Vault note metadata (list/search rows). */

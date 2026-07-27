@@ -1,5 +1,6 @@
 import {
   Brain,
+  CalendarDays,
   Camera,
   Check,
   CircleSlash,
@@ -23,6 +24,7 @@ export function toolIcon(tool: string) {
   if (tool === 'search_notes' || tool === 'get_note') return NotebookText;
   if (tool === 'propose_note') return NotebookPen;
   if (tool === 'read_logs') return ScrollText;
+  if (tool === 'list_events') return CalendarDays;
   return Wrench;
 }
 
