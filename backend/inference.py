@@ -130,6 +130,7 @@ def _build_messages(
     mode: Optional[str] = None,
     recall: Optional[str] = None,
     include_tools_guidance: bool = False,
+    extra_system: Optional[str] = None,
 ) -> List[Dict]:
     """Build the OpenAI-style messages array from system prompt, context, and input.
 
@@ -148,6 +149,11 @@ def _build_messages(
         system_prompt, "datetime_file", "datetime_text", DEFAULT_DATETIME_TEXT)
     now = time.strftime("%A, %Y-%m-%d %H:%M %Z")
     system_content = f"{system_content}\n\n{datetime_text.replace('{now}', now)}"
+
+    # Per-turn dynamic context (e.g. the user-location line) — present only when
+    # the request supplied it, so absence degrades cleanly.
+    if extra_system and extra_system.strip():
+        system_content = f"{system_content}\n\n{extra_system.strip()}"
 
     # Tell the model how to use its tools (only when tools are active this turn).
     if include_tools_guidance:
@@ -214,6 +220,7 @@ def stream_llm_tokens(
     context_turns: Optional[List[Dict]] = None,
     mode: Optional[str] = None,
     recall: Optional[str] = None,
+    extra_system: Optional[str] = None,
 ):
     """Yield tokens from the local LLM endpoint as they arrive (true streaming).
 
@@ -232,7 +239,8 @@ def stream_llm_tokens(
     """
     import json
 
-    messages = _build_messages(message, context_turns, mode=mode, recall=recall)
+    messages = _build_messages(message, context_turns, mode=mode, recall=recall,
+                               extra_system=extra_system)
     payload = _build_payload(messages, stream=True)
 
     try:
@@ -1245,6 +1253,19 @@ def _tool_status_label(name: str, args: Dict) -> str:
         return f"Screenshotting {u[:60]}…" if u else "Taking a screenshot…"
     if name == "list_events":
         return "Checking your calendar…"
+    if name == "get_notes":
+        n = len(args.get("titles") or [])
+        return f"Reading {n} note{'s' if n != 1 else ''}…"
+    if name == "calculate":
+        expr = (args.get("expression") or "").strip()
+        return f"Calculating {expr[:40]}…" if expr else "Calculating…"
+    if name == "git_read":
+        action = args.get("action", "")
+        target = (args.get("repo") or "") + ("/" + args.get("path", "") if args.get("path") else "")
+        return f"Reading git ({action}){f': {target[:50]}' if target else ''}…"
+    if name == "transcribe_video":
+        u = (args.get("url") or "").strip()
+        return f"Transcribing video {u[:50]}…" if u else "Transcribing video…"
     if name == "read_logs":
         g = (args.get("grep") or "").strip()
         return f"Checking my logs{f' for “{g[:40]}”' if g else ''}…"
@@ -1515,6 +1536,7 @@ def generate_with_tools(
     max_rounds: int = 5,
     emit_status: bool = True,
     emit_results: bool = False,
+    extra_system: Optional[str] = None,
 ):
     """Run the tool-calling loop and yield event dicts.
 
@@ -1525,7 +1547,8 @@ def generate_with_tools(
     """
     import json
     messages = _build_messages(message, context_turns, mode=mode,
-                               include_tools_guidance=bool(tool_schemas))
+                               include_tools_guidance=bool(tool_schemas),
+                               extra_system=extra_system)
 
     # Tool-calling is more reliable at a lower temperature than the conversational
     # default, so run the loop at a configurable tools temperature.

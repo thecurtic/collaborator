@@ -37,6 +37,7 @@ from inference import (
 from export_tree import export_forest, find_tree
 import logbuffer
 logbuffer.install()   # ring buffer behind the read_logs tool; tees, never redirects
+import agent_tools
 import notes_index
 import voice
 from auth import validate_passkey, create_user_db
@@ -90,6 +91,10 @@ class UserMessage(BaseModel):
     # "voice" = turn came from call mode (spoken); absent/"text" = normal chat.
     # On voice turns the system prompt is augmented for spoken-style output.
     mode: Optional[str] = None
+    # Optional {lat, lon, accuracy?, ts?} — injected as a context line for this
+    # turn (named places via location.places config). Ephemeral unless
+    # location.store is enabled.
+    location: Optional[dict] = None
 
 
 class MessageResponse(BaseModel):
@@ -129,6 +134,7 @@ class BranchRequest(BaseModel):
     # deprecated alias, honored only when `tools` is omitted.
     tools: Optional[bool] = None
     recall: Optional[bool] = None
+    location: Optional[dict] = None
 
 
 class TagsRequest(BaseModel):
@@ -361,6 +367,26 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                         "(charts, tables, images, visual design). Slower than "
                         "fetch_url — prefer fetch_url first. Optional `question` "
                         "focuses the analysis on what you need from the page."),
+    "get_notes": ("Fetch MULTIPLE notes by exact title in one call (full bodies, "
+                  "tags, links) — up to 20. Use for graph traversal: after "
+                  "search_notes or get_note reveals [[links]], read the whole "
+                  "neighborhood in one batch instead of one-at-a-time calls. "
+                  "Check each note's 'created' date before treating it as current."),
+    "calculate": ("Evaluate an arithmetic expression exactly (operators + - * / // "
+                  "% **, math functions like sqrt/log/sin, constants pi and e). "
+                  "ALWAYS use this instead of doing nontrivial arithmetic in your "
+                  "head — mental math is where hallucinated digits come from."),
+    "git_read": ("Read the user's private git repositories (read-only). Actions: "
+                 "list_repos (their repos), list_files (a directory), read_file "
+                 "(one file's content). Use when the user asks about their code "
+                 "or projects; navigate list_repos -> list_files -> read_file."),
+    "transcribe_video": ("Transcribe a video or audio URL (YouTube etc.) from its "
+                         "ACTUAL AUDIO via speech-to-text — not captions. Short "
+                         "videos return the transcript immediately; long ones "
+                         "return status=processing and keep transcribing in the "
+                         "background — tell the user, and call again with the "
+                         "same URL on a later turn to fetch the finished "
+                         "transcript."),
     "list_events": ("List the user's calendar events (notes tagged 'event') within "
                     "a date window, sorted by start time. Use for schedule, "
                     "obligation, and availability questions — 'what's on this "
@@ -465,7 +491,10 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "tag": {"type": "string",
                         "description": "only notes carrying this tag — category "
                                        "tags: user-profile, social-graph, memory, "
-                                       "goal, decision, question, project"}},
+                                       "goal, decision, question, project, event"},
+                "limit": {"type": "integer",
+                          "description": "max results (default 8; tag-only "
+                                         "listings default 20; max 50)"}},
                 "required": ["query"]}}})
     if avail.get("get_note", True):
         schemas.append({"type": "function", "function": {
@@ -474,6 +503,48 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             "parameters": {"type": "object", "properties": {
                 "title": {"type": "string", "description": "exact note title"}},
                 "required": ["title"]}}})
+    if avail.get("get_notes", True):
+        schemas.append({"type": "function", "function": {
+            "name": "get_notes",
+            "description": descs["get_notes"],
+            "parameters": {"type": "object", "properties": {
+                "titles": {"type": "array", "items": {"type": "string"},
+                           "description": "exact note titles (up to 20 per call)"}},
+                "required": ["titles"]}}})
+    if avail.get("calculate", True):
+        schemas.append({"type": "function", "function": {
+            "name": "calculate",
+            "description": descs["calculate"],
+            "parameters": {"type": "object", "properties": {
+                "expression": {"type": "string",
+                               "description": "arithmetic expression, e.g. "
+                                              "'(1200*1.07**10)/12' or "
+                                              "'sqrt(2)*sin(pi/4)'"}},
+                "required": ["expression"]}}})
+    # git_read is self-gating: present only when tools.git is configured.
+    if avail.get("git_read", True) and agent_tools.git_configured():
+        schemas.append({"type": "function", "function": {
+            "name": "git_read",
+            "description": descs["git_read"],
+            "parameters": {"type": "object", "properties": {
+                "action": {"type": "string",
+                           "enum": ["list_repos", "list_files", "read_file"],
+                           "description": "what to do"},
+                "repo": {"type": "string",
+                         "description": "owner/name (required except list_repos)"},
+                "path": {"type": "string",
+                         "description": "file or directory path within the repo"},
+                "ref": {"type": "string",
+                        "description": "branch/tag/commit (default: default branch)"}},
+                "required": ["action"]}}})
+    if avail.get("transcribe_video", True):
+        schemas.append({"type": "function", "function": {
+            "name": "transcribe_video",
+            "description": descs["transcribe_video"],
+            "parameters": {"type": "object", "properties": {
+                "url": {"type": "string",
+                        "description": "video/audio URL (YouTube etc.)"}},
+                "required": ["url"]}}})
     # web_search is self-gating: present only when a SearXNG URL is configured.
     if avail.get("web_search", True) and (tcfg.get("web_search") or {}).get("url"):
         schemas.append(_search_schema("web_search", descs["web_search"]))
@@ -609,6 +680,11 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             tag = (args.get("tag") or "").strip() or None
             # Tag-only listing ("the totality of notes tagged X") gets more room.
             limit = 20 if (tag and not query.strip()) else 8
+            try:
+                if args.get("limit"):
+                    limit = max(1, min(int(args["limit"]), 50))
+            except (TypeError, ValueError):
+                pass
             conn = sqlite3.connect(db_path)
             try:
                 if args.get("mode") == "keyword" or not query.strip():
@@ -623,9 +699,35 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 conn.close()
             return json.dumps([{
                 "title": n["title"], "tags": n["tags"], "links": n["links"],
+                "created": n.get("created"),
                 "score": round(n.get("score", 0), 4),
                 "preview": (n.get("body") or "")[:300],
             } for n in results])
+        if name == "get_notes":
+            titles = [str(t).strip() for t in (args.get("titles") or [])
+                      if str(t).strip()][:20]
+            if not titles:
+                return json.dumps({"error": "get_notes needs a list of note titles"})
+            conn = sqlite3.connect(db_path)
+            try:
+                out, total = [], 0
+                for t in titles:
+                    note = notes_index.get_note_by_title(conn, t)
+                    if note is None:
+                        out.append({"title": t, "error": "no note with this title"})
+                        continue
+                    body = note["body"][:6000]
+                    total += len(body)
+                    out.append({"title": note["title"], "body": body,
+                                "tags": note["tags"], "links": note["links"],
+                                "created": note["created"]})
+                    if total > 60000:
+                        out.append({"note": "batch character budget reached; "
+                                            "request the rest in another call"})
+                        break
+            finally:
+                conn.close()
+            return json.dumps(out)
         if name == "get_note":
             conn = sqlite3.connect(db_path)
             try:
@@ -809,6 +911,15 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                                    "links": e["links"],
                                    "description": (e.get("body") or "")[:300],
                                } for e in events]})
+        if name == "calculate":
+            return json.dumps(agent_tools.calculate(args.get("expression") or ""))
+        if name == "git_read":
+            return json.dumps(agent_tools.git_read(
+                args.get("action") or "", repo=args.get("repo"),
+                path=args.get("path"), ref=args.get("ref")))
+        if name == "transcribe_video":
+            return json.dumps(agent_tools.transcribe_video(
+                db_path, args.get("url") or ""))
         if name == "read_logs":
             lines = logbuffer.get_lines(args.get("lines") or 100,
                                         (args.get("grep") or "").strip() or None)
@@ -1157,6 +1268,7 @@ def _stream_turn_response(
     tools_enabled: bool = False,
     branched: bool = False,
     state: str = "seed",
+    location: Optional[dict] = None,
 ):
     """Build the SSE generator that streams the reply and persists both turns.
 
@@ -1166,6 +1278,10 @@ def _stream_turn_response(
     connection is opened INSIDE the generator (worker thread) to avoid cross-thread
     SQLite use.
     """
+    # Location context line for this turn (empty when no location was sent).
+    location_line = agent_tools.describe_location(location) if location else None
+    store_location = bool(config.get("location", {}).get("store", False))
+
     def event_generator():
         full_response = ""
         synthesis_block = None
@@ -1185,6 +1301,7 @@ def _stream_turn_response(
                     max_rounds=tcfg.get("max_rounds", 5),
                     emit_status=tcfg.get("status_notes", True),
                     emit_results=tcfg.get("show_step_results", False),
+                    extra_system=location_line,
                 ):
                     if ev.get("type") == "token":
                         full_response += ev["content"]
@@ -1234,7 +1351,8 @@ def _stream_turn_response(
                 yield f"data: {json.dumps({'type': 'unfollowed_links', 'links': denied})}\n\n"
         else:
             try:
-                for content in stream_llm_tokens(message, context_list, mode=mode):
+                for content in stream_llm_tokens(message, context_list, mode=mode,
+                                                 extra_system=location_line):
                     full_response += content
                     yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
             except Exception as e:
@@ -1249,6 +1367,7 @@ def _stream_turn_response(
                     context_turns=context_turns, committed=commit,
                     parent_turn_id=user_parent_id, paragraph_index=paragraph_index,
                     branched=branched, state=state,
+                    location=location if (location and store_location) else None,
                 )
                 assistant_turn = create_turn(
                     conn, user_id=user_id, role="assistant", content=full_response,
@@ -1380,6 +1499,7 @@ async def send_message(
             paragraph_index=None,
             tools_enabled=_tools_enabled(request.tools, request.recall),
             state=turn_state,
+            location=request.location,
         )
         return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -1440,6 +1560,7 @@ async def create_branch(
             tools_enabled=_tools_enabled(request.tools, request.recall),
             branched=True,
             state=branch_state,
+            location=request.location,
         )
         return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -2104,6 +2225,51 @@ async def manual_web_search(
         raise HTTPException(status_code=502, detail=out["error"])
     out["query"] = query
     return out
+
+
+@app.get("/api/transcripts")
+async def list_video_transcripts(
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Video transcription jobs (status + metadata; text via /api/transcripts/{id}).
+    Long videos transcribe in the background — this is where they surface."""
+    _require_auth(passkey)
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            from db import list_transcripts
+            transcripts = list_transcripts(conn)
+        finally:
+            conn.close()
+        return {"transcripts": transcripts, "count": len(transcripts)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/transcripts/{transcript_id}")
+async def get_video_transcript(
+    transcript_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """One transcription job, including the full transcript text when done."""
+    _require_auth(passkey)
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            from db import get_transcript
+            t = get_transcript(conn, transcript_id)
+        finally:
+            conn.close()
+        if t is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Transcript {transcript_id} not found")
+        return {"transcript": t}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/models")

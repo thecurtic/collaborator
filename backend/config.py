@@ -160,6 +160,13 @@ def load_config() -> dict:
                 "preload": False,      # local backend: warm-load the default voice at startup
             },
         },
+        "location": {
+            # Per-turn location context (frontend sends {lat, lon, accuracy, ts}
+            # on /api/messages when granted). Coordinates never leave this
+            # machine: named places below replace external geocoding.
+            "store": False,   # True: also persist location on user turn rows
+            "places": {},     # e.g. home: {lat: .., lon: .., radius_m: 150}
+        },
         "titles": {
             # Auto-generated conversation titles on ROOT turns (seeds and trees
             # alike; separate from the user-set name, which always wins in the UI).
@@ -193,7 +200,25 @@ def load_config() -> dict:
                 "fetch_url": True,     # read a specific page (pasted links)
                 "screenshot_page": True,  # self-gating: needs webtool_url + a vision model
                 "list_events": True,   # calendar window over notes tagged 'event'
+                "get_notes": True,     # batch note reads (graph traversal)
+                "calculate": True,     # AST-whitelisted arithmetic (no eval)
+                "git_read": True,      # self-gating: needs tools.git.api_url + token
+                "transcribe_video": True,  # yt-dlp audio -> STT (never captions)
                 "read_logs": True,     # agent can read its own recent server logs
+            },
+            "git": {
+                # Read-only forge access (Gitea; GitHub API-compatible for these
+                # routes). The git_read tool registers only when BOTH are set.
+                "api_url": None,       # e.g. "http://<gitea-host>:3000/api/v1"
+                "token": None,         # READ-ONLY token (set in .config.yaml)
+                "max_chars": 20000,
+                "timeout": 15,
+            },
+            "transcribe_video": {
+                "sync_max_minutes": 10,   # <= this: transcript returned in-turn
+                "max_minutes": 240,       # hard cap (raise if you really want more)
+                "return_chars": 15000,    # transcript chars handed to the model
+                "proxy": None,            # yt-dlp egress proxy (else direct)
             },
             "web_search": {
                 "url": None,           # SearXNG base URL (e.g. tailnet IP); None = tool off

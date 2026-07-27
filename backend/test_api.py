@@ -20,7 +20,7 @@ from starlette.testclient import TestClient
 
 
 def _mock_stream():
-    def fake_stream(message, context_turns=None, mode=None, recall=None):
+    def fake_stream(message, context_turns=None, mode=None, recall=None, **kw):
         for tok in ["Hello!", " ", "How can I help?"]:
             yield tok
     main.stream_llm_tokens = fake_stream

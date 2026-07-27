@@ -96,6 +96,25 @@ def test_search_notes_tag_filter_executor():
     print("✓ search_notes executor: tag filter + tag-only category listing")
 
 
+def test_get_notes_batch_traversal():
+    c, cfg, dbp = _fresh()
+    _seed_note(cfg, dbp, "Alpha", "Links to [[Beta]] and [[Gamma]].", tags=["decision"])
+    _seed_note(cfg, dbp, "Beta", "Beta body.")
+    _seed_note(cfg, dbp, "Gamma", "Gamma body.")
+    _, execute, _ = main._build_tools(dbp)
+
+    out = json.loads(execute("get_notes", {"titles": ["Alpha", "beta", "Nope"]}))
+    assert out[0]["title"] == "Alpha" and out[0]["links"] == ["Beta", "Gamma"]
+    assert out[1]["title"] == "Beta" and out[1]["body"] == "Beta body."
+    assert out[2] == {"title": "Nope", "error": "no note with this title"}
+    assert "error" in json.loads(execute("get_notes", {"titles": []}))
+    # search_notes honors an explicit limit.
+    hits = json.loads(execute("search_notes",
+                              {"query": "body", "mode": "keyword", "limit": 1}))
+    assert len(hits) == 1 and "created" in hits[0]
+    print("✓ get_notes batch (case-insensitive, misses flagged) + search limit")
+
+
 def test_propose_event_validated_and_approved_to_frontmatter():
     c, cfg, dbp = _fresh()
     _, execute, _ = main._build_tools(dbp)

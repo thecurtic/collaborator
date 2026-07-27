@@ -190,6 +190,23 @@ def ensure_conversation_schema(conn) -> None:
     # approval (NOTES-FORMAT.md boundary).
     if "fields" not in draft_cols:
         cursor.execute("ALTER TABLE note_drafts ADD COLUMN fields TEXT")
+    # Video transcripts (STT on video audio). Short videos transcribe in-turn;
+    # long ones populate this table from a background thread and are surfaced
+    # via GET /api/transcripts (and re-asking the transcribe_video tool).
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transcripts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT NOT NULL,
+            title TEXT,
+            duration_s INTEGER,
+            status TEXT NOT NULL DEFAULT 'processing',
+            text TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            finished_at TEXT
+        )
+    """)
+
     # Event columns on the notes index (parsed from frontmatter at index time).
     ni_cols = {row[1] for row in cursor.execute("PRAGMA table_info(notes_index)").fetchall()}
     for col in ("event_start TEXT", "event_end TEXT", "event_all_day INTEGER"):
@@ -235,6 +252,10 @@ def _migrate_turns_branching(conn) -> None:
         # title_turns = tree turn count when it was generated (lazy regeneration).
         cursor.execute("ALTER TABLE turns ADD COLUMN title TEXT")
         cursor.execute("ALTER TABLE turns ADD COLUMN title_turns INTEGER")
+    if "location" not in existing:
+        # JSON {lat, lon, accuracy, ts} — populated ONLY when location.store is
+        # enabled (togglable; ephemeral-by-default is the privacy default).
+        cursor.execute("ALTER TABLE turns ADD COLUMN location TEXT")
     conn.commit()
 
     # When parent_turn_id was just introduced, link pre-existing turns into one
@@ -304,6 +325,7 @@ def create_turn(
     paragraph_index: Optional[int] = None,
     branched: bool = False,
     state: str = "seed",
+    location: Optional[dict] = None,
 ) -> dict:
     """Create a new turn in the database.
 
@@ -318,11 +340,13 @@ def create_turn(
         """
         INSERT INTO turns
             (user_id, role, content, context_turns, committed, model_name,
-             token_count, parent_turn_id, paragraph_index, branched, state)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             token_count, parent_turn_id, paragraph_index, branched, state,
+             location)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (user_id, role, content, context_turns, committed, model_name,
-         token_count, parent_turn_id, paragraph_index, 1 if branched else 0, state)
+         token_count, parent_turn_id, paragraph_index, 1 if branched else 0, state,
+         _json.dumps(location) if location else None)
     )
     db.commit()
 
@@ -980,6 +1004,58 @@ def update_note_draft(db, draft_id: int, *, title: Optional[str] = None,
         db.cursor().execute(f"UPDATE note_drafts SET {', '.join(sets)} WHERE id = ?", params)
         db.commit()
     return get_note_draft(db, draft_id)
+
+
+# --- Video transcripts (STT jobs) ----------------------------------------------
+
+TRANSCRIPT_COLUMNS = ["id", "url", "title", "duration_s", "status", "text",
+                      "error", "created_at", "finished_at"]
+_TRANSCRIPT_COLS = ", ".join(TRANSCRIPT_COLUMNS)
+
+
+def create_transcript(db, url: str, title: Optional[str],
+                      duration_s: Optional[int]) -> dict:
+    cursor = db.cursor()
+    cursor.execute(
+        "INSERT INTO transcripts (url, title, duration_s) VALUES (?, ?, ?)",
+        (url, title, duration_s))
+    db.commit()
+    return get_transcript(db, cursor.lastrowid)
+
+
+def set_transcript_result(db, transcript_id: int, text: Optional[str] = None,
+                          error: Optional[str] = None) -> None:
+    db.cursor().execute(
+        "UPDATE transcripts SET status = ?, text = ?, error = ?, "
+        "finished_at = datetime('now') WHERE id = ?",
+        ("error" if error else "done", text, error, transcript_id))
+    db.commit()
+
+
+def get_transcript(db, transcript_id: int) -> Optional[dict]:
+    row = db.cursor().execute(
+        f"SELECT {_TRANSCRIPT_COLS} FROM transcripts WHERE id = ?",
+        (transcript_id,)).fetchone()
+    return dict(zip(TRANSCRIPT_COLUMNS, row)) if row else None
+
+
+def get_transcript_by_url(db, url: str) -> Optional[dict]:
+    """Most recent non-errored transcript row for a URL (errors don't block retry)."""
+    row = db.cursor().execute(
+        f"SELECT {_TRANSCRIPT_COLS} FROM transcripts WHERE url = ? "
+        "AND status != 'error' ORDER BY id DESC LIMIT 1", (url,)).fetchone()
+    return dict(zip(TRANSCRIPT_COLUMNS, row)) if row else None
+
+
+def list_transcripts(db) -> List[dict]:
+    rows = db.cursor().execute(
+        f"SELECT {_TRANSCRIPT_COLS} FROM transcripts ORDER BY id DESC").fetchall()
+    out = []
+    for row in rows:
+        d = dict(zip(TRANSCRIPT_COLUMNS, row))
+        d["chars"] = len(d.pop("text") or "")   # listing omits the body
+        out.append(d)
+    return out
 
 
 def set_note_draft_status(db, draft_id: int, status: str) -> Optional[dict]:

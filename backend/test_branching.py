@@ -96,7 +96,7 @@ def test_branch_endpoint_and_tree_api():
     from starlette.testclient import TestClient
 
     # Mock the LLM with a deterministic multi-paragraph reply.
-    def fake_stream(message, context_turns=None, mode=None, recall=None):
+    def fake_stream(message, context_turns=None, mode=None, recall=None, **kw):
         for tok in ["First idea.", "\n\n", "Second idea.", "\n\n", "Third idea."]:
             yield tok
     main.stream_llm_tokens = fake_stream
@@ -173,7 +173,7 @@ def test_branched_flag_distinguishes_fork_from_continuation():
     from starlette.testclient import TestClient
     import json as _json
 
-    def fake_stream(message, context_turns=None, mode=None, recall=None):
+    def fake_stream(message, context_turns=None, mode=None, recall=None, **kw):
         yield "ok"
     main.stream_llm_tokens = fake_stream
     c = TestClient(main.app)
@@ -209,7 +209,7 @@ def test_messages_continue_from_active_leaf():
     import json as _json
 
     captured = {}
-    def fake_stream(message, context_turns=None, mode=None, recall=None):
+    def fake_stream(message, context_turns=None, mode=None, recall=None, **kw):
         captured["context"] = [t["content"] for t in (context_turns or [])]
         yield "ok"
     main.stream_llm_tokens = fake_stream
