@@ -10,6 +10,7 @@ import { useState, type FormEvent } from 'react';
 import { api } from '@/api/collaborator';
 import { ApiRequestError } from '@/api/http';
 import { Button } from '@/components/ui/button';
+import { cleanUrl, cleanUrlsInText } from '@/lib/urlClean';
 import type { WebSearch } from '@/domain/models';
 
 // Session cache: the screen unmounts when you navigate away — returning
@@ -46,6 +47,14 @@ function host(url: string): string {
   } catch {
     return url;
   }
+}
+
+/**
+ * SearXNG relays whatever the engines return — only http(s) may become a
+ * clickable href (a javascript: URL here would run in the app origin).
+ */
+function safeHref(url: string): string {
+  return /^https?:\/\//i.test(url) ? cleanUrl(url) : '#';
 }
 
 function CopyUrlButton({ url }: { url: string }) {
@@ -198,7 +207,7 @@ export function WebSearchView({
                   {result.results.map((r) => (
                     <li key={r.url} className="flex items-start gap-1 px-4 py-3">
                       <a
-                        href={r.url}
+                        href={safeHref(r.url)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="min-w-0 flex-1"
@@ -216,13 +225,13 @@ export function WebSearchView({
                           </span>
                         )}
                       </a>
-                      <CopyUrlButton url={r.url} />
+                      <CopyUrlButton url={cleanUrl(r.url)} />
                       <Button
                         variant="ghost"
                         size="icon"
                         aria-label="Chat about this page"
                         title="Chat about this page — the model reads it first"
-                        onClick={() => onStartChat(`${r.url}\n\n`)}
+                        onClick={() => onStartChat(`${cleanUrl(r.url)}\n\n`)}
                         className="h-8 w-8 shrink-0 text-muted-foreground"
                       >
                         <MessageSquare className="h-4 w-4" />
@@ -237,7 +246,7 @@ export function WebSearchView({
                   of the URLs; your question goes underneath. */}
               <button
                 type="button"
-                onClick={() => onStartChat(draftFromSearch(result))}
+                onClick={() => onStartChat(cleanUrlsInText(draftFromSearch(result)))}
                 className="mx-4 my-4 flex w-[calc(100%-2rem)] items-center justify-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm text-primary hover:bg-primary/10"
               >
                 <MessageSquare className="h-4 w-4" />

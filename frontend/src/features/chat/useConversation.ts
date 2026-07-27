@@ -159,8 +159,10 @@ export function useConversation(reloadSignal: number) {
   }, []);
 
   /**
-   * Run a streamed send/branch. Resolves true on success (or a deliberate
-   * stop), false on failure — so the composer can restore the lost draft.
+   * Run a streamed send/branch. 'ok' = completed; 'stopped' = the user
+   * aborted (partial exchange kept server-side); 'failed' = error. Callers
+   * restore the composer draft for anything but 'ok' — a stopped reply
+   * usually means the message needs a tweak before resending.
    */
   const runStream = useCallback(
     async (
@@ -172,7 +174,7 @@ export function useConversation(reloadSignal: number) {
         id: number | null;
         contextWindow: number | null;
       }>,
-    ): Promise<boolean> => {
+    ): Promise<'ok' | 'stopped' | 'failed'> => {
       const abort = new AbortController();
       abortRef.current = abort;
       setSending(true);
@@ -208,7 +210,7 @@ export function useConversation(reloadSignal: number) {
           saveTurnSources(res.id, activityRef.current);
         }
         if (res.contextWindow != null) setContextWindow(res.contextWindow);
-        return true;
+        return 'ok';
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') {
           // Deliberate stop: sync whatever the backend persisted, no error.
@@ -217,10 +219,10 @@ export function useConversation(reloadSignal: number) {
           } catch {
             /* offline — the next load will catch up */
           }
-          return true;
+          return 'stopped';
         }
         setError(errMessage(err));
-        return false;
+        return 'failed';
       } finally {
         abortRef.current = null;
         setSending(false);
@@ -241,10 +243,10 @@ export function useConversation(reloadSignal: number) {
   const clearProposedDrafts = useCallback(() => setProposedDrafts([]), []);
 
   const send = useCallback(
-    (message: string): Promise<boolean> => {
+    async (message: string): Promise<boolean> => {
       const trimmed = message.trim();
-      if (!trimmed) return Promise.resolve(true);
-      return runStream(trimmed, (handlers, signal) =>
+      if (!trimmed) return true;
+      const outcome = await runStream(trimmed, (handlers, signal) =>
         api.sendMessageStream(
           // Active leaf to continue from (omit for a brand-new conversation).
           {
@@ -256,6 +258,8 @@ export function useConversation(reloadSignal: number) {
           signal,
         ),
       );
+      // false restores the composer draft — on stop too, for tweak-and-resend.
+      return outcome === 'ok';
     },
     [runStream],
   );
@@ -287,7 +291,7 @@ export function useConversation(reloadSignal: number) {
       // stream (the reload inside runStream rebuilds the index).
       const root = rootOfTurn(parentTurnId);
       const seedRootId = root?.state === 'seed' ? root.id : null;
-      const ok = await runStream(trimmed, (handlers, signal) =>
+      const outcome = await runStream(trimmed, (handlers, signal) =>
         api.branchMessage(
           {
             parentTurnId,
@@ -301,8 +305,9 @@ export function useConversation(reloadSignal: number) {
           signal,
         ),
       );
-      if (ok && seedRootId != null) await promote(seedRootId);
-      return ok;
+      // A stopped branch still exists server-side → the graduation stands.
+      if (outcome !== 'failed' && seedRootId != null) await promote(seedRootId);
+      return outcome === 'ok';
     },
     [runStream, rootOfTurn, promote],
   );
@@ -349,7 +354,7 @@ export function useConversation(reloadSignal: number) {
         return false;
       }
 
-      const ok = await runStream(trimmed, (handlers, signal) =>
+      const outcome = await runStream(trimmed, (handlers, signal) =>
         u.branched && parentId != null && parentId !== VIRTUAL_ROOT
           ? api.branchMessage(
               {
@@ -376,7 +381,8 @@ export function useConversation(reloadSignal: number) {
 
       // Restore the name onto the re-created root/branch-root (the new user
       // turn = parent of the streamed assistant turn in the fresh index).
-      if (ok && keepName && leafRef.current != null) {
+      // Runs on 'stopped' too — the partial exchange was persisted.
+      if (outcome !== 'failed' && keepName && leafRef.current != null) {
         const fresh = indexRef.current;
         const newUserId = fresh.parentOf.get(leafRef.current);
         if (newUserId != null && newUserId !== VIRTUAL_ROOT) {
@@ -389,7 +395,7 @@ export function useConversation(reloadSignal: number) {
           }
         }
       }
-      return ok;
+      return outcome === 'ok';
     },
     [runStream, load],
   );

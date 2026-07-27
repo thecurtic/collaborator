@@ -13,9 +13,18 @@ const MOVE_TOLERANCE_PX = 10;
  */
 export function useLongPress(
   onLongPress: () => void,
-  opts: { onClick?: () => void; ms?: number } = {},
+  opts: {
+    onClick?: () => void;
+    ms?: number;
+    /**
+     * Gate: return false to let this press through untouched (e.g. holds on
+     * child regions that own their own hold behavior, like selectable text).
+     * Also skips the contextmenu suppression for those targets.
+     */
+    shouldStart?: (e: PointerEvent | MouseEvent) => boolean;
+  } = {},
 ) {
-  const { onClick, ms = 500 } = opts;
+  const { onClick, ms = 500, shouldStart } = opts;
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fired = useRef(false);
   const origin = useRef<{ x: number; y: number } | null>(null);
@@ -31,6 +40,7 @@ export function useLongPress(
   return {
     onPointerDown: (e: PointerEvent) => {
       fired.current = false;
+      if (shouldStart && !shouldStart(e)) return;
       origin.current = { x: e.clientX, y: e.clientY };
       timer.current = setTimeout(() => {
         timer.current = null;
@@ -60,6 +70,8 @@ export function useLongPress(
       onClick?.();
     },
     onContextMenu: (e: MouseEvent) => {
+      // Excluded targets keep their native context menu (copy on selections).
+      if (shouldStart && !shouldStart(e)) return;
       // Desktop right-click = same intent; also blocks Android's native
       // long-press menu from stacking on top of ours.
       e.preventDefault();

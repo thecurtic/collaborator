@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
   type Ref,
@@ -20,6 +21,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { useDictation } from '@/features/voice/useDictation';
 import { useWakeLock } from '@/features/voice/useWakeLock';
+import { cleanUrlsInText } from '@/lib/urlClean';
 import { appendQuoteToDraft } from './quote';
 
 /** Imperative surface for quote-replies and edit-and-resend prefills. */
@@ -32,7 +34,10 @@ export interface ComposerHandle {
 
 interface ComposerProps {
   disabled: boolean;
-  /** Resolves false if the send failed — the draft is then restored. */
+  /**
+   * Resolves false if the send failed OR was stopped mid-response — the
+   * draft is then restored for tweak-and-resend.
+   */
   onSend: (message: string) => Promise<boolean>;
   /** Abort the in-flight response stream (shown as a stop button). */
   onStop?: () => void;
@@ -117,6 +122,24 @@ export function Composer({
     }
   }
 
+  // Pasted links get their tracking params stripped at the door, so the
+  // cleaned URL is what the user sees, sends, and stores.
+  function handlePaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    const raw = e.clipboardData.getData('text/plain');
+    if (!raw || !/https?:\/\//i.test(raw)) return;
+    const cleaned = cleanUrlsInText(raw);
+    if (cleaned === raw) return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    setValue((v) => v.slice(0, start) + cleaned + v.slice(end));
+    requestAnimationFrame(() => {
+      const caret = start + cleaned.length;
+      el.setSelectionRange(caret, caret);
+    });
+  }
+
   async function handleMic() {
     setVoiceNotice(null);
     if (recording) {
@@ -172,6 +195,7 @@ export function Composer({
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             rows={1}
             placeholder={
               dictation === 'finishing'

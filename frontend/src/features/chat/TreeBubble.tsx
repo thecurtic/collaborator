@@ -219,14 +219,21 @@ function CopyButton({ text }: { text: string }) {
 // Drag distance (px) that arms the swipe-down subtree delete.
 const SUBTREE_DRAG_PX = 48;
 
+// Furthest the icon visually follows the finger (a bit past the threshold).
+const SUBTREE_DRAG_MAX_PX = 64;
+
 /**
  * Delete with a gesture: tap = this turn only (children reparent up); press,
  * drag DOWN past the threshold, release = this turn and everything downstream.
- * The icon turns red while the subtree delete is armed. No confirm dialogs.
+ * The trash icon rides along with the finger and turns red once the subtree
+ * delete is armed; drag back up to disarm. No confirm dialogs.
  */
 function DeleteButton({ onDelete }: { onDelete: (subtree: boolean) => void }) {
   const startY = useRef<number | null>(null);
-  const [armed, setArmed] = useState(false);
+  // How far the icon is dragged down (px, clamped). Drives the visual.
+  const [dy, setDy] = useState(0);
+  const dragging = startY.current != null;
+  const armed = dy > SUBTREE_DRAG_PX;
   return (
     <Button
       variant="ghost"
@@ -235,24 +242,29 @@ function DeleteButton({ onDelete }: { onDelete: (subtree: boolean) => void }) {
       title="Delete — tap: this turn · hold + swipe down: this turn and everything after"
       onPointerDown={(e) => {
         startY.current = e.clientY;
-        setArmed(false);
+        setDy(0);
         e.currentTarget.setPointerCapture(e.pointerId);
       }}
       onPointerMove={(e) => {
         if (startY.current != null) {
-          setArmed(e.clientY - startY.current > SUBTREE_DRAG_PX);
+          setDy(
+            Math.min(
+              Math.max(e.clientY - startY.current, 0),
+              SUBTREE_DRAG_MAX_PX,
+            ),
+          );
         }
       }}
       onPointerUp={(e) => {
         if (startY.current == null) return;
         const subtree = e.clientY - startY.current > SUBTREE_DRAG_PX;
         startY.current = null;
-        setArmed(false);
+        setDy(0);
         onDelete(subtree);
       }}
       onPointerCancel={() => {
         startY.current = null;
-        setArmed(false);
+        setDy(0);
       }}
       onClick={(e) => {
         // Keyboard activation (Enter/Space) produces a detail-0 click with no
@@ -260,11 +272,18 @@ function DeleteButton({ onDelete }: { onDelete: (subtree: boolean) => void }) {
         if (e.detail === 0) onDelete(false);
       }}
       className={cn(
-        '-my-1 h-9 w-9 touch-none opacity-70 hover:opacity-100',
+        '-my-1 h-9 w-9 touch-none overflow-visible opacity-70 hover:opacity-100',
         armed && 'text-destructive opacity-100',
       )}
     >
-      <Trash2 className="h-4 w-4" />
+      <Trash2
+        className="relative z-10 h-4 w-4"
+        style={{
+          transform: dy > 0 ? `translateY(${dy}px)` : undefined,
+          // Track the finger 1:1 while dragging; ease back on release.
+          transition: dragging ? 'none' : 'transform 150ms ease-out',
+        }}
+      />
     </Button>
   );
 }
@@ -318,7 +337,9 @@ export function TreeBubble({
   inContext = true,
 }: TreeBubbleProps) {
   const isUser = node.role === 'user';
-  // Hold the message text to copy the whole turn (buttons stay tap-only).
+  // Hold the BUBBLE (padding, footer, gaps) to copy the whole turn. Holds on
+  // the text itself pass through to native text selection, so partial copies
+  // still work; holds on buttons/links stay taps.
   const [copiedAll, setCopiedAll] = useState(false);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
@@ -327,13 +348,19 @@ export function TreeBubble({
     },
     [],
   );
-  const copyPress = useLongPress(() => {
-    void navigator.clipboard?.writeText(node.content).then(() => {
-      setCopiedAll(true);
-      if (copiedTimer.current) clearTimeout(copiedTimer.current);
-      copiedTimer.current = setTimeout(() => setCopiedAll(false), 1200);
-    });
-  });
+  const bubblePress = useLongPress(
+    () => {
+      void navigator.clipboard?.writeText(node.content).then(() => {
+        setCopiedAll(true);
+        if (copiedTimer.current) clearTimeout(copiedTimer.current);
+        copiedTimer.current = setTimeout(() => setCopiedAll(false), 1200);
+      });
+    },
+    {
+      shouldStart: (e) =>
+        !(e.target as HTMLElement).closest('button, a, [data-selectable]'),
+    },
+  );
   const speech = useSpeech();
   const isActive = speech.activeId === node.id;
   const ttsLoading = isActive && speech.status === 'preparing';
@@ -360,10 +387,12 @@ export function TreeBubble({
   return (
     <div className={cn('flex w-full', isUser ? 'justify-end' : 'justify-start')}>
       <div
+        {...bubblePress}
+        title="Hold to copy the whole turn"
         className={cn(
-          'relative rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed sm:text-sm',
-          // Agent turns take the full width (margins match left/right); user
-          // turns keep the classic right-aligned offset.
+          // select-none scopes the hold-to-copy zones; text regions opt back
+          // in with select-text ([data-selectable]) for native selection.
+          'relative select-none rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed [-webkit-touch-callout:none] sm:text-sm',
           isUser
             ? 'max-w-[85%] bg-primary text-primary-foreground sm:max-w-[80%]'
             : 'w-full border border-border bg-card text-card-foreground',
@@ -375,7 +404,10 @@ export function TreeBubble({
           </span>
         )}
         {reading ? (
-          <div className={cn('space-y-1.5', !inContext && 'opacity-60')}>
+          <div
+            data-selectable
+            className={cn('select-text space-y-1.5', !inContext && 'opacity-60')}
+          >
             {splitParagraphs(node.content).map(({ text: p, start }, i) =>
               p.trim() ? (
                 <p
@@ -412,21 +444,15 @@ export function TreeBubble({
                       'bg-primary/10 px-2 py-1 ring-1 ring-primary/30',
                   )}
                 >
-                  {/* Hold the text to copy the whole turn. select-none only on
-                      touch-first sizes so desktop text selection still works
-                      (drag past the tolerance cancels the hold anyway). */}
+                  {/* Text is natively selectable (hold = OS selection for a
+                      partial copy); the bubble-level hold-to-copy skips
+                      [data-selectable] targets. */}
                   {isUser ? (
-                    <div
-                      {...copyPress}
-                      className="min-w-0 flex-1 select-none [-webkit-touch-callout:none] sm:select-text"
-                    >
+                    <div data-selectable className="min-w-0 flex-1 select-text">
                       <UserText text={block} />
                     </div>
                   ) : (
-                    <div
-                      {...copyPress}
-                      className="min-w-0 flex-1 select-none [-webkit-touch-callout:none] sm:select-text"
-                    >
+                    <div data-selectable className="min-w-0 flex-1 select-text">
                       <Markdown>{block}</Markdown>
                     </div>
                   )}
