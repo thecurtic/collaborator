@@ -11,15 +11,19 @@ with the current date (YYYY-MM-DD) when the descriptions are sent to the model.
 for tools at all" instruction appended to the system prompt.)
 
 ## recall_semantic
-Search the user's past conversation turns by meaning (semantic / embedding similarity).
-Use this when the user refers to earlier discussion, ideas, or decisions and you don't
-know the exact wording — it finds related content even when the words differ. Returns
-matching turns with their text, tags, and branch id.
+SEMANTIC recall: search the user's past conversation turns by cosine similarity over
+embedding vectors — matches by MEANING, not wording. Use this when the user refers to
+earlier discussion, ideas, or decisions and you don't know the exact words used — it
+finds related content even when the vocabulary differs entirely. One of two distinct
+recall methods (the other is recall_keyword; pick deliberately, or use both). Returns
+matching turns with their text, tags, similarity score, and branch id.
 
 ## recall_keyword
-Search the user's past conversation turns by exact keywords or terms. Use this for
-names, specific identifiers, quoted phrases, or when a semantic search might miss a
-literal match. Returns matching turns with their text, tags, and branch id.
+KEYWORD recall: search the user's past conversation turns by exact term match —
+matches by LITERAL WORDING, not meaning. Use this for names, specific identifiers,
+quoted phrases, or when a semantic search might miss an exact string. One of two
+distinct recall methods (the other is recall_semantic; pick deliberately, or use
+both). Returns matching turns with their text, tags, match count, and branch id.
 
 ## synthesize
 Combine retrieved snippets into a concise, first-person memory block. Call this after a

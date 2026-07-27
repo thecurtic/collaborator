@@ -78,7 +78,11 @@ class UserMessage(BaseModel):
     context_turns: Optional[int] = None
     commit: Optional[bool] = True
     user_id: Optional[str] = None
-    # Run recall for this turn. None = use config default (recall.enabled).
+    # Offer the model its tools this turn (recall, notes, web search, fetch, …).
+    # None = use the server default (tools.enabled).
+    tools: Optional[bool] = None
+    # DEPRECATED alias for `tools` (its historical name, from when recall was the
+    # only tool). Honored only when `tools` is omitted; use `tools` instead.
     recall: Optional[bool] = None
     # Conversation stage for a NEW root chat: "seed" (default) or "tree".
     # Ignored on continuations/branches, which inherit the parent's state.
@@ -121,6 +125,9 @@ class BranchRequest(BaseModel):
     commit: Optional[bool] = True
     user_id: Optional[str] = None
     mode: Optional[str] = None
+    # Same semantics as UserMessage: `tools` gates the tool loop; `recall` is the
+    # deprecated alias, honored only when `tools` is omitted.
+    tools: Optional[bool] = None
     recall: Optional[bool] = None
 
 
@@ -250,10 +257,16 @@ def _tools_settings() -> dict:
     return config.get("tools", {}) or {}
 
 
-def _tools_enabled(value: Optional[bool]) -> bool:
-    """Whether to offer tools to the model: request flag overrides config default."""
-    if value is not None:
-        return value
+def _tools_enabled(tools: Optional[bool], recall: Optional[bool] = None) -> bool:
+    """Whether to offer tools to the model this turn.
+
+    Precedence: explicit `tools` flag > legacy `recall` flag (the deprecated
+    alias from when recall was the only tool) > server default (tools.enabled).
+    """
+    if tools is not None:
+        return tools
+    if recall is not None:
+        return recall
     return bool(_tools_settings().get("enabled", False))
 
 
@@ -274,6 +287,20 @@ def _tool_matches_payload(matches: List[dict]) -> List[dict]:
     } for m in matches]
 
 
+def _render_recall_block(matches: List[dict]) -> str:
+    """Readable recall block from raw semantic matches — no LLM call.
+
+    Used when recall_semantic fired but the model never called synthesize, so
+    the GUI's debug view can still show what memory surfaced (and from where).
+    """
+    lines = [f"Recalled {len(matches)} related turn(s) by semantic similarity "
+             "(cosine over embeddings):"]
+    for m in matches[:8]:
+        preview = " ".join((m.get("text") or "").split())[:140]
+        lines.append(f"- ({m.get('role')}, score {m.get('score', 0):.2f}) {preview}")
+    return "\n".join(lines)
+
+
 def _recall_sources(matches: List[dict]) -> List[dict]:
     """Source metadata persisted with a synthesized recall block (for display)."""
     return [{
@@ -289,11 +316,14 @@ def _recall_sources(matches: List[dict]) -> List[dict]:
 # Fallback tool descriptions if tools-spec.md is missing a section (or the file
 # is absent). tools-spec.md is the editable source of truth for what the model sees.
 DEFAULT_TOOL_DESCRIPTIONS = {
-    "recall_semantic": ("Search the user's past conversation turns by meaning (semantic "
-                        "similarity). Use when the user refers to earlier discussion or ideas."),
-    "recall_keyword": ("Search the user's past conversation turns by exact keywords/terms. "
-                       "Use for names, specific words, or when semantic search might miss a "
-                       "literal match."),
+    "recall_semantic": ("SEMANTIC recall: search past conversation turns by cosine "
+                        "similarity over embeddings — matches by MEANING, not wording. "
+                        "Use when the user refers to earlier discussion or ideas without "
+                        "exact words. One of two recall methods (see recall_keyword)."),
+    "recall_keyword": ("KEYWORD recall: search past conversation turns by exact term "
+                       "match — matches by LITERAL WORDING, not meaning. Use for names, "
+                       "specific words, or quoted phrases a semantic search might miss. "
+                       "One of two recall methods (see recall_semantic)."),
     "synthesize": ("Synthesize retrieved items into a concise block. Call after a search "
                    "tool to produce a memory block for the user."),
     "search_notes": ("Search the user's atomic notes (their curated knowledge base) by "
@@ -380,7 +410,8 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
     avail = tcfg.get("available", {}) or {}
     rc = _recall_config()
     exclude_ids = exclude_ids or []
-    state = {"last_matches": [], "synthesis": None, "synthesis_kind": None,
+    state = {"last_matches": [], "semantic_matches": [], "synthesis": None,
+             "synthesis_kind": None,
              "chat_run_id": f"chat-{secrets.token_hex(4)}", "proposed_drafts": [],
              "fetch_count": 0, "first_fetch_host": None, "denied_fetches": []}
 
@@ -513,6 +544,11 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             finally:
                 conn.close()
             state["last_matches"] = matches
+            if name == "recall_semantic":
+                # Semantic fires always leave a visible trace: these matches
+                # become the turn's recall block even if the model never calls
+                # synthesize (the GUI shows it when debug tools are on).
+                state["semantic_matches"] = matches
             return json.dumps(_tool_matches_payload(matches))
         if name == "synthesize":
             block = synthesize(args.get("kind", "memory"), args.get("items", []), args.get("query", ""))
@@ -1002,6 +1038,18 @@ def _stream_turn_response(
             synthesis_block = tool_state.get("synthesis") or None
             if synthesis_block:
                 synthesis_sources = _recall_sources(tool_state.get("last_matches") or [])
+            else:
+                # Semantic recall fired but the model skipped synthesize: still
+                # produce a recall block (rendered from the raw matches, no LLM
+                # call) so the GUI's debug view can show what memory surfaced.
+                sem = tool_state.get("semantic_matches") or []
+                if sem:
+                    synthesis_block = _render_recall_block(sem)
+                    synthesis_sources = _recall_sources(sem)
+            # Stream the block so the frontend can render it live (display is
+            # gated client-side by the debug-tools setting).
+            if synthesis_block:
+                yield f"data: {json.dumps({'type': 'recall_block', 'content': synthesis_block, 'sources': synthesis_sources})}\n\n"
             # Surface any propose_note results so the UI can offer "review drafts".
             proposed = tool_state.get("proposed_drafts") or []
             if proposed:
@@ -1035,9 +1083,13 @@ def _stream_turn_response(
                     parent_turn_id=user_turn["id"], paragraph_index=None,
                     state=state,
                 )
-                # Persist a synthesized recall block on the user turn (per-branch).
+                # Persist the recall block on the user turn (per-branch), and as
+                # the current block (GET /api/recall/current — dead since the
+                # tool-loop migration, revived here).
                 if synthesis_block:
                     set_turn_recall(conn, user_turn["id"], synthesis_block, synthesis_sources)
+                    set_current_recall(conn, synthesis_block, synthesis_sources,
+                                       query=message)
                 # Embed both turns (best-effort) so they're searchable by recall tools.
                 if tools_enabled:
                     for t in (user_turn, assistant_turn):
@@ -1153,7 +1205,7 @@ async def send_message(
             mode=request.mode,
             user_parent_id=parent_id,
             paragraph_index=None,
-            tools_enabled=_tools_enabled(request.recall),
+            tools_enabled=_tools_enabled(request.tools, request.recall),
             state=turn_state,
         )
         return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
@@ -1212,7 +1264,7 @@ async def create_branch(
             mode=request.mode,
             user_parent_id=parent_turn_id,
             paragraph_index=request.paragraph_index,
-            tools_enabled=_tools_enabled(request.recall),
+            tools_enabled=_tools_enabled(request.tools, request.recall),
             branched=True,
             state=branch_state,
         )

@@ -97,6 +97,70 @@ def _scripted_stream(rounds):
     return fake
 
 
+def test_tools_flag_precedence():
+    """`tools` gates the tool loop; `recall` is only a deprecated alias."""
+    cfg = config.get_config()["tools"]
+    orig = cfg.get("enabled", False)
+    cfg["enabled"] = False
+    try:
+        assert main._tools_enabled(True, None) is True
+        assert main._tools_enabled(False, True) is False      # tools beats recall
+        assert main._tools_enabled(None, True) is True        # legacy alias honored
+        assert main._tools_enabled(None, False) is False
+        assert main._tools_enabled(None, None) is False       # server default (off)
+        cfg["enabled"] = True
+        assert main._tools_enabled(None, None) is True        # server default (on)
+        assert main._tools_enabled(False, None) is False      # explicit off wins
+    finally:
+        cfg["enabled"] = orig
+    print("✓ tools flag precedence: tools > recall (deprecated) > config default")
+
+
+def test_semantic_fire_always_leaves_recall_block():
+    """recall_semantic without synthesize still persists + streams a recall block."""
+    import inference, json as _json
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    mem = db.create_turn(conn, None, "user", "the chronicle idea: track thoughts over time")
+    db.set_turn_embedding(conn, mem["id"], [1.0, 0.0])
+    conn.close()
+    main.get_embedding = lambda text: [1.0, 0.0]
+
+    # Round 1: semantic recall. Round 2: final answer — NO synthesize call.
+    rounds = [
+        [{"tool_calls": [{"index": 0, "id": "1", "type": "function",
+                          "function": {"name": "recall_semantic", "arguments": ""}}]},
+         {"tool_calls": [{"index": 0, "function": {"arguments": "{\"query\":\"chronicle\"}"}}]}],
+        [{"content": "You wanted to track thoughts over time."}],
+    ]
+    orig = inference._iter_stream_events
+    inference._iter_stream_events = _scripted_stream(rounds)
+    try:
+        c = TestClient(main.app)
+        r = c.post("/api/messages", json={"message": "what was the chronicle idea?",
+                                          "tools": True})   # new flag, not `recall`
+        events = [_json.loads(l[6:]) for l in r.text.splitlines() if l.startswith("data: ")]
+        block = next(e for e in events if e["type"] == "recall_block")
+        assert "semantic similarity" in block["content"] and "chronicle" in block["content"]
+        assert any(s["turn_id"] == mem["id"] for s in block["sources"])
+
+        done = next(e for e in events if e["type"] == "done")
+        found = {}
+        def walk(n):
+            found[n["id"]] = n
+            for ch in n["children"]:
+                walk(ch)
+        for root in c.get("/api/tree").json()["roots"]:
+            walk(root)
+        assert "semantic similarity" in found[done["user_turn_id"]]["recall"]["content"]
+
+        # GET /api/recall/current is alive again (was null since the tool-loop migration).
+        current = c.get("/api/recall/current").json()["recall"]
+        assert current and "semantic similarity" in current["content"]
+    finally:
+        inference._iter_stream_events = orig
+    print("✓ semantic fire w/o synthesize: recall_block streamed, persisted, current revived")
+
+
 def test_tool_loop_end_to_end():
     """Model calls recall_semantic -> synthesize -> answers; block persists per-turn."""
     import inference, json as _json
