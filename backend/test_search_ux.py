@@ -223,6 +223,68 @@ def test_xml_tool_call_recovered():
     print("✓ XML-style textual tool call executed, not streamed")
 
 
+def test_minimax_xml_tool_call_recovered():
+    """MiniMax's native <minimax:tool_call>/<invoke> form executes, with invented
+    argument keys ("input_string") repaired onto the tool's real parameter."""
+    xml = ('<minimax:tool_call>\n<invoke name="web_search">\n'
+           '<parameter name="input_string">boe governor</parameter>\n'
+           '</invoke>\n</minimax:tool_call>')
+    rounds = [
+        [{"content": xml[:18]}, {"content": xml[18:]}],
+        [{"content": "Answer from search."}],
+    ]
+    executed = []
+    events = _run(rounds, lambda n, a: executed.append((n, a)) or
+                  json.dumps({"results": [{"title": "x"}]}))
+    assert executed == [("web_search", {"query": "boe governor"})]
+    text = "".join(e["content"] for e in events if e["type"] == "token")
+    assert text == "Answer from search." and "invoke" not in text
+    print("✓ minimax XML tool call executed with repaired argument names")
+
+
+def test_minimax_prose_then_blob_intercepted():
+    """Mid-prose <minimax:tool_call> markers arm the guard like <tool_call>."""
+    msg = ('Let me check.\n<minimax:tool_call>\n<invoke name="web_search">\n'
+           '<parameter name="query">x</parameter>\n</invoke>\n</minimax:tool_call>')
+    rounds = [
+        [{"content": msg[:20]}, {"content": msg[20:]}],
+        [{"content": "Done."}],
+    ]
+    executed = []
+    events = _run(rounds, lambda n, a: executed.append((n, a)) or
+                  json.dumps({"results": []}))
+    assert executed == [("web_search", {"query": "x"})]
+    text = "".join(e["content"] for e in events if e["type"] == "token")
+    assert "minimax" not in text and "invoke" not in text
+    print("✓ mid-prose minimax blob intercepted and executed")
+
+
+def test_unknown_tool_name_corrected_not_shown():
+    """A structurally-valid call to a nonexistent tool ("memoryrecall") is never
+    shown to the user; the model is corrected with the real tool list and the
+    loop continues."""
+    xml = ('<minimax:tool_call>\n<invoke name="memoryrecall">\n'
+           '<parameter name="input_string">chronicle</parameter>\n'
+           '</invoke>\n</minimax:tool_call>')
+    rounds = [
+        [{"content": xml}],
+        [{"content": "Here is what I found."}],
+    ]
+    captured = []
+    events = _run(rounds, lambda n, a: json.dumps({}), captured=captured)
+    text = "".join(e["content"] for e in events if e["type"] == "token")
+    assert text == "Here is what I found."
+    assert "memoryrecall" not in text and "invoke" not in text
+    assert any(e["type"] == "status" and "unknown tool" in e.get("label", "")
+               for e in events)
+    # The correction round told the model the real tool list.
+    correction = captured[1]["messages"][-1]
+    assert correction["role"] == "system"
+    assert "do not exist" in correction["content"]
+    assert "web_search" in correction["content"]
+    print("✓ unknown-tool blob suppressed; model corrected with real tool list")
+
+
 def test_final_round_tool_blob_suppressed():
     """If the forced final round still emits a tool-call blob, the user gets an
     honest sentence instead of raw XML/JSON."""

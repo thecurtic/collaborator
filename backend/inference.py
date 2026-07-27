@@ -1276,6 +1276,17 @@ _POSITIONAL_ARG_KEY = {
 }
 
 
+def _normalize_recovered_args(name: str, args) -> Dict:
+    """Repair a recovered call's argument names: a single argument under an
+    invented key ("input_string") maps onto the tool's primary parameter."""
+    if not isinstance(args, dict):
+        return {}
+    key = _POSITIONAL_ARG_KEY.get(name)
+    if key and key not in args and len(args) == 1:
+        return {key: next(iter(args.values()))}
+    return args
+
+
 def _parse_textual_tool_calls(text: str, known_names) -> List[Dict]:
     """Recover tool calls the model wrote as plain text instead of structured
     tool_calls deltas (quantized models especially do this). Accepted dialects:
@@ -1293,6 +1304,23 @@ def _parse_textual_tool_calls(text: str, known_names) -> List[Dict]:
     def _positional(name, value):
         key = _POSITIONAL_ARG_KEY.get(name)
         return {key: value} if key else None
+
+    # MiniMax-style XML (its native training format, seen when the runtime's tool
+    # parser misses): <minimax:tool_call> <invoke name="x"> <parameter name="k">v
+    # </parameter> </invoke> </minimax:tool_call> — tolerant of missing closers.
+    # Unlike the other dialects, unknown tool names are RETURNED (not treated as
+    # prose): this shape is unambiguously a tool call, and the caller uses the
+    # name to correct the model instead of showing the blob to the user.
+    if _re.search(r'<invoke\s+name="', s):
+        calls = []
+        for m in _re.finditer(r'<invoke\s+name="([\w.:-]+)"\s*>(.*?)(?:</invoke>|$)',
+                              s, _re.S):
+            body = m.group(2)
+            args = {k: v.strip() for k, v in _re.findall(
+                r'<parameter\s+name="([\w.:-]+)"\s*>(.*?)(?:</parameter>|$)',
+                body, _re.S)}
+            calls.append({"name": m.group(1), "args": args})
+        return calls
 
     # Call style: <function=name("arg")> / <function=name(key="v", k2="v2")>.
     if _re.match(r"<function=[\w.-]+\s*\(", s):
@@ -1386,8 +1414,8 @@ class _StreamGuard:
     chunks is still caught. Held text that turns out NOT to be a tool call is
     delivered at end of round — nothing is ever dropped.
     """
-    _START = ("{", "[", "```", "<tool_call", "<function")
-    _MID = ("<tool_call", "<function=")
+    _START = ("{", "[", "```", "<tool_call", "<function", "<minimax", "<invoke")
+    _MID = ("<tool_call", "<function=", "<minimax:", "<invoke ")
     _TAIL = max(len(m) for m in _MID) - 1
 
     def __init__(self):
@@ -1534,6 +1562,7 @@ def generate_with_tools(
 
         held_text = guard.held
         recovered = _parse_textual_tool_calls(held_text, known_names) if held_text else []
+        recovered_known = [c for c in recovered if c["name"] in known_names]
 
         if not tool_calls and recovered and not use_tools:
             # Final forced round and the model STILL answered with a tool call.
@@ -1542,6 +1571,24 @@ def generate_with_tools(
                 "I ran out of tool calls this turn before reaching a definitive "
                 "answer. Ask me to continue and I'll pick up from here.")}
             return
+
+        if not tool_calls and recovered and not recovered_known:
+            # Structurally a tool call, but no such tool exists (a hallucinated
+            # name like "memoryrecall" — typically a model that learned about its
+            # tools from prose without seeing the schemas). Never show the blob;
+            # tell the model the real tool list and let it retry next round.
+            names = ", ".join(sorted({c["name"] for c in recovered}))
+            print(f"Warning: model called unknown tool(s) as text: {names}")
+            if emit_status:
+                yield {"type": "status",
+                       "label": f"Model called an unknown tool ({names}); correcting…"}
+            messages.append({"role": "assistant", "content": held_text})
+            messages.append({"role": "system", "content": (
+                f"The tool(s) [{names}] do not exist. The ONLY available tools are: "
+                + ", ".join(sorted(known_names)) + ". Invoke one of them through "
+                "the native tool-calling interface with its exact name and "
+                "parameters, or answer the user in plain prose.")})
+            continue
 
         if not tool_calls and not recovered:
             if held_text:
@@ -1560,11 +1607,13 @@ def generate_with_tools(
             # any prose that was streamed) — in-context teaching by example, which
             # matters more than instructions for weaker/quantized models. The
             # warning lands in the ring buffer, so read_logs can reveal how often
-            # a model misfires this way.
+            # a model misfires this way. Argument keys are repaired en route
+            # ("input_string" -> the tool's real primary parameter).
             print("Warning: recovered textual tool call(s) from model output: "
-                  + ", ".join(c["name"] for c in recovered))
-            ordered = [{"id": None, "name": c["name"], "args": json.dumps(c["args"])}
-                       for c in recovered]
+                  + ", ".join(c["name"] for c in recovered_known))
+            ordered = [{"id": None, "name": c["name"],
+                        "args": json.dumps(_normalize_recovered_args(c["name"], c["args"]))}
+                       for c in recovered_known]
             assistant_content = "".join(emitted_parts).strip() or None
 
         # Record the assistant's tool-call message, then execute each call.
