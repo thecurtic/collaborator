@@ -194,7 +194,7 @@ def decode_final_pcm(pcm: bytes, language: Optional[str] = None) -> str:
 
 def transcribe_batch(audio, language: Optional[str] = None) -> str:
     """One-shot transcription (file path or float32 array) with the final model.
-    Used by POST /api/transcribe."""
+    Used by POST /api/transcribe and transcribe_video."""
     base = _stt_remote()
     if base:
         if isinstance(audio, (str, os.PathLike)):
@@ -204,9 +204,14 @@ def transcribe_batch(audio, language: Optional[str] = None) -> str:
             import numpy as np
             arr = np.clip(np.asarray(audio, dtype="float32"), -1.0, 1.0)
             wav = pcm_to_wav((arr * 32767.0).astype("<i2").tobytes())
+        # Scale the timeout with audio length (a 42-minute video is not a
+        # tap-to-record utterance): assume 16k mono PCM16 (~32 KB/s) and allow
+        # half of real-time on top of the configured floor.
+        audio_seconds = max(0, (len(wav) - 44)) / (SAMPLE_RATE * BYTES_PER_SAMPLE)
+        timeout = max(stt_config().get("remote_final_timeout", 120),
+                      60 + audio_seconds / 2)
         return _remote_transcribe(
-            base, wav, _model_key("final")[0], language,
-            stt_config().get("remote_final_timeout", 120))[0]
+            base, wav, _model_key("final")[0], language, timeout)[0]
     model, lock = _get_stt_model(*_model_key("final"))
     with lock:
         segments, _info = model.transcribe(audio, language=language or "en")

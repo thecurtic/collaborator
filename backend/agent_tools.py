@@ -252,6 +252,7 @@ def transcribe_video(db_path: str, url: str) -> dict:
     cfg = _video_cfg()
     return_chars = cfg.get("return_chars", 15000)
 
+    previous_error = None
     conn = sqlite3.connect(db_path)
     try:
         existing = _db.get_transcript_by_url(conn, url)
@@ -265,6 +266,10 @@ def transcribe_video(db_path: str, url: str) -> dict:
             return {"url": url, "title": existing["title"], "status": "processing",
                     "note": "Still transcribing in the background — tell the user "
                             "and check again next turn."}
+        if existing and existing["status"] == "error":
+            # Surface the failure honestly AND retry — never mask an error as
+            # eternal "processing". The model should relay the error to the user.
+            previous_error = existing.get("error")
     finally:
         conn.close()
 
@@ -284,15 +289,19 @@ def transcribe_video(db_path: str, url: str) -> dict:
             try:
                 text = _download_and_transcribe(url)
             except Exception as e:
+                print(f"Warning: transcribe_video failed for {url}: {e}")
                 _db.set_transcript_result(conn, row["id"], error=str(e)[:300])
                 return {"error": f"transcription failed: {str(e)[:200]}"}
             _db.set_transcript_result(conn, row["id"], text=text)
         finally:
             conn.close()
-        return {"url": url, "title": meta["title"],
-                "duration_s": meta["duration_s"], "status": "done",
-                "transcript": text[:return_chars],
-                "truncated": len(text) > return_chars}
+        out = {"url": url, "title": meta["title"],
+               "duration_s": meta["duration_s"], "status": "done",
+               "transcript": text[:return_chars],
+               "truncated": len(text) > return_chars}
+        if previous_error:
+            out["note"] = f"an earlier attempt failed ({previous_error}); this retry succeeded"
+        return out
 
     # Long video: background job, surfaced via the transcripts table.
     conn = sqlite3.connect(db_path)
@@ -303,61 +312,53 @@ def transcribe_video(db_path: str, url: str) -> dict:
 
     def _worker():
         import sqlite3 as _sq
+        print(f"transcribe_video: background job #{row['id']} started "
+              f"({minutes:.0f} min): {url}")
         wconn = _sq.connect(db_path)
         try:
             try:
                 text = _download_and_transcribe(url)
                 _db.set_transcript_result(wconn, row["id"], text=text)
+                print(f"transcribe_video: job #{row['id']} done "
+                      f"({len(text)} chars)")
             except Exception as e:
+                print(f"Warning: transcribe_video job #{row['id']} failed: {e}")
                 _db.set_transcript_result(wconn, row["id"], error=str(e)[:300])
         finally:
             wconn.close()
 
     threading.Thread(target=_worker, daemon=True,
                      name=f"transcribe-{row['id']}").start()
-    return {"url": url, "title": meta["title"], "duration_s": meta["duration_s"],
-            "status": "processing",
-            "note": f"~{minutes:.0f} min video — transcribing in the background. "
-                    "Tell the user it's underway; call this tool again with the "
-                    "same URL on a later turn to fetch the finished transcript."}
+    out = {"url": url, "title": meta["title"], "duration_s": meta["duration_s"],
+           "status": "processing",
+           "note": f"~{minutes:.0f} min video — transcribing in the background. "
+                   "Tell the user it's underway; call this tool again with the "
+                   "same URL on a later turn to fetch the finished transcript."}
+    if previous_error:
+        out["note"] += (f" NOTE: a previous attempt FAILED with: {previous_error} "
+                        "— tell the user; if this retry hits the same problem "
+                        "you'll see the error on the next check.")
+    return out
 
 
-# --- Location (named places + distance) -----------------------------------------
-
-
-def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance in meters."""
-    r = 6371000.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
+# --- Location -------------------------------------------------------------------
 
 
 def describe_location(loc: dict) -> str:
-    """Context line for a turn's location: named place when within a configured
-    radius, distance-to-nearest otherwise, raw coordinates as the fallback.
-    Never calls an external geocoder — coordinates stay on this machine."""
+    """Context line for a turn's location: raw coordinates, nothing more.
+
+    Deliberately minimal (user decision 2026-07-28): no place naming, no
+    geocoding — coordinates become useful when OSM browsing arrives. Nothing
+    ever leaves this machine."""
     try:
         lat, lon = float(loc["lat"]), float(loc["lon"])
     except (KeyError, TypeError, ValueError):
         return ""
-    places = (get_config().get("location", {}) or {}).get("places") or {}
-    nearest_name, nearest_m = None, None
-    for name, p in places.items():
-        try:
-            d = haversine_m(lat, lon, float(p["lat"]), float(p["lon"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-        if nearest_m is None or d < nearest_m:
-            nearest_name, nearest_m = name, d
-        if d <= float(p.get("radius_m", 150)):
-            return (f"User location right now: at {name}. Use only when relevant; "
-                    "never volunteer raw coordinates.")
-    if nearest_name is not None and nearest_m is not None and nearest_m < 50000:
-        return (f"User location right now: {nearest_m / 1000:.1f} km from "
-                f"{nearest_name} ({lat:.5f}, {lon:.5f}). Use only when relevant; "
-                "never volunteer raw coordinates.")
-    return (f"User location right now: {lat:.5f}, {lon:.5f}"
-            + (f" (±{int(loc['accuracy'])}m)" if loc.get("accuracy") else "")
-            + ". Use only when relevant; never volunteer raw coordinates.")
+    accuracy = ""
+    try:
+        if loc.get("accuracy"):
+            accuracy = f" (±{int(float(loc['accuracy']))}m)"
+    except (TypeError, ValueError):
+        pass
+    return (f"User location right now: {lat:.5f}, {lon:.5f}{accuracy}. "
+            "Use only when relevant.")

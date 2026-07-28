@@ -1040,10 +1040,11 @@ def get_transcript(db, transcript_id: int) -> Optional[dict]:
 
 
 def get_transcript_by_url(db, url: str) -> Optional[dict]:
-    """Most recent non-errored transcript row for a URL (errors don't block retry)."""
+    """Most recent transcript row for a URL — INCLUDING errored attempts, so
+    failures surface to the model instead of masquerading as fresh jobs."""
     row = db.cursor().execute(
         f"SELECT {_TRANSCRIPT_COLS} FROM transcripts WHERE url = ? "
-        "AND status != 'error' ORDER BY id DESC LIMIT 1", (url,)).fetchone()
+        "ORDER BY id DESC LIMIT 1", (url,)).fetchone()
     return dict(zip(TRANSCRIPT_COLUMNS, row)) if row else None
 
 

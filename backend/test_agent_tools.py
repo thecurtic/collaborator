@@ -178,21 +178,38 @@ def test_transcribe_video_background(monkeypatch):
 
 # --- location -------------------------------------------------------------------
 
-def test_describe_location(monkeypatch):
-    loc_cfg = config.get_config()["location"]
-    monkeypatch.setitem(loc_cfg, "places",
-                        {"home": {"lat": 40.0, "lon": -105.0, "radius_m": 150},
-                         "work": {"lat": 40.1, "lon": -105.0, "radius_m": 100}})
-    at_home = agent_tools.describe_location({"lat": 40.0002, "lon": -105.0002})
-    assert "at home" in at_home and "coordinates" in at_home
-    near = agent_tools.describe_location({"lat": 40.05, "lon": -105.0})
-    assert "km from" in near
-    monkeypatch.setitem(loc_cfg, "places", {})
+def test_transcribe_video_error_surfaces_and_retries(monkeypatch):
+    """A failed attempt must never masquerade as eternal 'processing': the next
+    ask surfaces the error in its note and retries."""
+    dbp = os.environ["DB_PATH"]
+    monkeypatch.setattr(agent_tools, "_probe_video",
+                        lambda url: {"title": "Failing", "duration_s": 120})
+    monkeypatch.setattr(agent_tools, "_download_and_transcribe",
+                        lambda url: (_ for _ in ()).throw(
+                            RuntimeError("speaches unreachable")))
+    first = agent_tools.transcribe_video(dbp, "https://youtu.be/fail1")
+    assert "speaches unreachable" in first["error"]
+
+    # Retry after the cause is fixed: succeeds and mentions the earlier failure.
+    monkeypatch.setattr(agent_tools, "_download_and_transcribe",
+                        lambda url: "recovered transcript")
+    second = agent_tools.transcribe_video(dbp, "https://youtu.be/fail1")
+    assert second["status"] == "done"
+    assert second["transcript"] == "recovered transcript"
+    assert "earlier attempt failed" in second["note"]
+    print("✓ transcribe_video: errors surface + retry works (no eternal processing)")
+
+
+def test_describe_location():
     raw = agent_tools.describe_location({"lat": 12.34567, "lon": -1.0,
                                          "accuracy": 20})
-    assert "12.34567" in raw and "±20m" in raw
+    assert raw == ("User location right now: 12.34567, -1.00000 (±20m). "
+                   "Use only when relevant.")
+    no_acc = agent_tools.describe_location({"lat": 40.0, "lon": -105.0})
+    assert "±" not in no_acc and "40.00000, -105.00000" in no_acc
     assert agent_tools.describe_location({"lat": "x"}) == ""
-    print("✓ location line: named place, distance, raw fallback, bad input safe")
+    assert agent_tools.describe_location({}) == ""
+    print("✓ location line: raw coordinates only, bad input safe")
 
 
 def test_location_line_reaches_system_prompt():

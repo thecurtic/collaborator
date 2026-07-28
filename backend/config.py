@@ -162,10 +162,9 @@ def load_config() -> dict:
         },
         "location": {
             # Per-turn location context (frontend sends {lat, lon, accuracy, ts}
-            # on /api/messages when granted). Coordinates never leave this
-            # machine: named places below replace external geocoding.
+            # on /api/messages when granted). Raw coordinates only — no
+            # geocoding, nothing leaves this machine; OSM browsing comes later.
             "store": False,   # True: also persist location on user turn rows
-            "places": {},     # e.g. home: {lat: .., lon: .., radius_m: 150}
         },
         "titles": {
             # Auto-generated conversation titles on ROOT turns (seeds and trees
