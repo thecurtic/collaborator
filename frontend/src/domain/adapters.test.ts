@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ApiRecall, ApiTurn } from '@/api/types';
-import { toHealth, toRecallBlock, toTurn } from './adapters';
+import { toHealth, toNoteDraft, toRecallBlock, toTurn } from './adapters';
 
 const baseTurn: ApiTurn = {
   id: 1,
@@ -87,6 +87,42 @@ describe('toRecallBlock', () => {
       score: 0,
       preview: '',
     });
+  });
+});
+
+describe('toNoteDraft event fields', () => {
+  const base = {
+    id: 1,
+    run_id: 'r',
+    tree_root_id: null,
+    title: 'T',
+    body: 'B',
+    status: 'pending' as const,
+    created_at: '2026-07-27 12:00:00',
+    decided_at: null,
+  };
+
+  it('maps real event fields', () => {
+    const d = toNoteDraft({
+      ...base,
+      fields: { start: '2026-08-02T14:00', end: null, all_day: false },
+    });
+    expect(d.fields).toEqual({
+      start: '2026-08-02T14:00',
+      end: null,
+      allDay: false,
+    });
+  });
+
+  it('treats the backend\'s empty fields column as "not an event"', () => {
+    expect(toNoteDraft({ ...base, fields: {} }).fields).toBeNull();
+    expect(
+      toNoteDraft({
+        ...base,
+        fields: { start: null, end: null, all_day: false },
+      }).fields,
+    ).toBeNull();
+    expect(toNoteDraft({ ...base }).fields).toBeNull();
   });
 });
 

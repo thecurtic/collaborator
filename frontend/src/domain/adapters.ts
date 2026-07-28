@@ -186,13 +186,18 @@ export function toNoteDraft(api: ApiNoteDraft): NoteDraft {
       title: d.title,
       score: d.score,
     })),
-    fields: api.fields
-      ? {
-          start: typeof api.fields.start === 'string' ? api.fields.start : null,
-          end: typeof api.fields.end === 'string' ? api.fields.end : null,
-          allDay: Boolean(api.fields.all_day),
-        }
-      : null,
+    // Event fields require a real start — the backend serializes a `fields`
+    // column for EVERY draft (empty object/nulls on non-events), and a
+    // start-less "event" is meaningless. Without this guard every draft
+    // editor grew date pickers.
+    fields:
+      api.fields && typeof api.fields.start === 'string' && api.fields.start
+        ? {
+            start: api.fields.start,
+            end: typeof api.fields.end === 'string' ? api.fields.end : null,
+            allDay: Boolean(api.fields.all_day),
+          }
+        : null,
   };
 }
 
