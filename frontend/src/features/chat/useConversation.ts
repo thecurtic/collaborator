@@ -14,6 +14,7 @@ import type {
 import { getToolsEnabled } from '@/features/settings/uiPrefs';
 import { saveTurnSources } from './sourcesStore';
 import { foldToolEvent } from './toolActivity';
+import { removeNode, renameNode, setSubtreeState } from './treeEdits';
 import {
   CONTINUE,
   VIRTUAL_ROOT,
@@ -85,6 +86,12 @@ export function useConversation(reloadSignal: number) {
   const indexRef = useRef<NodeIndex>(
     indexNodes({ roots: [], count: 0, contextWindow: null }),
   );
+  // Latest applied tree — input for optimistic local edits (treeEdits.ts).
+  const treeRef = useRef<ConversationTree>({
+    roots: [],
+    count: 0,
+    contextWindow: null,
+  });
   const [version, setVersion] = useState(0);
   const leafRef = useRef<number | null>(null);
   // Abort controller for the in-flight send/branch stream (stop generation).
@@ -105,6 +112,7 @@ export function useConversation(reloadSignal: number) {
 
   const applyTree = useCallback((t: ConversationTree) => {
     indexRef.current = indexNodes(t);
+    treeRef.current = t; // latest tree for optimistic edits, no dep churn
     setTree(t);
     if (t.contextWindow != null) setContextWindow(t.contextWindow);
     setVersion((v) => v + 1);
@@ -124,6 +132,25 @@ export function useConversation(reloadSignal: number) {
   useEffect(() => {
     void load();
   }, [load, reloadSignal]);
+
+  /**
+   * Background confirm for an optimistic mutation (treeEdits.ts prediction
+   * already applied): true-up silently on success; on failure resync from
+   * the server — the source of truth — and surface the error. No rollback
+   * bookkeeping, so concurrent optimistic ops can't clobber each other.
+   */
+  const confirmMutation = useCallback(
+    (op: Promise<unknown>) => {
+      op.then(
+        () => load(),
+        async (err: unknown) => {
+          await load().catch(() => {});
+          setError(errMessage(err));
+        },
+      );
+    },
+    [load],
+  );
 
   /**
    * Enter "new chat" mode: empty path, so the next send omits parent_turn_id
@@ -264,18 +291,17 @@ export function useConversation(reloadSignal: number) {
     [runStream],
   );
 
-  /** Promote a conversation (call with its root id): seed → tree. */
+  /**
+   * Promote a conversation (call with its root id): seed → tree.
+   * Optimistic — the root hops tabs immediately.
+   */
   const promote = useCallback(
-    async (rootId: number) => {
+    (rootId: number) => {
       setError(null);
-      try {
-        await api.setTurnState(rootId, 'tree');
-        await load();
-      } catch (err) {
-        setError(errMessage(err));
-      }
+      applyTree(setSubtreeState(treeRef.current, rootId, 'tree'));
+      confirmMutation(api.setTurnState(rootId, 'tree'));
     },
-    [load],
+    [applyTree, confirmMutation],
   );
 
   const branch = useCallback(
@@ -400,35 +426,35 @@ export function useConversation(reloadSignal: number) {
     [runStream, load],
   );
 
+  /** Optimistic delete — the node vanishes immediately (subtree or reparent). */
   const remove = useCallback(
-    async (turnId: number, subtree = false) => {
+    (turnId: number, subtree = false) => {
       setError(null);
-      try {
-        await api.deleteTurn(turnId, subtree);
-        await load();
-      } catch (err) {
-        setError(errMessage(err));
-      }
+      applyTree(removeNode(treeRef.current, turnId, subtree));
+      confirmMutation(api.deleteTurn(turnId, subtree));
     },
-    [load],
+    [applyTree, confirmMutation],
   );
 
+  /** Optimistic rename; naming a seed also graduates it (both local-first). */
   const renameTurn = useCallback(
-    async (turnId: number, name: string) => {
+    (turnId: number, name: string) => {
       setError(null);
-      try {
-        await api.renameTurn(turnId, name);
-        // Naming a seed is a "this matters" signal — it graduates the chat.
-        const root = rootOfTurn(turnId);
-        if (name.trim() && root?.state === 'seed') {
-          await api.setTurnState(root.id, 'tree');
-        }
-        await load();
-      } catch (err) {
-        setError(errMessage(err));
-      }
+      // Naming a seed is a "this matters" signal — it graduates the chat.
+      const root = rootOfTurn(turnId);
+      const promoteId =
+        name.trim() && root?.state === 'seed' ? root.id : null;
+      let next = renameNode(treeRef.current, turnId, name);
+      if (promoteId != null) next = setSubtreeState(next, promoteId, 'tree');
+      applyTree(next);
+      confirmMutation(
+        (async () => {
+          await api.renameTurn(turnId, name);
+          if (promoteId != null) await api.setTurnState(promoteId, 'tree');
+        })(),
+      );
     },
-    [load, rootOfTurn],
+    [applyTree, confirmMutation, rootOfTurn],
   );
 
   // Cycle a node's branch switcher: 0 = main line, 1..n = branches.

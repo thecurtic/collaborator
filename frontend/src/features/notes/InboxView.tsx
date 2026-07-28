@@ -49,12 +49,15 @@ function DraftView({
   draft,
   onBack,
   onDecided,
+  onReject,
   onOpenNote,
   onOpenTurn,
 }: {
   draft: NoteDraft;
   onBack: () => void;
   onDecided: (id: number, notice: string) => void;
+  /** Optimistic reject, owned by the parent (card restore on failure). */
+  onReject: () => void;
   onOpenNote: (title: string) => void;
   onOpenTurn: (turnId: number) => void;
 }) {
@@ -177,18 +180,6 @@ function DraftView({
     }
   };
 
-  const reject = async () => {
-    setBusy('reject');
-    setError(null);
-    try {
-      await api.rejectDraft(draft.id);
-      onDecided(draft.id, `Rejected “${draft.title}”`);
-    } catch (err) {
-      setError(errMessage(err));
-    } finally {
-      setBusy(null);
-    }
-  };
 
   // Provenance is server-stamped for all draft kinds now (3275100).
   const sourceTurn = draft.sourceTurns[0] ?? draft.treeRootId;
@@ -434,14 +425,10 @@ function DraftView({
           <Button
             variant="outline"
             disabled={busy != null}
-            onClick={() => void reject()}
+            onClick={onReject}
             className="flex-1 gap-1.5"
           >
-            {busy === 'reject' ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <X className="h-4 w-4" />
-            )}
+            <X className="h-4 w-4" />
             Reject
           </Button>
           <Button
@@ -500,6 +487,29 @@ export function InboxView({
 
   const selected = drafts?.find((d) => d.id === selectedId) ?? null;
 
+  // Optimistic reject: the card leaves immediately; a failure puts it back
+  // where it was with a notice. (Approve stays pessimistic on purpose — its
+  // 409/422 fix-and-retry flow needs the server's answer first.)
+  const rejectDraft = useCallback(
+    (draft: NoteDraft) => {
+      const idx = drafts?.findIndex((d) => d.id === draft.id) ?? -1;
+      setDrafts((prev) => prev?.filter((d) => d.id !== draft.id) ?? null);
+      setSelectedId(null);
+      setNotice(`Rejected “${draft.title}”`);
+      onChanged();
+      api.rejectDraft(draft.id).catch((err: unknown) => {
+        setDrafts((prev) => {
+          const next = prev ? [...prev] : [];
+          next.splice(Math.min(Math.max(idx, 0), next.length), 0, draft);
+          return next;
+        });
+        setNotice(`Couldn't reject “${draft.title}” — ${errMessage(err)}`);
+        onChanged();
+      });
+    },
+    [drafts, onChanged],
+  );
+
   if (selected) {
     return (
       <DraftView
@@ -512,6 +522,7 @@ export function InboxView({
           setNotice(msg);
           onChanged();
         }}
+        onReject={() => rejectDraft(selected)}
         onOpenNote={onOpenNote}
         onOpenTurn={onOpenTurn}
       />
