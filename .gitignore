@@ -13,9 +13,11 @@ yarn-error.log*
 .env
 .env.local
 .env.*.local
+# The ACTUAL config is machine-local and never committed (copy from
+# config.yaml.example). .config.yaml holds app-written overrides (e.g. the
+# in-app model switch) — also machine-local.
+config.yaml
 .config.yaml
-# Local overrides (ignored)
-# config.yaml is now tracked in version control
 
 # OS files
 .DS_Store

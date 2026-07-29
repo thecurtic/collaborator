@@ -31,7 +31,8 @@
    cd /home/chat/collaborator
    git pull origin main
    ```
-2. Copy and configure config.yaml:
+2. Copy and configure config.yaml (gitignored — it's your machine's actual
+   config; the tracked `config.yaml.example` is the documented template):
    ```bash
    cp config.yaml.example config.yaml
    # Edit with your tailnet IPs and production URL

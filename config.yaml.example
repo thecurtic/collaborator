@@ -1,7 +1,11 @@
-# Collaborator Configuration
-# 
-# Single source of truth for all application settings.
-# Both backend and Pi read from this file for consistent configuration.
+# Collaborator Configuration — TEMPLATE
+#
+# Copy this file to config.yaml (same directory) and edit. config.yaml is
+# GITIGNORED: it is your machine's actual config, holding machine-specific
+# values and secrets, and no git operation will ever touch or revert it.
+#
+# Precedence: built-in defaults < config.yaml < .config.yaml (app-written
+# overrides — don't hand-edit) < environment variables.
 
 # Inference settings
 inference:

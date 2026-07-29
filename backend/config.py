@@ -1,7 +1,13 @@
 """Configuration loader for Collaborator backend.
 
-Reads settings from config.yaml at project root, with fallback to environment variables
-and hardcoded defaults.
+Two files, both at the project root, both gitignored:
+- config.yaml — YOUR config. Copy config.yaml.example and edit. Never committed,
+  so no git operation can revert it and secrets can't leak into history.
+- .config.yaml — app-written overrides (e.g. PUT /api/model persists here so it
+  never has to rewrite your hand-edited file). Don't edit by hand.
+
+Precedence: built-in defaults < config.yaml < .config.yaml < environment vars.
+config.yaml.example (tracked) is the documented template for every setting.
 """
 
 import os
