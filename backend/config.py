@@ -157,7 +157,11 @@ def load_config() -> dict:
                 "api_url": None,       # e.g. "http://<inference-host>:8000/v1" (backend: openai)
                 "api_key": None,
                 "model": None,         # remote TTS model id (e.g. "speaches-ai/Kokoro-82M-v1.0-ONNX")
-                "remote_voices": [],   # voice names the picker offers (backend: openai)
+                # Voices are DISCOVERED from the sidecar (GET /audio/voices) —
+                # every voice the model ships is offered automatically.
+                # remote_voices, when set, curates the picker to those names
+                # (also the fallback list if discovery ever fails).
+                "remote_voices": [],
                 "remote_sample_rate": 24000,  # PCM rate the remote emits (Kokoro 24000, Piper 22050)
                 "remote_timeout": 120,
                 "engine": "piper",     # local backend engine (only piper for now)

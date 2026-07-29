@@ -480,21 +480,86 @@ def _voices_dir() -> Optional[str]:
     return d if os.path.isabs(d) else resolve_path(d)
 
 
-def list_tts_voices() -> List[str]:
-    """Local backend: <name>.onnx files in voices_dir. Remote backend: the
-    configured voice names (voice.tts.remote_voices + default_voice)."""
+# Discovered remote voices: (timestamp, [{name, language, gender}]) — cached so
+# the picker and per-request validation don't hammer the sidecar.
+_remote_voice_cache: Optional[Tuple[float, List[dict]]] = None
+_VOICE_CACHE_TTL = 300
+
+
+def _discover_remote_voices() -> Optional[List[dict]]:
+    """Ask the sidecar which voices exist (GET /audio/voices). Returns
+    [{name, language, gender}] or None when the request fails (callers fall
+    back to the configured list). Cached for a few minutes."""
+    global _remote_voice_cache
+    import time as _time
+    import requests
+    now = _time.monotonic()
+    if _remote_voice_cache and now - _remote_voice_cache[0] < _VOICE_CACHE_TTL:
+        return _remote_voice_cache[1]
+    base = _tts_remote()
+    if not base:
+        return None
+    try:
+        r = requests.get(f"{base}/audio/voices",
+                         headers=_auth_headers(tts_config()), timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        items = data if isinstance(data, list) else (
+            data.get("voices") or data.get("data") or [])
+        voices = []
+        for v in items:
+            if isinstance(v, dict) and (v.get("name") or v.get("id")):
+                voices.append({"name": v.get("name") or v.get("id"),
+                               "language": v.get("language"),
+                               "gender": v.get("gender")})
+            elif isinstance(v, str):
+                voices.append({"name": v, "language": None, "gender": None})
+        if voices:
+            _remote_voice_cache = (now, voices)
+            return voices
+    except Exception as e:
+        print(f"Warning: TTS voice discovery failed: {e}")
+    return None
+
+
+def list_tts_voice_info() -> List[dict]:
+    """Voices with metadata [{name, language, gender}], default first.
+
+    Remote backend: discovered live from the sidecar — every voice the model
+    ships is offered, no config needed. voice.tts.remote_voices, when set,
+    CURATES the list down to those names (a picker-trimming filter, not a
+    requirement); discovery failure falls back to the configured names.
+    Local backend: the .onnx files in voices_dir.
+    """
+    cfg = tts_config()
+    default = cfg.get("default_voice")
     if _tts_remote():
-        cfg = tts_config()
-        voices = [str(v) for v in (cfg.get("remote_voices") or [])]
-        default = cfg.get("default_voice")
-        if default and default not in voices:
-            voices.insert(0, default)
-        return voices
-    d = _voices_dir()
-    if not d or not os.path.isdir(d):
-        return []
-    return sorted(os.path.splitext(f)[0] for f in os.listdir(d)
-                  if f.endswith(".onnx") and not f.startswith("."))
+        curated = [str(v) for v in (cfg.get("remote_voices") or [])]
+        discovered = _discover_remote_voices()
+        if discovered is not None:
+            if curated:
+                keep = set(curated) | ({default} if default else set())
+                voices = [v for v in discovered if v["name"] in keep]
+            else:
+                voices = list(discovered)
+        else:
+            names = curated or ([default] if default else [])
+            if default and default not in names:
+                names.insert(0, default)
+            voices = [{"name": n, "language": None, "gender": None} for n in names]
+    else:
+        d = _voices_dir()
+        names = (sorted(os.path.splitext(f)[0] for f in os.listdir(d)
+                        if f.endswith(".onnx") and not f.startswith("."))
+                 if d and os.path.isdir(d) else [])
+        voices = [{"name": n, "language": None, "gender": None} for n in names]
+    voices.sort(key=lambda v: (v["name"] != default, v["name"]))
+    return voices
+
+
+def list_tts_voices() -> List[str]:
+    """Voice names only (default first) — used for request validation."""
+    return [v["name"] for v in list_tts_voice_info()]
 
 
 def default_tts_voice() -> Optional[str]:
@@ -613,7 +678,9 @@ def capabilities(refresh: bool = False) -> dict:
             stt = stt and _importable("faster_whisper")
         tts = bool(tts_config().get("enabled", True))
         if _tts_remote():
-            tts = tts and bool(tts_config().get("model")) and bool(list_tts_voices())
+            # Deliberately no voice check here: voices are discovered from the
+            # sidecar at request time, and capabilities must stay network-free.
+            tts = tts and bool(tts_config().get("model"))
         else:
             tts = tts and _importable("piper") and bool(list_tts_voices())
         _caps_cache = {"stt_stream": stt, "tts_stream": tts, "phrases": stt}

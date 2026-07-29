@@ -156,6 +156,9 @@ def _stub_tts(monkeypatch, enabled=True):
                                                "tts_stream": enabled,
                                                "phrases": True})
     monkeypatch.setattr(voice, "list_tts_voices", lambda: ["test-voice"])
+    monkeypatch.setattr(voice, "list_tts_voice_info",
+                        lambda: [{"name": "test-voice", "language": "en-us",
+                                  "gender": "female"}])
     monkeypatch.setattr(voice, "default_tts_voice", lambda: "test-voice")
     monkeypatch.setattr(voice, "tts_sample_rate", lambda name: 22050)
     monkeypatch.setattr(voice, "synth_stream",
@@ -245,6 +248,45 @@ def test_remote_stt_decode(monkeypatch):
     wav = seen["files"]["file"][1]
     assert wav.startswith(b"RIFF") and len(wav) == 44 + len(SILENCE)
     print("✓ remote STT: wav-wrapped upload, verbose_json segments parsed")
+
+
+def test_remote_voice_discovery(monkeypatch):
+    import requests
+    cfg = config.get_config()["voice"]["tts"]
+    monkeypatch.setitem(cfg, "backend", "openai")
+    monkeypatch.setitem(cfg, "api_url", "http://m5:8000/v1")
+    monkeypatch.setitem(cfg, "model", "speaches-ai/Kokoro-82M-v1.0-ONNX")
+    monkeypatch.setitem(cfg, "default_voice", "am_adam")
+    monkeypatch.setitem(cfg, "remote_voices", [])
+    voice._remote_voice_cache = None
+
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return [{"name": "af_heart", "language": "en-us", "gender": "female"},
+                    {"name": "am_adam", "language": "en-us", "gender": "male"},
+                    {"name": "bf_emma", "language": "en-gb", "gender": "female"}]
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _R())
+
+    # No curation: everything discovered, default first, metadata included.
+    info = voice.list_tts_voice_info()
+    assert [v["name"] for v in info] == ["am_adam", "af_heart", "bf_emma"]
+    assert info[0]["gender"] == "male"
+
+    # Curation trims the discovered list (default always kept).
+    monkeypatch.setitem(cfg, "remote_voices", ["bf_emma"])
+    assert voice.list_tts_voices() == ["am_adam", "bf_emma"]
+
+    # Discovery failure -> fall back to configured names.
+    voice._remote_voice_cache = None
+    def _boom(*a, **k):
+        raise requests.exceptions.ConnectionError("down")
+    monkeypatch.setattr(requests, "get", _boom)
+    assert voice.list_tts_voices() == ["am_adam", "bf_emma"]
+
+    voice._remote_voice_cache = None
+    print("✓ voice discovery: all voices, curation filter, offline fallback")
 
 
 def test_remote_tts_stream_and_caps(monkeypatch):

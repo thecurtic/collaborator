@@ -2970,10 +2970,18 @@ class TtsRequest(BaseModel):
 async def list_tts_voices_endpoint(
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
-    """Voices available for POST /api/tts (drives the frontend voice picker)."""
+    """Voices available for POST /api/tts (drives the frontend voice picker).
+
+    Remote backend: discovered live from the sidecar (all the model's voices),
+    optionally curated down by voice.tts.remote_voices. Each entry carries
+    language/gender metadata when the sidecar provides it — group the picker by
+    those rather than showing one flat list of 50.
+    """
     _require_auth(passkey)
+    info = voice.list_tts_voice_info()
     return {
-        "voices": voice.list_tts_voices(),
+        "voices": [v["name"] for v in info],
+        "voice_info": info,
         "default": voice.default_tts_voice(),
         "enabled": voice.capabilities().get("tts_stream", False),
     }
