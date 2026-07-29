@@ -621,8 +621,10 @@ def capabilities(refresh: bool = False) -> dict:
 
 
 def preload_in_background() -> None:
-    """Warm-load configured engines at startup (fire-and-forget thread), so the
-    first call of the day never pays a model load. Opt-in via voice.*.preload."""
+    """Warm the configured engines at startup (fire-and-forget thread), so the
+    first call of the day never pays a model load. Opt-in via voice.*.preload.
+    Local backend: load into this process. Remote backend: send a tiny real
+    request per model so the sidecar JIT-loads them NOW, not mid-call."""
     want_stt = stt_config().get("preload") and capabilities().get("stt_stream")
     want_tts = tts_config().get("preload") and capabilities().get("tts_stream")
     if not (want_stt or want_tts):
@@ -632,12 +634,34 @@ def preload_in_background() -> None:
         try:
             if want_stt:
                 ensure_stt_loaded()
-                where = "remote server probed" if _stt_remote() else "models preloaded"
-                print(f"Voice: STT {where} "
-                      f"({_model_key('partial')[0]} + {_model_key('final')[0]})")
-            if want_tts and not _tts_remote():
+                if _stt_remote():
+                    # Warm both remote models with a real (tiny) request each —
+                    # a probe alone leaves them cold, and the first user request
+                    # then eats the model-load time (or times out on it).
+                    silence = pcm_to_wav(b"\x00\x00" * SAMPLE_RATE)  # 1s
+                    for which in ("partial", "final"):
+                        try:
+                            _remote_transcribe(_stt_remote(), silence,
+                                               _model_key(which)[0], "en", 300)
+                        except Exception as e:
+                            print(f"Warning: STT warmup ({which}) failed: {e}")
+                    print("Voice: remote STT models warmed "
+                          f"({_model_key('partial')[0]} + {_model_key('final')[0]})")
+                else:
+                    print("Voice: STT models preloaded "
+                          f"({_model_key('partial')[0]} + {_model_key('final')[0]})")
+            if want_tts:
                 name = default_tts_voice()
-                if name:
+                if not name:
+                    return
+                if _tts_remote():
+                    try:
+                        for _chunk in synth_stream("Ready.", name):
+                            pass
+                        print(f"Voice: remote TTS model warmed ({name})")
+                    except Exception as e:
+                        print(f"Warning: TTS warmup failed: {e}")
+                else:
                     _load_tts_voice(name)
                     print(f"Voice: TTS voice preloaded ({name})")
         except Exception as e:
