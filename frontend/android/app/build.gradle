@@ -19,7 +19,11 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // AGP 9 dropped the legacy proguard-android.txt (its -dontoptimize
+            // is unsupported by R8); the -optimize variant is the only default
+            // left. Moot while minifyEnabled is false, but referencing the old
+            // file fails the build at configuration time.
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 }
