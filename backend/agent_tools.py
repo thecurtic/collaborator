@@ -178,6 +178,19 @@ def git_read(action: str, repo: str = None, path: str = None, ref: str = None) -
                     "content": text[:max_chars]}
         return {"error": f"unknown action {action!r} — use list_repos, "
                          "list_files, or read_file"}
+    except requests.exceptions.HTTPError as e:
+        # Gitea's 401/403 bodies say WHY (e.g. which token scopes are missing) —
+        # surface that instead of a bare status code.
+        body = ""
+        resp = getattr(e, "response", None)
+        if resp is not None and resp.text:
+            body = f" — {resp.text[:200]}"
+        hint = ""
+        if resp is not None and resp.status_code == 403:
+            hint = (" (Gitea 403 usually means the token lacks scopes; it needs "
+                    "read:user AND read:repository — scopes can only be set at "
+                    "token creation, so regenerate it)")
+        return {"error": f"git api request failed: {e}{body}{hint}"}
     except requests.exceptions.RequestException as e:
         return {"error": f"git api request failed: {e}"}
 

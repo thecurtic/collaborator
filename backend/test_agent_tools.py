@@ -95,6 +95,29 @@ def test_git_read(monkeypatch):
     print("✓ git_read: token header, list/read, 404 -> clean error")
 
 
+def test_git_403_surfaces_scope_hint(monkeypatch):
+    import requests
+    cfg = config.get_config()["tools"]["git"]
+    monkeypatch.setitem(cfg, "api_url", "http://forge:3000/api/v1")
+    monkeypatch.setitem(cfg, "token", "scopeless")
+
+    class _Forbidden:
+        status_code = 403
+        text = '{"message":"token does not have at least one of required scope(s): [read:user]"}'
+
+        def raise_for_status(self):
+            err = requests.exceptions.HTTPError("403 Client Error")
+            err.response = self
+            raise err
+
+    monkeypatch.setattr(requests, "get",
+                        lambda *a, **k: _Forbidden())
+    out = agent_tools.git_read("list_repos")
+    assert "read:user" in out["error"]          # Gitea's own body surfaced
+    assert "regenerate" in out["error"]         # our scope hint appended
+    print("✓ git 403: response body + scope-regeneration hint surfaced")
+
+
 def test_git_tool_self_gating(monkeypatch):
     cfg = config.get_config()["tools"]["git"]
     monkeypatch.setitem(cfg, "api_url", None)
