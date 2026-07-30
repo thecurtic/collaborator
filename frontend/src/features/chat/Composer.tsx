@@ -21,6 +21,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { useDictation } from '@/features/voice/useDictation';
 import { useWakeLock } from '@/features/voice/useWakeLock';
+import { useLongPress } from '@/lib/useLongPress';
 import { cleanUrlsInText } from '@/lib/urlClean';
 import { appendQuoteToDraft } from './quote';
 
@@ -158,6 +159,17 @@ export function Composer({
   const error = dictationError ?? voiceNotice;
   const hasDraft = value.trim().length > 0;
 
+  // Hold send → the draft becomes a call's opening turn (the call button is
+  // hidden while a draft exists, so the hold IS the entry point). A normal
+  // tap falls through to the form submit; useLongPress swallows the click
+  // that follows a hold, so holding never also sends.
+  const sendHold = useLongPress(() => {
+    const draft = value.trim();
+    if (!draft || disabled || !onStartCall) return;
+    setValue('');
+    onStartCall(draft);
+  });
+
   return (
     <div className="px-safe pb-safe border-t border-border bg-background">
       {branchLabel && (
@@ -261,9 +273,10 @@ export function Composer({
                   type="submit"
                   size="icon"
                   disabled={disabled}
-                  aria-label="Send message"
-                  title="Send message"
-                  className="h-9 w-9 rounded-full"
+                  {...(onStartCall ? sendHold : {})}
+                  aria-label="Send message (hold to continue in a call)"
+                  title="Send · hold to talk it out in a call instead"
+                  className="h-9 w-9 select-none rounded-full"
                 >
                   <SendHorizontal className="h-4 w-4" />
                 </Button>
@@ -272,19 +285,10 @@ export function Composer({
                   <Button
                     type="button"
                     size="icon"
-                    onClick={() => {
-                      // A typed draft becomes the call's opening turn.
-                      const draft = value.trim();
-                      if (draft) setValue('');
-                      onStartCall(draft || undefined);
-                    }}
+                    onClick={() => onStartCall(undefined)}
                     disabled={disabled}
                     aria-label="Start voice call"
-                    title={
-                      hasDraft
-                        ? 'Start a call — your typed message becomes the first turn'
-                        : 'Start voice call'
-                    }
+                    title="Start voice call"
                     className="h-9 w-9 rounded-full"
                   >
                     <Phone className="h-4 w-4" />
