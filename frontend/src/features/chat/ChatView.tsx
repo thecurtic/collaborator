@@ -20,8 +20,10 @@ interface ChatViewProps {
   onBranchTargetChange: (b: BranchTarget | null) => void;
   /** Open the drafts inbox (filtered to a run) — model-proposed notes. */
   onReviewDrafts: (runId: string | null) => void;
-  /** Start a voice call (button lives in the composer). */
-  onStartCall: () => void;
+  /** Start a voice call (button lives in the composer; draft = first turn). */
+  onStartCall: (draft?: string) => void;
+  /** Start a call that opens by reading this reply aloud (tip or branch). */
+  onStartCallFromTurn: (node: TreeNode) => void;
   /** Prefill the composer (chats spawned from web search); nonce re-triggers. */
   draftSeed?: { text: string; nonce: number } | null;
   /** MUST clear draftSeed — ChatView remounts per chat, so an unconsumed
@@ -87,6 +89,7 @@ export function ChatView({
   onBranchTargetChange,
   onReviewDrafts,
   onStartCall,
+  onStartCallFromTurn,
   draftSeed = null,
   onDraftSeedConsumed,
 }: ChatViewProps) {
@@ -413,6 +416,7 @@ export function ChatView({
                     onDelete={handleDelete}
                     onQuote={handleQuote}
                     onShare={(scope) => void handleShare(entry.node, scope)}
+                    onCall={() => onStartCallFromTurn(entry.node)}
                     onRegenerate={
                       canRegenerate && prev
                         ? () => startEdit(entry.node.id, prev.node.content)

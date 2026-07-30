@@ -36,6 +36,7 @@ import { RootList } from '@/features/chat/RootList';
 import { TreeMap } from '@/features/chat/TreeMap';
 import { useConversation } from '@/features/chat/useConversation';
 import type { BranchTarget } from '@/features/chat/branchTarget';
+import type { CallIntro } from '@/features/chat/callIntro';
 import { rootLabel, type TreeNode } from '@/domain/models';
 import { NotesView } from '@/features/notes/NotesView';
 import { usePendingDrafts } from '@/features/notes/usePendingDrafts';
@@ -131,6 +132,12 @@ function AppShell() {
   const [titleRenameOpen, setTitleRenameOpen] = useState(false);
   // A pending branch is shared so a call can fork from it too (not just typing).
   const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
+  // What the next call does before its first listen (typed draft / read a
+  // reply). Set by the two call entry points, cleared when the call closes.
+  const [callIntro, setCallIntro] = useState<CallIntro | null>(null);
+  // True when the call button (not the user) set branchTarget — cleared on
+  // call close so a never-consumed fork doesn't linger on the composer.
+  const introBranchRef = useRef(false);
   // One backgrounded notes-synthesis run at a time (banner above the screen).
   const [synth, setSynth] = useState<SynthState | null>(null);
   const synthRunning = useRef(false);
@@ -216,6 +223,11 @@ function AppShell() {
   // the user back on an empty chat instead of what they just talked about).
   const closeCall = useCallback(() => {
     setCallOpen(false);
+    setCallIntro(null);
+    if (introBranchRef.current) {
+      introBranchRef.current = false;
+      setBranchTarget(null); // never-spoken call-button fork must not linger
+    }
     const leaf = callLeafRef.current;
     callLeafRef.current = null;
     void reload().then(() => {
@@ -483,11 +495,15 @@ function AppShell() {
         onClose={closeCall}
         branchTarget={branchTarget}
         activeLeafId={convo.activeLeafId}
-        onBranchConsumed={() => setBranchTarget(null)}
+        onBranchConsumed={() => {
+          introBranchRef.current = false;
+          setBranchTarget(null);
+        }}
         onBranchCreated={handleCallBranched}
         onLeafChanged={(id) => {
           callLeafRef.current = id;
         }}
+        intro={callIntro}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       {/* After CallScreen so it stacks on top when opened mid-call. */}
@@ -526,7 +542,25 @@ function AppShell() {
             branchTarget={branchTarget}
             onBranchTargetChange={setBranchTarget}
             onReviewDrafts={openInbox}
-            onStartCall={() => setCallOpen(true)}
+            onStartCall={(draft) => {
+              // A typed draft becomes the call's opening turn.
+              setCallIntro(draft ? { kind: 'send', text: draft } : null);
+              setCallOpen(true);
+            }}
+            onStartCallFromTurn={(node) => {
+              // Reads this reply aloud, then listens. Tip continues in
+              // place; anything higher forks via the branch machinery.
+              if (node.id !== convo.activeLeafId) {
+                setBranchTarget({
+                  turnId: node.id,
+                  label: node.preview,
+                  withContext: true,
+                });
+                introBranchRef.current = true;
+              }
+              setCallIntro({ kind: 'speak', text: node.content });
+              setCallOpen(true);
+            }}
             draftSeed={chatDraft}
             onDraftSeedConsumed={() => setChatDraft(null)}
           />

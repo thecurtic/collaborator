@@ -1,6 +1,8 @@
-import { Loader2, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Loader2, Volume2, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
+import { synthesize } from '@/features/voice/piperTts';
+import { SPEECH_RATE } from '@/features/voice/speechUtils';
 import { ApiRequestError } from '@/api/http';
 import { Button } from '@/components/ui/button';
 import { useModalA11y } from '@/lib/useModalA11y';
@@ -146,6 +148,86 @@ function ModelPicker() {
   );
 }
 
+const PREVIEW_TEXT =
+  "Here's a quick preview — this is how I'll sound when reading replies aloud.";
+
+/**
+ * One-at-a-time voice preview: picking a voice speaks a sample sentence so
+ * you hear it before committing. Sequenced so a rapid second pick cancels
+ * the first; object URLs are revoked on stop/unmount.
+ */
+function useVoicePreview() {
+  const [status, setStatus] = useState<'idle' | 'loading' | 'playing'>('idle');
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const urlRef = useRef<string | null>(null);
+  const seqRef = useRef(0);
+
+  const stop = useCallback(() => {
+    seqRef.current++;
+    audioRef.current?.pause();
+    audioRef.current = null;
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current);
+      urlRef.current = null;
+    }
+    setStatus('idle');
+  }, []);
+
+  useEffect(() => stop, [stop]); // sheet closed mid-preview
+
+  const play = useCallback(
+    (synth: () => Promise<Blob>) => {
+      stop();
+      const seq = ++seqRef.current;
+      setStatus('loading');
+      synth()
+        .then((blob) => {
+          if (seqRef.current !== seq) return;
+          const url = URL.createObjectURL(blob);
+          urlRef.current = url;
+          const audio = new Audio(url);
+          audio.playbackRate = SPEECH_RATE; // match real read-aloud pacing
+          audioRef.current = audio;
+          audio.onended = () => {
+            if (seqRef.current === seq) stop();
+          };
+          audio.onerror = () => {
+            if (seqRef.current === seq) stop();
+          };
+          setStatus('playing');
+          void audio.play().catch(() => {
+            if (seqRef.current === seq) stop();
+          });
+        })
+        .catch(() => {
+          if (seqRef.current === seq) setStatus('idle');
+        });
+    },
+    [stop],
+  );
+
+  return { status, play };
+}
+
+/** Inline status line under a voice picker while its preview runs. */
+function PreviewStatus({ status }: { status: 'idle' | 'loading' | 'playing' }) {
+  if (status === 'idle') return null;
+  return (
+    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      {status === 'loading' ? (
+        <>
+          <Loader2 className="h-3 w-3 animate-spin" /> Preparing preview… (a
+          first use may download the voice)
+        </>
+      ) : (
+        <>
+          <Volume2 className="h-3 w-3" /> Playing preview
+        </>
+      )}
+    </p>
+  );
+}
+
 /**
  * Server TTS voice picker (shown only when the server engine is selected).
  * Fetched per open; '' = let the server use its configured default.
@@ -154,6 +236,7 @@ function ServerVoicePicker() {
   const serverVoice = useServerVoice();
   const [roster, setRoster] = useState<TtsVoices | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const preview = useVoicePreview();
 
   useEffect(() => {
     api
@@ -173,23 +256,33 @@ function ServerVoicePicker() {
     );
   }
   return (
-    <label className="block">
-      <span className="text-xs text-muted-foreground">Server voice</span>
-      <select
-        value={serverVoice}
-        onChange={(e) => setServerVoice(e.target.value)}
-        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <option value="">
-          Server default{roster.defaultVoice ? ` (${roster.defaultVoice})` : ''}
-        </option>
-        {roster.voices.map((v) => (
-          <option key={v} value={v}>
-            {v}
+    <div className="space-y-1.5">
+      <label className="block">
+        <span className="text-xs text-muted-foreground">Server voice</span>
+        <select
+          value={serverVoice}
+          onChange={(e) => {
+            const v = e.target.value;
+            setServerVoice(v);
+            // Hear it immediately — that's how you pick a voice.
+            preview.play(() =>
+              api.synthesizeSpeech(PREVIEW_TEXT, v || undefined),
+            );
+          }}
+          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <option value="">
+            Server default{roster.defaultVoice ? ` (${roster.defaultVoice})` : ''}
           </option>
-        ))}
-      </select>
-    </label>
+          {roster.voices.map((v) => (
+            <option key={v} value={v}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </label>
+      <PreviewStatus status={preview.status} />
+    </div>
   );
 }
 
@@ -204,6 +297,7 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
   const endPhrase = useEndPhrase();
   const interruptPhrase = useInterruptPhrase();
   const caps = useCapabilities();
+  const piperPreview = useVoicePreview();
   // Server phrase tier: commands are free-text phrases matched in the ASR
   // stream instead of the on-device keyword classifier's fixed vocabulary.
   const phraseTier = caps.phrases && sttEngine === 'server';
@@ -405,20 +499,28 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
           {ttsEngine === 'server' && caps.ttsStream && <ServerVoicePicker />}
 
           {ttsEngine === 'piper' && (
-            <label className="block">
-              <span className="text-xs text-muted-foreground">Piper voice</span>
-              <select
-                value={piperVoice}
-                onChange={(e) => setPiperVoice(e.target.value)}
-                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {PIPER_VOICES.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="space-y-1.5">
+              <label className="block">
+                <span className="text-xs text-muted-foreground">Piper voice</span>
+                <select
+                  value={piperVoice}
+                  onChange={(e) => {
+                    setPiperVoice(e.target.value);
+                    // synthesize() reads the pref just written; first use of a
+                    // voice downloads its model (the status line says so).
+                    piperPreview.play(() => synthesize(PREVIEW_TEXT));
+                  }}
+                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {PIPER_VOICES.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <PreviewStatus status={piperPreview.status} />
+            </div>
           )}
         </div>
 

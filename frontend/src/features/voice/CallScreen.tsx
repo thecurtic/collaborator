@@ -14,6 +14,7 @@ import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import { useModalA11y } from '@/lib/useModalA11y';
 import { cn } from '@/lib/utils';
 import type { BranchTarget } from '@/features/chat/branchTarget';
+import type { CallIntro } from '@/features/chat/callIntro';
 import { currentParagraphIndex, splitParagraphs } from './speechUtils';
 import { useCall, type CallPhase } from './useCall';
 import { useWakeLock } from './useWakeLock';
@@ -33,6 +34,8 @@ interface CallScreenProps {
    * app uses the last one to land the chat on this conversation at call end.
    */
   onLeafChanged?: (leafId: number) => void;
+  /** Something to do before the first listen (typed draft / read a reply). */
+  intro?: CallIntro | null;
   /** Open the settings sheet on top of the call (engine/voice/debug toggles). */
   onOpenSettings?: () => void;
 }
@@ -172,6 +175,7 @@ export function CallScreen({
   onBranchConsumed,
   onBranchCreated,
   onLeafChanged,
+  intro = null,
   onOpenSettings,
 }: CallScreenProps) {
   const {
@@ -197,6 +201,7 @@ export function CallScreen({
     onBranchConsumed,
     onBranchCreated,
     onLeafChanged,
+    intro,
   );
   useWakeLock(open); // keep the screen on for the whole call
   const showDebug = useDebugEnabled();

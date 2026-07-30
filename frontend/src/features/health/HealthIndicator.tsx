@@ -9,19 +9,27 @@ export function HealthIndicator() {
       ? {
           color: 'bg-green-500',
           label: 'online',
-          title: `Backend healthy (v${state.health.version})`,
+          title: `Model ${state.model || 'ready'} · backend v${state.health.version}`,
         }
-      : state.status === 'checking'
+      : state.status === 'model-offline'
         ? {
-            color: 'bg-yellow-500 animate-pulse',
-            label: 'connecting…',
-            title: 'Checking backend',
+            // The failure that actually bites: backend fine, inference box
+            // crashed. Never show green here — sends would hang/500.
+            color: 'bg-amber-500',
+            label: 'model offline',
+            title: `Backend is up (v${state.health.version}) but the model isn't responding — check the inference machine. ${state.error}`,
           }
-        : {
-            color: 'bg-destructive',
-            label: 'offline',
-            title: state.error,
-          };
+        : state.status === 'checking'
+          ? {
+              color: 'bg-yellow-500 animate-pulse',
+              label: 'connecting…',
+              title: 'Checking backend',
+            }
+          : {
+              color: 'bg-destructive',
+              label: 'offline',
+              title: state.error,
+            };
 
   return (
     <div

@@ -41,8 +41,12 @@ interface ComposerProps {
   onSend: (message: string) => Promise<boolean>;
   /** Abort the in-flight response stream (shown as a stop button). */
   onStop?: () => void;
-  /** Start a voice call (the call button lives here, not the header). */
-  onStartCall?: () => void;
+  /**
+   * Start a voice call (the call button lives here, not the header). Any
+   * current draft is passed along — it becomes the call's first turn, so the
+   * field is cleared like a send.
+   */
+  onStartCall?: (draft?: string) => void;
   /** When set, the next send branches from this point (shown as a chip). */
   branchLabel?: string | null;
   onCancelBranch?: () => void;
@@ -268,10 +272,19 @@ export function Composer({
                   <Button
                     type="button"
                     size="icon"
-                    onClick={onStartCall}
+                    onClick={() => {
+                      // A typed draft becomes the call's opening turn.
+                      const draft = value.trim();
+                      if (draft) setValue('');
+                      onStartCall(draft || undefined);
+                    }}
                     disabled={disabled}
                     aria-label="Start voice call"
-                    title="Start voice call"
+                    title={
+                      hasDraft
+                        ? 'Start a call — your typed message becomes the first turn'
+                        : 'Start voice call'
+                    }
                     className="h-9 w-9 rounded-full"
                   >
                     <Phone className="h-4 w-4" />

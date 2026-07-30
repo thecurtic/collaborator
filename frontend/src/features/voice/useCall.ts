@@ -20,6 +20,7 @@ import { DeviceTranscriber, resetDeviceWorker } from './deviceTranscriber';
 import { listenForWords, warmUpKeywordSpotter } from './keywordSpotter';
 import { startPcmStream, type PcmStream } from './pcmStreamer';
 import type { BranchTarget } from '@/features/chat/branchTarget';
+import type { CallIntro } from '@/features/chat/callIntro';
 import { createSpeechSession, type SpeechSession } from './speech';
 import { splitParagraphs, stripTrailingWord } from './speechUtils';
 import { TranscriptionStream } from './transcriptionStream';
@@ -84,6 +85,7 @@ export function useCall(
   onBranchConsumed?: () => void,
   onBranchCreated?: (parentTurnId: number) => void,
   onLeafChanged?: (leafId: number) => void,
+  intro?: CallIntro | null,
 ) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
   const [partial, setPartial] = useState('');
@@ -112,6 +114,8 @@ export function useCall(
   onBranchCreatedRef.current = onBranchCreated;
   const onLeafChangedRef = useRef(onLeafChanged);
   onLeafChangedRef.current = onLeafChanged;
+  const introRef = useRef(intro);
+  introRef.current = intro;
 
   useEffect(() => {
     if (!open) return;
@@ -121,6 +125,8 @@ export function useCall(
     // the loop continues normally on the new branch. `leafId` is the active
     // branch leaf to continue from; each turn updates it to the new turn's id.
     let pendingBranch: BranchTarget | null = branchTargetRef.current ?? null;
+    // What to do before the first listen (typed draft / read-this-reply).
+    const pendingIntro: CallIntro | null = introRef.current ?? null;
     let leafId: number | null = pendingBranch
       ? null
       : (activeLeafIdRef.current ?? null);
@@ -550,6 +556,32 @@ export function useCall(
       queue.finish();
     };
 
+    // Intro 'speak': read an existing reply aloud (per-message call button),
+    // then fall into the normal listen loop via onSpeechIdle. Mirrors
+    // speakFrom, but the reply first joins this call's transcript.
+    const speakIntro = (text: string) => {
+      const aid = pushTurn('assistant', text);
+      setSpeakingId(aid);
+      setSpeakBase(0);
+      setSpokenChars(0);
+      setPhase('responding');
+      queue = makeSession(aid, 0);
+      if (usePhrases()) {
+        void startInterruptMonitor();
+      } else {
+        startKws(
+          [stopWord],
+          () => {
+            log(`stop word "${stopWord}" → interrupt`);
+            interrupt();
+          },
+          STOP_WORD_THRESHOLD,
+        );
+      }
+      queue.push(text);
+      queue.finish();
+    };
+
     const init = async () => {
       try {
         endWord = getEndWord();
@@ -583,7 +615,16 @@ export function useCall(
         }
         if (!active) return;
         log('ready (streaming PCM16 16k)');
-        void listen();
+        if (pendingIntro?.kind === 'send') {
+          // The typed draft IS the first turn — respond to it right away.
+          log(`intro: sending typed draft (${pendingIntro.text.length} chars)`);
+          void respond(pendingIntro.text);
+        } else if (pendingIntro?.kind === 'speak') {
+          log('intro: reading the selected reply aloud');
+          speakIntro(pendingIntro.text);
+        } else {
+          void listen();
+        }
       } catch (err) {
         if (!active) return;
         setPhase('error');

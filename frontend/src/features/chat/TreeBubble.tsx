@@ -8,6 +8,7 @@ import {
   Layers,
   Loader2,
   MessageSquare,
+  Phone,
   RefreshCw,
   Reply,
   Share2,
@@ -56,6 +57,11 @@ interface TreeBubbleProps {
   onQuote?: (text: string) => void;
   /** Share this turn or the current context window (assistant turns). */
   onShare?: (scope: ShareScope) => void;
+  /**
+   * Start a call from this reply: it's read aloud, then the call listens.
+   * Continues the tip, or branches when the reply is higher up.
+   */
+  onCall?: () => void;
   /**
    * Regenerate: prefill the composer with the user message for edit-and-
    * resend (replaces this reply). Only passed on the leaf exchange.
@@ -332,6 +338,7 @@ export function TreeBubble({
   onDelete,
   onQuote,
   onShare,
+  onCall,
   onRegenerate,
   fork,
   inContext = true,
@@ -523,6 +530,18 @@ export function TreeBubble({
                 ) : (
                   <Volume2 className="h-4 w-4" />
                 )}
+              </Button>
+            )}
+            {!isUser && onCall && (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Continue in a call from this reply"
+                title="Start a call: reads this reply aloud, then listens (branches when it isn't the latest reply)"
+                onClick={onCall}
+                className="-my-1 h-9 w-9 opacity-70 hover:opacity-100"
+              >
+                <Phone className="h-4 w-4" />
               </Button>
             )}
             {!isUser && onRegenerate && (
