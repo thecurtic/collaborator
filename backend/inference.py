@@ -98,6 +98,31 @@ DEFAULT_VOICE_STYLE = (
 )
 
 
+def _extract_message_text(data: Dict, context: str = "llm call") -> str:
+    """Final text from a non-streaming chat completion, reasoning-model aware.
+
+    Reasoning models (MiniMax, qwen3-thinking) put their chain of thought in
+    message.reasoning_content and the answer in message.content. When
+    max_tokens is too small the whole budget goes to reasoning and content
+    comes back EMPTY — the silent killer of small-budget calls like titles.
+    We use content only (never leak reasoning as output), strip any inline
+    <think> block, and log loudly when reasoning ate the budget so the
+    failure is visible in read_logs instead of silent."""
+    import re as _re
+    try:
+        msg = data["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    content = (msg.get("content") or "").strip()
+    if content:
+        return _re.sub(r"^\s*<think>.*?</think>\s*", "", content, flags=_re.S).strip()
+    if (msg.get("reasoning_content") or "").strip():
+        print(f"Warning: {context}: model spent its whole token budget on "
+              "reasoning and returned no answer — raise this call's max_tokens "
+              "(reasoning models need headroom beyond the answer length)")
+    return ""
+
+
 def resolve_prompt_layer(cfg: Dict, file_key: str, text_key: str, default: str):
     """Resolve a prompt layer and report its provenance.
 
@@ -674,8 +699,7 @@ def synthesize_recall(query: str, matches: List[Dict]) -> str:
             timeout=rc.get("synthesis_timeout", 60),
         )
         response.raise_for_status()
-        data = response.json()
-        return (data["choices"][0]["message"]["content"] or "").strip()
+        return _extract_message_text(response.json(), "recall synthesis")
     except Exception as e:
         print(f"Warning: recall synthesis failed: {e}")
         return ""
@@ -706,7 +730,10 @@ def generate_title(turns: List[Dict]) -> str:
         [{"role": "system", "content": prompt},
          {"role": "user", "content": excerpt}], stream=False)
     payload["temperature"] = tcfg.get("temperature", 0.3)
-    payload["max_tokens"] = tcfg.get("max_tokens", 24)
+    # Titles are ~6 words, but reasoning models think before answering and the
+    # thinking spends this same budget — 24 tokens starved MiniMax into
+    # returning nothing at all. Keep generous; the first line is taken anyway.
+    payload["max_tokens"] = tcfg.get("max_tokens", 512)
     # Optional dedicated small model (titles.model): faster titles, AND it stops
     # the post-turn title call from evicting the chat model's KV cache in LM
     # Studio (single cache slot per model) — which would force a full history
@@ -719,7 +746,7 @@ def generate_title(turns: List[Dict]) -> str:
         json=payload, timeout=tcfg.get("timeout", 30),
     )
     response.raise_for_status()
-    text = response.json()["choices"][0]["message"]["content"] or ""
+    text = _extract_message_text(response.json(), "title generation")
     first_line = text.strip().splitlines()[0] if text.strip() else ""
     title = " ".join(first_line.split()).strip(' "\'')
     return title[:80].rstrip(" .")
@@ -811,7 +838,7 @@ def synthesize_notes(tree: Dict, existing_notes: Optional[List[Dict]] = None) ->
         timeout=ncfg.get("synthesis_timeout", 300),
     )
     response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"] or ""
+    content = _extract_message_text(response.json(), "notes synthesis")
 
     try:
         parsed = json.loads(content)
@@ -1290,7 +1317,7 @@ def synthesize(kind: str, items: List, query: str = "") -> str:
             json=payload, timeout=tcfg.get("timeout", 60),
         )
         response.raise_for_status()
-        return (response.json()["choices"][0]["message"]["content"] or "").strip()
+        return _extract_message_text(response.json(), f"synthesize({kind})")
     except Exception as e:
         print(f"Warning: synthesize({kind}) failed: {e}")
         return ""

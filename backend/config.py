@@ -92,7 +92,7 @@ def load_config() -> dict:
             "embedding_model_local": "BAAI/bge-small-en-v1.5",  # used when backend=local
             "embedding_model": "text-embedding-nomic-embed-text-v1.5",  # used when backend=lmstudio
             "search_limit": 10,
-            "synthesis_max_tokens": 256,
+            "synthesis_max_tokens": 768,   # reasoning models think first; thinking spends this budget
             # Editable/auditable synthesis system prompt (markdown file, like
             # system-prompt.md). Falls back to a built-in default if missing.
             "synthesis_prompt_file": "recall-synthesis-prompt.md",
@@ -189,7 +189,7 @@ def load_config() -> dict:
             "enabled": True,
             "regenerate_after_turns": 6,
             "temperature": 0.3,
-            "max_tokens": 24,
+            "max_tokens": 512,   # titles are short but reasoning models need thinking headroom
             "timeout": 30,
             # Optional dedicated model for title generation (e.g. a small qwen).
             # Recommended when the chat model is large: faster titles, and the
@@ -276,7 +276,7 @@ def load_config() -> dict:
                 "text_chars": 2000,     # page-text excerpt returned alongside
             },
             "synthesis": {
-                "max_tokens": 256,
+                "max_tokens": 768,   # reasoning headroom (see titles note)
                 "prompts": {
                     "memory": "recall-synthesis-prompt.md",
                     "web": "synthesis-web.md",

@@ -155,6 +155,43 @@ def test_datetime_grounding_in_system_prompt():
     print("✓ datetime grounding: injected every turn, substituted, overridable")
 
 
+def test_extract_message_text_reasoning_models():
+    import inference
+    # Normal answer passes through.
+    data = {"choices": [{"message": {"content": "Transit Planning Session"}}]}
+    assert inference._extract_message_text(data) == "Transit Planning Session"
+    # Reasoning model with a real answer: content used, reasoning ignored.
+    data = {"choices": [{"message": {"reasoning_content": "The user discussed...",
+                                     "content": "Transit Planning"}}]}
+    assert inference._extract_message_text(data) == "Transit Planning"
+    # Inline <think> block stripped.
+    data = {"choices": [{"message": {"content": "<think>hmm, a title</think>\nGood Title"}}]}
+    assert inference._extract_message_text(data) == "Good Title"
+    # Budget eaten by reasoning: empty string (logged), never the reasoning text.
+    data = {"choices": [{"message": {"reasoning_content": "Let me think about",
+                                     "content": ""}}]}
+    assert inference._extract_message_text(data, "title generation") == ""
+    # Malformed response never raises.
+    assert inference._extract_message_text({}) == ""
+    print("✓ reasoning-aware extraction: content only, <think> stripped, safe")
+
+
+def test_generate_title_with_reasoning_model():
+    from unittest.mock import patch, MagicMock
+    import inference
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json = lambda: {"choices": [{"message": {
+        "reasoning_content": "They talked about transit mostly.",
+        "content": "Transit and City Design\nextra line ignored"}}]}
+    with patch("requests.post", return_value=resp) as p:
+        title = inference.generate_title([{"role": "user", "content": "transit talk"}])
+        assert title == "Transit and City Design"
+        # Reasoning headroom: budget no longer starves the answer.
+        assert p.call_args.kwargs["json"]["max_tokens"] >= 256
+    print("✓ generate_title: reasoning model handled, headroom budget")
+
+
 def test_available_models():
     """Test getting available models."""
     mock_response = {
