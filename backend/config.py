@@ -191,6 +191,10 @@ def load_config() -> dict:
             "temperature": 0.3,
             "max_tokens": 24,
             "timeout": 30,
+            # Optional dedicated model for title generation (e.g. a small qwen).
+            # Recommended when the chat model is large: faster titles, and the
+            # post-turn title call stops evicting the chat model's KV cache.
+            "model": None,
             "prompt_file": "title-prompt.md",  # editable/auditable, like other layers
         },
         "tools": {

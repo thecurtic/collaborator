@@ -237,10 +237,14 @@ def test_describe_location():
 
 def test_location_line_reaches_system_prompt():
     msgs = inference._build_messages("hi", [], extra_system="User location right now: at home.")
-    assert "User location right now: at home." in msgs[0]["content"]
-    msgs = inference._build_messages("hi", [], extra_system=None)
+    # Dynamic content rides the LATE system message (prefix-cache friendly),
+    # never the static head.
     assert "User location" not in msgs[0]["content"]
-    print("✓ extra_system line lands in (and stays out of) the system prompt")
+    assert "User location right now: at home." in msgs[-2]["content"]
+    assert msgs[-2]["role"] == "system"
+    msgs = inference._build_messages("hi", [], extra_system=None)
+    assert all("User location" not in m["content"] for m in msgs)
+    print("✓ location line lands in the late dynamic system message only")
 
 
 # --- executor wiring ------------------------------------------------------------

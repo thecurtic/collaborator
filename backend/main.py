@@ -3020,11 +3020,14 @@ async def transcribe_stream(
             await _send({"type": "error", "detail": f"partial decode failed: {e}"})
 
     async def _finalize_and_close(phrase_event: Optional[dict] = None) -> None:
+        started = time.monotonic()
         if decode_task and not decode_task.done():
             await decode_task
         if phrase_event:
             await _send({"type": "phrase", "kind": phrase_event["kind"]})
         final_text = await asyncio.to_thread(session.finalize)
+        print(f"timing: STT final pass {time.monotonic() - started:.2f}s "
+              f"({len(session.audio) / voice.BYTES_PER_SEC:.0f}s audio)")
         await _send({"type": "final", "text": final_text})
         await websocket.close()
 

@@ -144,17 +144,6 @@ def _build_messages(
     system_prompt = config.get("system_prompt", {})
     system_content = system_prompt.get("text", "You are Collaborator, a helpful assistant.")
 
-    # Ground the model in the present — every turn, filled at send time.
-    datetime_text = _load_prompt_layer(
-        system_prompt, "datetime_file", "datetime_text", DEFAULT_DATETIME_TEXT)
-    now = time.strftime("%A, %Y-%m-%d %H:%M %Z")
-    system_content = f"{system_content}\n\n{datetime_text.replace('{now}', now)}"
-
-    # Per-turn dynamic context (e.g. the user-location line) — present only when
-    # the request supplied it, so absence degrades cleanly.
-    if extra_system and extra_system.strip():
-        system_content = f"{system_content}\n\n{extra_system.strip()}"
-
     # Tell the model how to use its tools (only when tools are active this turn).
     if include_tools_guidance:
         tools_cfg = config.get("tools", {}) or {}
@@ -194,6 +183,20 @@ def _build_messages(
                 messages.append({"role": "user", "content": turn["content"]})
             elif turn.get("role") == "assistant":
                 messages.append({"role": "assistant", "content": turn["content"]})
+
+    # Per-turn DYNAMIC context goes LAST, not in the main system prompt: the
+    # datetime line changes every minute and location every turn, and anything
+    # dynamic near the prompt head invalidates LM Studio's KV/prefix cache —
+    # forcing a full re-prefill of the whole history each turn. Down here the
+    # static prefix (system + history) stays cacheable, and recency placement
+    # grounds the model at least as well.
+    datetime_text = _load_prompt_layer(
+        system_prompt, "datetime_file", "datetime_text", DEFAULT_DATETIME_TEXT)
+    now = time.strftime("%A, %Y-%m-%d %H:%M %Z")
+    dynamic = datetime_text.replace("{now}", now)
+    if extra_system and extra_system.strip():
+        dynamic = f"{dynamic}\n\n{extra_system.strip()}"
+    messages.append({"role": "system", "content": dynamic})
 
     # Add current user message
     messages.append({"role": "user", "content": message})
@@ -704,6 +707,12 @@ def generate_title(turns: List[Dict]) -> str:
          {"role": "user", "content": excerpt}], stream=False)
     payload["temperature"] = tcfg.get("temperature", 0.3)
     payload["max_tokens"] = tcfg.get("max_tokens", 24)
+    # Optional dedicated small model (titles.model): faster titles, AND it stops
+    # the post-turn title call from evicting the chat model's KV cache in LM
+    # Studio (single cache slot per model) — which would force a full history
+    # re-prefill on the next chat turn.
+    if tcfg.get("model"):
+        payload["model"] = tcfg["model"]
 
     response = requests.post(
         f"{_get_endpoint_url()}/chat/completions",
@@ -1649,8 +1658,15 @@ def generate_with_tools(
         emitted_parts: List[str] = []   # what actually reached the user this round
         guard = _StreamGuard()
         tool_calls: Dict[int, Dict] = {}
+        round_started = time.monotonic()
+        first_delta_at = None
         try:
             for choice, delta in _iter_stream_events(payload):
+                if first_delta_at is None:
+                    first_delta_at = time.monotonic()
+                    print(f"timing: LLM first delta after "
+                          f"{first_delta_at - round_started:.2f}s "
+                          f"(round {round_index}, ~{sum(len(str(m.get('content') or '')) for m in messages) // 4} prompt tokens est)")
                 content = delta.get("content")
                 if content:
                     content_parts.append(content)

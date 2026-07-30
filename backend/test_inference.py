@@ -122,11 +122,17 @@ def test_system_prompt_layers_from_files():
 
 
 def test_datetime_grounding_in_system_prompt():
-    """Every turn's system prompt carries today's date + the don't-argue rule."""
+    """Every turn carries today's date + the don't-argue rule — in a LATE
+    system message (dynamic content near the prompt head would invalidate LM
+    Studio's prefix cache every minute)."""
     import time as _time
     import inference
 
-    system = inference._build_messages("hi")[0]["content"]
+    msgs = inference._build_messages("hi")
+    assert _time.strftime("%Y-%m-%d") not in msgs[0]["content"]   # head stays static
+    dynamic = msgs[-2]
+    assert dynamic["role"] == "system" and msgs[-1]["role"] == "user"
+    system = dynamic["content"]
     assert _time.strftime("%Y-%m-%d") in system          # today's actual date, filled in
     assert "ground truth" in system.lower()
     assert "{now}" not in system                          # placeholder substituted
@@ -139,7 +145,7 @@ def test_datetime_grounding_in_system_prompt():
     orig = sp.get("datetime_text")
     sp["datetime_text"] = "It is {now}, trust me."
     try:
-        system = inference._build_messages("hi")[0]["content"]
+        system = inference._build_messages("hi")[-2]["content"]
         assert "trust me" in system and _time.strftime("%Y-%m-%d") in system
     finally:
         if had:
