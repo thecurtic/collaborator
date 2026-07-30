@@ -1,9 +1,12 @@
 import {
   Brain,
+  Calculator,
   CalendarDays,
   Camera,
   Check,
   CircleSlash,
+  FileVideo,
+  FolderGit2,
   Globe,
   Link as LinkIcon,
   Loader2,
@@ -21,10 +24,15 @@ export function toolIcon(tool: string) {
   if (tool === 'fetch_url') return LinkIcon;
   if (tool === 'screenshot_page') return Camera;
   if (tool.startsWith('recall')) return Brain;
-  if (tool === 'search_notes' || tool === 'get_note') return NotebookText;
+  if (tool === 'search_notes' || tool === 'get_note' || tool === 'get_notes') {
+    return NotebookText;
+  }
   if (tool === 'propose_note') return NotebookPen;
   if (tool === 'read_logs') return ScrollText;
   if (tool === 'list_events') return CalendarDays;
+  if (tool === 'calculate') return Calculator;
+  if (tool === 'git_read') return FolderGit2;
+  if (tool === 'transcribe_video') return FileVideo;
   return Wrench;
 }
 

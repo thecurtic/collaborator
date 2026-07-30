@@ -10,6 +10,7 @@ import {
 } from '@/features/settings/uiPrefs';
 import { getCapabilities } from '@/lib/capabilities';
 import { holdPwaUpdates } from '@/pwa';
+import { currentLocation } from '@/lib/location';
 import { startCallService, stopCallService } from '@/native/nativeShell';
 import { saveTurnSources } from '@/features/chat/sourcesStore';
 import { foldToolEvent } from '@/features/chat/toolActivity';
@@ -462,6 +463,7 @@ export function useCall(
               mode: 'voice',
               // Tools (web/notes/recall) on voice turns — same toggle as text.
               tools: getToolsEnabled(),
+              location: await currentLocation(),
               ...(pb.withContext ? {} : { contextTurns: 0 }),
             },
             { onToken, onStatus: onToolEvent },
@@ -483,6 +485,7 @@ export function useCall(
               mode: 'voice',
               // Tools (web/notes/recall) on voice turns — same toggle as text.
               tools: getToolsEnabled(),
+              location: await currentLocation(),
             },
             // Other voice event rendering is server-side (spoken citations,
             // drafts announced verbally); tool activity shows in the call UI.

@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/button';
 import { RenameSheet } from '@/components/RenameSheet';
 import { ReferencesView } from '@/features/reference/ReferencesView';
 import { WebSearchView } from '@/features/search/WebSearchView';
+import { TranscriptsView } from '@/features/transcripts/TranscriptsView';
 import { useLongPress } from '@/lib/useLongPress';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
@@ -117,9 +118,11 @@ function AppShell() {
   const [mapOpen, setMapOpen] = useState(false);
   // The chat screen is "pushed" over the tabs (back arrow returns to them).
   const [chatOpen, setChatOpen] = useState(false);
-  // References (prompt viewer) and Web Search push over whatever is showing.
+  // References (prompt viewer), Web Search, and Transcripts push over
+  // whatever is showing.
   const [referencesOpen, setReferencesOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [transcriptsOpen, setTranscriptsOpen] = useState(false);
   // Composer prefill for chats spawned from search ("chat about this page").
   const [chatDraft, setChatDraft] = useState<{
     text: string;
@@ -274,6 +277,7 @@ function AppShell() {
   const startChatWithDraft = (text: string) => {
     setSearchOpen(false);
     setReferencesOpen(false);
+    setTranscriptsOpen(false);
     convo.startNewChat();
     setChatOpen(true);
     setChatDraft((prev) => ({ text, nonce: (prev?.nonce ?? 0) + 1 }));
@@ -354,21 +358,29 @@ function AppShell() {
     <div className="flex h-full flex-col">
       <header className="pt-safe px-safe border-b border-border">
         <div className="flex items-center gap-2 px-2 py-3">
-          {referencesOpen || searchOpen ? (
+          {referencesOpen || searchOpen || transcriptsOpen ? (
             <>
               <Button
                 variant="ghost"
                 size="icon"
                 aria-label="Back"
                 onClick={() =>
-                  searchOpen ? setSearchOpen(false) : setReferencesOpen(false)
+                  searchOpen
+                    ? setSearchOpen(false)
+                    : transcriptsOpen
+                      ? setTranscriptsOpen(false)
+                      : setReferencesOpen(false)
                 }
                 className="h-8 w-8 shrink-0"
               >
                 <ChevronLeft className="h-5 w-5" />
               </Button>
               <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {searchOpen ? 'Web Search' : 'References'}
+                {searchOpen
+                  ? 'Web Search'
+                  : transcriptsOpen
+                    ? 'Transcripts'
+                    : 'References'}
               </span>
             </>
           ) : chatOpen ? (
@@ -405,15 +417,23 @@ function AppShell() {
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenReferences={() => {
                 setSearchOpen(false);
+                setTranscriptsOpen(false);
                 setReferencesOpen(true);
               }}
               onOpenWebSearch={() => {
                 setReferencesOpen(false);
+                setTranscriptsOpen(false);
                 setSearchOpen(true);
+              }}
+              onOpenTranscripts={() => {
+                setReferencesOpen(false);
+                setSearchOpen(false);
+                setTranscriptsOpen(true);
               }}
               onSignOut={() => {
                 setReferencesOpen(false);
                 setSearchOpen(false);
+                setTranscriptsOpen(false);
                 setChatOpen(false);
                 signOut();
               }}
@@ -536,6 +556,8 @@ function AppShell() {
           <WebSearchView onStartChat={startChatWithDraft} />
         ) : referencesOpen ? (
           <ReferencesView />
+        ) : transcriptsOpen ? (
+          <TranscriptsView onBack={() => setTranscriptsOpen(false)} />
         ) : chatOpen ? (
           <ChatView
             convo={convo}
@@ -663,7 +685,7 @@ function AppShell() {
       </main>
 
       {/* Errors on tab screens (the chat screen shows its own strip). */}
-      {!chatOpen && !referencesOpen && !searchOpen && gate === 'open' && convo.error && (
+      {!chatOpen && !referencesOpen && !searchOpen && !transcriptsOpen && gate === 'open' && convo.error && (
         <div className="border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-center text-sm text-destructive">
           {convo.error}
         </div>
@@ -677,7 +699,7 @@ function AppShell() {
       )}
 
       {/* Bottom tabs — hidden while a pushed screen (chat/references/search) is open. */}
-      {!chatOpen && !referencesOpen && !searchOpen && gate === 'open' && (
+      {!chatOpen && !referencesOpen && !searchOpen && !transcriptsOpen && gate === 'open' && (
         <nav className="pb-safe px-safe border-t border-border" aria-label="Main">
           <div className="mx-auto flex max-w-3xl">
             <TabButton

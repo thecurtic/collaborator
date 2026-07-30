@@ -286,10 +286,50 @@ export interface ApiWebSearchResponse {
   infoboxes?: { title?: string; content?: string }[];
 }
 
+/** Per-model detail (f7e235b) — only from LM Studio endpoints. */
+export interface ApiModelInfo {
+  id: string;
+  type?: string;
+  state?: string;
+  quantization?: string | null;
+  max_context_length?: number | null;
+  loaded_context_length?: number | null;
+}
+
 /** GET /api/models — live from LM Studio (may 500 if the box is down). */
 export interface ApiModelsResponse {
   current: string;
   available: string[];
+  /** f7e235b enrichment; empty/absent on non-LM-Studio endpoints. */
+  models?: ApiModelInfo[];
+  loaded?: string[];
+  /** Absent (not false) when load state is unknown — make no claims then. */
+  current_loaded?: boolean;
+}
+
+/** One video-transcription job (b23d8ea). */
+export interface ApiTranscript {
+  id: number;
+  url: string;
+  title?: string | null;
+  duration_s?: number | null;
+  status: 'processing' | 'done' | 'error';
+  chars?: number | null;
+  created_at: string;
+  finished_at?: string | null;
+  /** Full text — only on GET /api/transcripts/{id}. */
+  text?: string;
+}
+
+/** GET /api/transcripts */
+export interface ApiTranscriptsResponse {
+  transcripts: ApiTranscript[];
+  count: number;
+}
+
+/** GET /api/transcripts/{id} */
+export interface ApiTranscriptResponse {
+  transcript: ApiTranscript;
 }
 
 /** PUT /api/model — applies to the next message and persists. */

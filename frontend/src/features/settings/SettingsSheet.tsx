@@ -11,7 +11,8 @@ import { KEYWORD_OPTIONS } from '@/features/voice/keywordSpotter';
 import { PIPER_VOICES } from '@/features/voice/piperVoices';
 import { webSpeechSupported } from '@/features/voice/speech';
 import { cn } from '@/lib/utils';
-import type { TtsVoices } from '@/domain/models';
+import type { ModelsInfo, TtsVoices } from '@/domain/models';
+import { currentLocation } from '@/lib/location';
 import {
   DEFAULT_END_PHRASE,
   DEFAULT_INTERRUPT_PHRASE,
@@ -19,6 +20,7 @@ import {
   setEndPhrase,
   setEndWord,
   setInterruptPhrase,
+  setLocationEnabled,
   setPiperVoice,
   setToolsEnabled,
   setServerVoice,
@@ -29,6 +31,7 @@ import {
   useEndPhrase,
   useEndWord,
   useInterruptPhrase,
+  useLocationEnabled,
   usePiperVoice,
   useToolsEnabled,
   useServerVoice,
@@ -47,10 +50,7 @@ interface SettingsSheetProps {
  * Mounted only while the sheet is open, so the fetch happens per open.
  */
 function ModelPicker() {
-  const [models, setModels] = useState<{
-    current: string;
-    available: string[];
-  } | null>(null);
+  const [models, setModels] = useState<ModelsInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // A 422 target the user may push through with force (advanced action).
@@ -63,7 +63,13 @@ function ModelPicker() {
     } catch (err) {
       // LM Studio may be down — the list endpoint 500s in that case.
       setError(err instanceof Error ? err.message : 'Could not load models');
-      setModels({ current: '', available: [] });
+      setModels({
+        current: '',
+        available: [],
+        models: [],
+        loaded: [],
+        currentLoaded: null,
+      });
     }
   };
 
@@ -79,7 +85,7 @@ function ModelPicker() {
     setForceable(null);
     try {
       await api.setModel(id, force);
-      setModels({ ...models, current: id });
+      await load(); // re-derive current_loaded for the new selection
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not switch model');
       if (err instanceof ApiRequestError && err.status === 422) setForceable(id);
@@ -88,11 +94,19 @@ function ModelPicker() {
     }
   };
 
+  // Prefer the enriched rows (f7e235b): chat models only, with load state.
+  // Fall back to the plain id list on non-LM-Studio endpoints.
+  const loadedSet = new Set(models?.loaded ?? []);
+  const chatIds =
+    models && models.models.length > 0
+      ? models.models.filter((m) => !m.type || m.type === 'llm').map((m) => m.id)
+      : (models?.available ?? []);
   // Keep the current model selectable even if LM Studio doesn't list it.
   const options =
-    models && models.current && !models.available.includes(models.current)
-      ? [models.current, ...models.available]
-      : (models?.available ?? []);
+    models && models.current && !chatIds.includes(models.current)
+      ? [models.current, ...chatIds]
+      : chatIds;
+  const currentInfo = models?.models.find((m) => m.id === models.current);
 
   return (
     <div className="space-y-3">
@@ -112,9 +126,35 @@ function ModelPicker() {
             {options.map((m) => (
               <option key={m} value={m}>
                 {m}
+                {loadedSet.has(m) ? ' — loaded ●' : ''}
               </option>
             ))}
           </select>
+          {/* The near-crash case: config points at a model LM Studio hasn't
+              loaded — the next message loads it (slow, memory-heavy). */}
+          {models?.currentLoaded === false && (
+            <p className="rounded-md bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-700">
+              This model isn't loaded. Your next message will make LM Studio
+              load it — slow, and memory-heavy if another large model is
+              already resident
+              {models.loaded.length > 0
+                ? ` (currently loaded: ${models.loaded.join(', ')})`
+                : ''}
+              .
+            </p>
+          )}
+          {currentInfo && (
+            <p className="text-xs text-muted-foreground">
+              {[
+                currentInfo.quantization,
+                currentInfo.maxContextLength != null
+                  ? `${Math.round(currentInfo.maxContextLength / 1024)}k context`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </p>
+          )}
           {error && (
             <p className="text-xs text-destructive">
               {error}
@@ -289,6 +329,7 @@ function ServerVoicePicker() {
 export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
   const debug = useDebugEnabled();
   const tools = useToolsEnabled();
+  const location = useLocationEnabled();
   const ttsEngine = useTtsEngine();
   const sttEngine = useSttEngine();
   const piperVoice = usePiperVoice();
@@ -549,6 +590,43 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
               className={cn(
                 'block h-5 w-5 rounded-full bg-white transition-transform',
                 tools ? 'translate-x-5' : 'translate-x-0.5',
+              )}
+            />
+          </button>
+        </div>
+
+        {/* Location context (b23d8ea) — opt-in, per-turn, resolved to named
+            places server-side; ephemeral unless the SERVER config stores it. */}
+        <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
+          <div className="pr-3">
+            <p className="text-sm font-medium">Location context</p>
+            <p className="text-xs text-muted-foreground">
+              Attach your location to each message so the agent knows where
+              you are ("at home", "near work"). Your server resolves the
+              coordinates to named places — nothing leaves it, and by default
+              nothing is stored.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={location}
+            aria-label="Location context"
+            onClick={() => {
+              const next = !location;
+              setLocationEnabled(next);
+              // Surface the browser permission prompt now, not mid-send.
+              if (next) void currentLocation();
+            }}
+            className={cn(
+              'relative h-6 w-11 shrink-0 rounded-full transition-colors',
+              location ? 'bg-primary' : 'bg-muted',
+            )}
+          >
+            <span
+              className={cn(
+                'block h-5 w-5 rounded-full bg-white transition-transform',
+                location ? 'translate-x-5' : 'translate-x-0.5',
               )}
             />
           </button>

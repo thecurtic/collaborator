@@ -12,6 +12,7 @@ import type {
   TreeNode,
 } from '@/domain/models';
 import { getToolsEnabled } from '@/features/settings/uiPrefs';
+import { currentLocation } from '@/lib/location';
 import { saveTurnSources } from './sourcesStore';
 import { foldToolEvent } from './toolActivity';
 import { removeNode, renameNode, setSubtreeState } from './treeEdits';
@@ -273,13 +274,14 @@ export function useConversation(reloadSignal: number) {
     async (message: string): Promise<boolean> => {
       const trimmed = message.trim();
       if (!trimmed) return true;
-      const outcome = await runStream(trimmed, (handlers, signal) =>
+      const outcome = await runStream(trimmed, async (handlers, signal) =>
         api.sendMessageStream(
           // Active leaf to continue from (omit for a brand-new conversation).
           {
             message: trimmed,
             parentTurnId: leafRef.current ?? undefined,
             tools: getToolsEnabled(),
+            location: await currentLocation(),
           },
           handlers,
           signal,
@@ -317,13 +319,14 @@ export function useConversation(reloadSignal: number) {
       // stream (the reload inside runStream rebuilds the index).
       const root = rootOfTurn(parentTurnId);
       const seedRootId = root?.state === 'seed' ? root.id : null;
-      const outcome = await runStream(trimmed, (handlers, signal) =>
+      const outcome = await runStream(trimmed, async (handlers, signal) =>
         api.branchMessage(
           {
             parentTurnId,
             message: trimmed,
             paragraphIndex,
             tools: getToolsEnabled(),
+            location: await currentLocation(),
             // "Without context" → fresh branch, no prior turns injected.
             ...(withContext ? {} : { contextTurns: 0 }),
           },
@@ -380,7 +383,7 @@ export function useConversation(reloadSignal: number) {
         return false;
       }
 
-      const outcome = await runStream(trimmed, (handlers, signal) =>
+      const outcome = await runStream(trimmed, async (handlers, signal) =>
         u.branched && parentId != null && parentId !== VIRTUAL_ROOT
           ? api.branchMessage(
               {
@@ -388,6 +391,7 @@ export function useConversation(reloadSignal: number) {
                 message: trimmed,
                 paragraphIndex: u.paragraphIndex ?? undefined,
                 tools: getToolsEnabled(),
+                location: await currentLocation(),
                 ...(u.contextBoundary ? { contextTurns: 0 } : {}),
               },
               handlers,
@@ -398,6 +402,7 @@ export function useConversation(reloadSignal: number) {
                 message: trimmed,
                 parentTurnId: isRoot ? undefined : (parentId ?? undefined),
                 tools: getToolsEnabled(),
+                location: await currentLocation(),
                 ...(keepState ? { state: keepState } : {}),
               },
               handlers,

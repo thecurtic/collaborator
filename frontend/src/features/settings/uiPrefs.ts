@@ -18,6 +18,7 @@ const END_PHRASE_KEY = 'collaborator_end_phrase';
 const INTERRUPT_PHRASE_KEY = 'collaborator_interrupt_phrase';
 const STT_KEY = 'collaborator_stt_engine';
 const TOOLS_KEY = 'collaborator_tools';
+const LOCATION_KEY = 'collaborator_location';
 /** Pre-9aee10b name for the tools toggle ("recall" gated the whole tool loop). */
 const LEGACY_RECALL_KEY = 'collaborator_recall';
 
@@ -117,6 +118,18 @@ export function setPiperVoice(value: string): void {
 }
 export function usePiperVoice(): string {
   return useSyncExternalStore(subscribe, getPiperVoice, () => DEFAULT_PIPER_VOICE);
+}
+
+// --- Location context (b23d8ea): attach coordinates to each turn, opt-in.
+// The backend resolves them to named places; nothing leaves the server.
+export function getLocationEnabled(): boolean {
+  return read(LOCATION_KEY) === '1';
+}
+export function setLocationEnabled(value: boolean): void {
+  write(LOCATION_KEY, value ? '1' : '0');
+}
+export function useLocationEnabled(): boolean {
+  return useSyncExternalStore(subscribe, getLocationEnabled, () => false);
 }
 
 // --- Server TTS voice ('' = let the server pick its default) ---

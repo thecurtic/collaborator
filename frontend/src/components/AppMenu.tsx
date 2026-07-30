@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  FileVideo,
   Globe,
   LogOut,
   Menu,
@@ -39,11 +40,13 @@ export function AppMenu({
   onOpenSettings,
   onOpenReferences,
   onOpenWebSearch,
+  onOpenTranscripts,
   onSignOut,
 }: {
   onOpenSettings: () => void;
   onOpenReferences: () => void;
   onOpenWebSearch: () => void;
+  onOpenTranscripts: () => void;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -90,6 +93,9 @@ export function AppMenu({
             </MenuItem>
             <MenuItem icon={Globe} onClick={() => pick(onOpenWebSearch)}>
               Web Search
+            </MenuItem>
+            <MenuItem icon={FileVideo} onClick={() => pick(onOpenTranscripts)}>
+              Transcripts
             </MenuItem>
             <div className="my-1 border-t border-border" />
             <MenuItem icon={LogOut} onClick={() => pick(onSignOut)}>

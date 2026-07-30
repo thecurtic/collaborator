@@ -11,12 +11,16 @@ import type {
   ReindexResult,
   SendMessageInput,
   SynthesisResult,
+  ModelsInfo,
+  Transcript,
   TtsVoices,
   TurnsPage,
   WebSearch,
 } from '@/domain/models';
 import {
   toHealth,
+  toModelsInfo,
+  toTranscript,
   toTtsVoices,
   toNote,
   toNoteDraft,
@@ -42,6 +46,8 @@ import type {
   ApiReindexResponse,
   ApiSendMessageResponse,
   ApiSynthesisResponse,
+  ApiTranscriptResponse,
+  ApiTranscriptsResponse,
   ApiTree,
   ApiTtsVoices,
   ApiTurnsResponse,
@@ -393,8 +399,16 @@ export interface CollaboratorApi {
    */
   searchWeb(q: string, limit?: number): Promise<WebSearch>;
 
-  /** Current + available chat models (live from LM Studio; GET may 500). */
-  getModels(): Promise<{ current: string; available: string[] }>;
+  /**
+   * Current + available chat models, with per-model load state when the
+   * endpoint is LM Studio (f7e235b). GET may 500 when the box is down.
+   */
+  getModels(): Promise<ModelsInfo>;
+
+  /** Background video-transcription jobs (b23d8ea), newest first. */
+  listTranscripts(): Promise<Transcript[]>;
+  /** One job including its full text. */
+  getTranscript(id: number): Promise<Transcript>;
   /**
    * Switch the chat model — applies to the very next message and persists.
    * PER-INSTALL: changes the model for every user, not just this passkey.
@@ -447,6 +461,8 @@ class HttpCollaboratorApi implements CollaboratorApi {
         mode: input.mode,
         // 9aee10b: `tools` supersedes the misnamed `recall` alias.
         tools: input.tools,
+        // b23d8ea: opt-in per-turn location (absent = no placeholder).
+        location: input.location,
         state: input.state,
       }),
       signal,
@@ -474,6 +490,8 @@ class HttpCollaboratorApi implements CollaboratorApi {
         mode: input.mode,
         // 9aee10b: `tools` supersedes the misnamed `recall` alias.
         tools: input.tools,
+        // b23d8ea: opt-in per-turn location (absent = no placeholder).
+        location: input.location,
       }),
       signal,
     });
@@ -670,9 +688,18 @@ class HttpCollaboratorApi implements CollaboratorApi {
     };
   }
 
-  async getModels(): Promise<{ current: string; available: string[] }> {
-    const res = await request<ApiModelsResponse>('/api/models');
-    return { current: res.current, available: res.available ?? [] };
+  async getModels(): Promise<ModelsInfo> {
+    return toModelsInfo(await request<ApiModelsResponse>('/api/models'));
+  }
+
+  async listTranscripts(): Promise<Transcript[]> {
+    const res = await request<ApiTranscriptsResponse>('/api/transcripts');
+    return (res.transcripts ?? []).map(toTranscript);
+  }
+
+  async getTranscript(id: number): Promise<Transcript> {
+    const res = await request<ApiTranscriptResponse>(`/api/transcripts/${id}`);
+    return toTranscript(res.transcript);
   }
 
   async setModel(modelId: string, force = false): Promise<void> {

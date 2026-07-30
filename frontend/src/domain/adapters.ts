@@ -1,10 +1,12 @@
 import type {
   ApiHealth,
+  ApiModelsResponse,
   ApiNoteDraft,
   ApiNoteMeta,
   ApiNoteResponse,
   ApiPromptEntry,
   ApiRecall,
+  ApiTranscript,
   ApiTree,
   ApiTreeNode,
   ApiTurn,
@@ -15,12 +17,14 @@ import type {
 import type {
   ConversationTree,
   HealthStatus,
+  ModelsInfo,
   Note,
   NoteDraft,
   NoteMeta,
   PromptInfo,
   RecallBlock,
   ToolActivity,
+  Transcript,
   TreeNode,
   TtsVoices,
   Turn,
@@ -155,6 +159,48 @@ export function toHealth(api: ApiHealth): HealthStatus {
       ttsStream: Boolean(api.capabilities?.tts_stream),
       phrases: Boolean(api.capabilities?.phrases),
     },
+  };
+}
+
+export function toModelsInfo(api: ApiModelsResponse): ModelsInfo {
+  const loaded = (api.loaded ?? []).filter((m) => typeof m === 'string');
+  return {
+    current: api.current,
+    available: api.available ?? [],
+    models: (api.models ?? []).map((m) => ({
+      id: m.id,
+      type: typeof m.type === 'string' ? m.type : null,
+      loaded: m.state === 'loaded',
+      quantization:
+        typeof m.quantization === 'string' ? m.quantization : null,
+      maxContextLength:
+        typeof m.max_context_length === 'number' ? m.max_context_length : null,
+      loadedContextLength:
+        typeof m.loaded_context_length === 'number'
+          ? m.loaded_context_length
+          : null,
+    })),
+    loaded,
+    // Absent ≠ false: non-LM-Studio endpoints report nothing — no claims.
+    currentLoaded:
+      typeof api.current_loaded === 'boolean' ? api.current_loaded : null,
+  };
+}
+
+export function toTranscript(api: ApiTranscript): Transcript {
+  return {
+    id: api.id,
+    url: typeof api.url === 'string' ? api.url : '',
+    title: api.title ?? null,
+    durationS: typeof api.duration_s === 'number' ? api.duration_s : null,
+    status:
+      api.status === 'done' || api.status === 'error'
+        ? api.status
+        : 'processing',
+    chars: typeof api.chars === 'number' ? api.chars : null,
+    createdAt: api.created_at,
+    finishedAt: api.finished_at ?? null,
+    text: typeof api.text === 'string' ? api.text : null,
   };
 }
 

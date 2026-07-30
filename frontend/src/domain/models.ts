@@ -100,6 +100,8 @@ export interface BranchInput {
    * loop, 9aee10b). Omit to use the server default; explicit false disables.
    */
   tools?: boolean;
+  /** Where the user is, when they've opted in (b23d8ea); omit otherwise. */
+  location?: TurnLocation;
 }
 
 /**
@@ -119,6 +121,54 @@ export interface HealthStatus {
   status: string;
   version: string;
   capabilities: ServerCapabilities;
+}
+
+/** One chat model as LM Studio reports it (f7e235b); nulls = unreported. */
+export interface ModelInfo {
+  id: string;
+  type: string | null;
+  loaded: boolean;
+  quantization: string | null;
+  maxContextLength: number | null;
+  loadedContextLength: number | null;
+}
+
+export interface ModelsInfo {
+  current: string;
+  available: string[];
+  /** Empty on non-LM-Studio endpoints — make no load claims then. */
+  models: ModelInfo[];
+  loaded: string[];
+  /** null = unknown (endpoint doesn't report load state). */
+  currentLoaded: boolean | null;
+}
+
+/**
+ * Optional per-turn location (b23d8ea). The backend resolves it to named
+ * places server-side; coordinates never leave the server, and by default the
+ * turn is informed but nothing is stored.
+ */
+export interface TurnLocation {
+  lat: number;
+  lon: number;
+  /** Meters. */
+  accuracy?: number;
+  /** Unix seconds. */
+  ts?: number;
+}
+
+/** A video-transcription job (b23d8ea): STT over the audio, never captions. */
+export interface Transcript {
+  id: number;
+  url: string;
+  title: string | null;
+  durationS: number | null;
+  status: 'processing' | 'done' | 'error';
+  chars: number | null;
+  createdAt: string;
+  finishedAt: string | null;
+  /** Full text — present only when fetched by id. */
+  text: string | null;
 }
 
 /** GET /api/tts/voices — server TTS voice roster for the picker. */
@@ -309,6 +359,8 @@ export interface SendMessageInput {
    * loop, 9aee10b). Omit to use the server default; explicit false disables.
    */
   tools?: boolean;
+  /** Where the user is, when they've opted in (b23d8ea); omit otherwise. */
+  location?: TurnLocation;
   /**
    * The active leaf turn id to continue from (its ancestor chain = context).
    * Omit ONLY for a brand-new conversation; omitting on an existing convo starts
