@@ -96,6 +96,64 @@ def test_search_notes_tag_filter_executor():
     print("✓ search_notes executor: tag filter + tag-only category listing")
 
 
+def test_search_created_range_composes():
+    c, cfg, dbp = _fresh()
+    vault = cfg["notes"]["vault_dir"]
+    os.makedirs(vault, exist_ok=True)
+    def _note(title, created, body, tags=""):
+        with open(os.path.join(vault, f"{title}.md"), "w", encoding="utf-8") as f:
+            f.write(f"---\ncreated: {created}\ntags: [{tags}]\n---\n\n# {title}\n\n{body}\n")
+    _note("Old transit idea", "2026-06-01", "transit dreams")
+    _note("Fresh transit idea", "2026-07-28", "transit is freedom", tags="decision")
+    _note("Fresh unrelated", "2026-07-29", "gardening notes")
+    conn = sqlite3.connect(dbp)
+    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+    conn.close()
+
+    _, execute, _ = main._build_tools(dbp)
+    # "notes from this week that mention transit" — one call.
+    hits = json.loads(execute("search_notes", {
+        "query": "transit", "mode": "keyword", "created_from": "2026-07-27"}))
+    assert [h["title"] for h in hits] == ["Fresh transit idea"]
+    # Date range alone lists the period.
+    hits = json.loads(execute("search_notes", {
+        "query": "", "created_from": "2026-07-27", "created_to": "2026-07-28"}))
+    assert [h["title"] for h in hits] == ["Fresh transit idea"]
+    # Composes with tag too.
+    hits = json.loads(execute("search_notes", {
+        "query": "", "created_from": "2026-07-01", "tag": "decision"}))
+    assert [h["title"] for h in hits] == ["Fresh transit idea"]
+    print("✓ search_notes: created range composes with query and tag")
+
+
+def test_graph_notes_traversal():
+    c, cfg, dbp = _fresh()
+    _seed_note(cfg, dbp, "Hub", "Links to [[Spoke A]] and [[Spoke B]] and [[Ghost]].")
+    _seed_note(cfg, dbp, "Spoke A", "Points at [[Far]].")
+    _seed_note(cfg, dbp, "Spoke B", "Standalone.")
+    _seed_note(cfg, dbp, "Far", "Two hops out.")
+    _seed_note(cfg, dbp, "Inbound", "I reference [[Hub]] too.")
+
+    _, execute, _ = main._build_tools(dbp)
+
+    g = json.loads(execute("graph_notes", {"title": "hub"}))   # case-insensitive
+    names = {n["title"] for n in g["nodes"]}
+    # Depth 1: links out, backlinks in, ghost included but flagged missing.
+    assert names == {"Hub", "Spoke A", "Spoke B", "Ghost", "Inbound"}
+    assert any(n.get("missing") for n in g["nodes"] if n["title"] == "Ghost")
+    assert "Far" not in names
+    assert {"from": "Inbound", "to": "Hub"} in g["edges"]
+
+    g2 = json.loads(execute("graph_notes", {"title": "Hub", "depth": 2}))
+    assert "Far" in {n["title"] for n in g2["nodes"]}
+    far = next(n for n in g2["nodes"] if n["title"] == "Far")
+    assert far["distance"] == 2
+
+    missing = json.loads(execute("graph_notes", {"title": "Nope"}))
+    assert "error" in missing
+    print("✓ graph_notes: BFS links+backlinks, missing flagged, depth honored")
+
+
 def test_get_notes_batch_traversal():
     c, cfg, dbp = _fresh()
     _seed_note(cfg, dbp, "Alpha", "Links to [[Beta]] and [[Gamma]].", tags=["decision"])

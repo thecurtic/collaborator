@@ -43,7 +43,21 @@ note per person), memory (salient events), goal, decision, question, project. Pa
 `tag` with an EMPTY query to list a whole category — e.g. tag "user-profile" with
 no query returns the user's full profile; tag "social-graph" lists their people.
 Returns titles, tags, created dates, link edges, and a body preview. Pass `limit`
-(up to 50) when you want a wider sweep than the default.
+(up to 50) when you want a wider sweep than the default. `created_from` /
+`created_to` (ISO dates, inclusive) filter by when a note was APPROVED into the
+vault and compose with query and tag — so "notes from this week that mention X"
+is one call: query="X", created_from=<monday>. Resolve relative ranges against
+today's date yourself. A date range with an empty query lists everything from
+that period.
+
+## graph_notes
+Map the knowledge graph around one note: breadth-first traversal across both
+[[links]] and backlinks, to `depth` hops (default 1, max 3). Returns nodes —
+title, tags, created, distance from the center, a short preview, and
+missing=true for wikilink targets that don't have a note yet (potential notes)
+— plus the directed link edges among them. Use it to SEE structure before
+reading: find the neighborhood, then get_notes the titles that matter. Pass the
+exact title (find it with search_notes first).
 
 ## get_notes
 Fetch MULTIPLE notes by exact title in one call — full bodies, tags, links — up to

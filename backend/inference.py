@@ -1319,6 +1319,9 @@ def _tool_status_label(name: str, args: Dict) -> str:
     if name == "get_notes":
         n = len(args.get("titles") or [])
         return f"Reading {n} note{'s' if n != 1 else ''}…"
+    if name == "graph_notes":
+        t = (args.get("title") or "").strip()
+        return f"Mapping the note graph{f' around “{t[:40]}”' if t else ''}…"
     if name == "calculate":
         expr = (args.get("expression") or "").strip()
         return f"Calculating {expr[:40]}…" if expr else "Calculating…"

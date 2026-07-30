@@ -284,8 +284,26 @@ def _note_has_tag(note: dict, tag: str) -> bool:
     return tag.lower() in [t.lower() for t in note.get("tags") or []]
 
 
-def search_notes_semantic(conn, query_vector, limit: int = 10, tag: str = None):
-    """Cosine similarity over indexed note embeddings. Optional tag filter."""
+def _note_in_created_range(note: dict, created_from: str = None,
+                           created_to: str = None) -> bool:
+    """created is day-granular ISO (the approval date); range is inclusive.
+    Notes without a created date are excluded from any date-filtered query."""
+    if not created_from and not created_to:
+        return True
+    created = (note.get("created") or "")[:10]
+    if not created:
+        return False
+    if created_from and created < created_from[:10]:
+        return False
+    if created_to and created > created_to[:10]:
+        return False
+    return True
+
+
+def search_notes_semantic(conn, query_vector, limit: int = 10, tag: str = None,
+                          created_from: str = None, created_to: str = None):
+    """Cosine similarity over indexed note embeddings. Optional tag and
+    created-date-range filters (composable)."""
     if not query_vector:
         return []
     import numpy as np
@@ -308,10 +326,93 @@ def search_notes_semantic(conn, query_vector, limit: int = 10, tag: str = None):
         note = _row_to_note(row[:-1])
         if tag and not _note_has_tag(note, tag):
             continue
+        if not _note_in_created_range(note, created_from, created_to):
+            continue
         note["score"] = float(np.dot(q, vec) / denom)
         scored.append(note)
     scored.sort(key=lambda n: n["score"], reverse=True)
     return scored[:limit]
+
+
+def graph_neighborhood(conn, title: str, depth: int = 1, max_nodes: int = 40):
+    """BFS subgraph around a note, across [[links]] AND backlinks.
+
+    Returns {"center", "nodes": [{title, tags, created, distance, preview,
+    missing?}], "edges": [{"from", "to"}], "truncated"} or None when the
+    center note doesn't exist. Link targets with no note yet appear as
+    missing: True nodes (Obsidian's unresolved links are potential notes) but
+    are not expanded. Edges are directed from linker to target; every edge
+    among included nodes is reported, deduped. Depth capped by the caller.
+    """
+    center = get_note_by_title(conn, title)
+    if center is None:
+        return None
+
+    # Whole-index adjacency in one pass (personal-scale corpus).
+    notes = {}
+    outgoing = {}
+    display = {}                 # lower key -> original casing (notes win)
+    for row in conn.cursor().execute(f"SELECT {_COLS} FROM notes_index").fetchall():
+        note = _row_to_note(row)
+        key = note["title"].lower()
+        notes[key] = note
+        display[key] = note["title"]
+        outgoing[key] = [l for l in note["links"]]
+    incoming = {}
+    for src, targets in outgoing.items():
+        for t in targets:
+            incoming.setdefault(t.lower(), []).append(src)
+            display.setdefault(t.lower(), t)   # keep wikilink casing for missing
+
+    start = center["title"].lower()
+    distance = {start: 0}
+    order = [start]
+    frontier = [start]
+    truncated = False
+    for d in range(1, depth + 1):
+        next_frontier = []
+        for key in frontier:
+            neighbors = ([t.lower() for t in outgoing.get(key, [])]
+                         + incoming.get(key, []))
+            for n in neighbors:
+                if n in distance:
+                    continue
+                if len(order) >= max_nodes:
+                    truncated = True
+                    break
+                distance[n] = d
+                order.append(n)
+                if n in notes:          # missing notes are recorded, not expanded
+                    next_frontier.append(n)
+        frontier = next_frontier
+    included = set(order)
+
+    def _display(key):
+        return display.get(key, key)
+
+    nodes = []
+    for key in order:
+        if key in notes:
+            n = notes[key]
+            nodes.append({"title": n["title"], "tags": n["tags"],
+                          "created": n["created"], "distance": distance[key],
+                          "preview": (n.get("body") or "")[:160]})
+        else:
+            nodes.append({"title": _display(key), "distance": distance[key],
+                          "missing": True})
+
+    edges, seen = [], set()
+    for src in included:
+        if src not in notes:
+            continue
+        for t in outgoing.get(src, []):
+            tkey = t.lower()
+            if tkey in included and (src, tkey) not in seen:
+                seen.add((src, tkey))
+                edges.append({"from": _display(src), "to": _display(tkey)})
+
+    return {"center": center["title"], "nodes": nodes, "edges": edges,
+            "truncated": truncated}
 
 
 def list_events(conn, window_start: str = None, window_end: str = None):
@@ -344,19 +445,24 @@ def list_events(conn, window_start: str = None, window_end: str = None):
     return events
 
 
-def search_notes_keyword(conn, query: str, limit: int = 10, tag: str = None):
-    """Lexical search over title/body/tags by term overlap. Optional tag filter.
+def search_notes_keyword(conn, query: str, limit: int = 10, tag: str = None,
+                         created_from: str = None, created_to: str = None):
+    """Lexical search over title/body/tags by term overlap. Optional tag and
+    created-date-range filters (composable).
 
-    With a tag and NO query terms, returns every note carrying the tag (the
-    "totality of notes tagged X" retrieval — e.g. the full user profile).
+    With filters and NO query terms, returns every note passing the filters
+    (e.g. the full user profile via tag, or "everything from this week" via
+    a date range alone).
     """
     terms = [t.lower() for t in re.split(r"\W+", query or "") if len(t) >= 2]
-    if not terms and not tag:
+    if not terms and not tag and not created_from and not created_to:
         return []
     scored = []
     for row in conn.cursor().execute(f"SELECT {_COLS} FROM notes_index").fetchall():
         note = _row_to_note(row)
         if tag and not _note_has_tag(note, tag):
+            continue
+        if not _note_in_created_range(note, created_from, created_to):
             continue
         if not terms:
             note["score"] = 1

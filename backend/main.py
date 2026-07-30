@@ -413,6 +413,12 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                         "(charts, tables, images, visual design). Slower than "
                         "fetch_url — prefer fetch_url first. Optional `question` "
                         "focuses the analysis on what you need from the page."),
+    "graph_notes": ("Map the note graph around one note: BFS across [[links]] "
+                    "and backlinks to a given depth (1-3). Returns nodes (title, "
+                    "tags, created, distance, preview; missing=true for links to "
+                    "notes that don't exist yet) and directed edges. Use to see "
+                    "how ideas connect before reading; then get_notes the nodes "
+                    "that matter."),
     "get_notes": ("Fetch MULTIPLE notes by exact title in one call (full bodies, "
                   "tags, links) — up to 20. Use for graph traversal: after "
                   "search_notes or get_note reveals [[links]], read the whole "
@@ -540,7 +546,15 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                                        "goal, decision, question, project, event"},
                 "limit": {"type": "integer",
                           "description": "max results (default 8; tag-only "
-                                         "listings default 20; max 50)"}},
+                                         "listings default 20; max 50)"},
+                "created_from": {"type": "string",
+                                 "description": "only notes approved on/after "
+                                                "this ISO date (YYYY-MM-DD) — "
+                                                "resolve 'this week' etc. "
+                                                "against today's date"},
+                "created_to": {"type": "string",
+                               "description": "only notes approved on/before "
+                                              "this ISO date (inclusive)"}},
                 "required": ["query"]}}})
     if avail.get("get_note", True):
         schemas.append({"type": "function", "function": {
@@ -557,6 +571,16 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "titles": {"type": "array", "items": {"type": "string"},
                            "description": "exact note titles (up to 20 per call)"}},
                 "required": ["titles"]}}})
+    if avail.get("graph_notes", True):
+        schemas.append({"type": "function", "function": {
+            "name": "graph_notes",
+            "description": descs["graph_notes"],
+            "parameters": {"type": "object", "properties": {
+                "title": {"type": "string",
+                          "description": "exact title of the center note"},
+                "depth": {"type": "integer",
+                          "description": "hops to traverse (default 1, max 3)"}},
+                "required": ["title"]}}})
     if avail.get("calculate", True):
         schemas.append({"type": "function", "function": {
             "name": "calculate",
@@ -724,8 +748,11 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
         if name == "search_notes":
             query = args.get("query", "")
             tag = (args.get("tag") or "").strip() or None
-            # Tag-only listing ("the totality of notes tagged X") gets more room.
-            limit = 20 if (tag and not query.strip()) else 8
+            created_from = (args.get("created_from") or "").strip() or None
+            created_to = (args.get("created_to") or "").strip() or None
+            # Filter-only listing (no query) gets more room.
+            limit = 20 if ((tag or created_from or created_to)
+                           and not query.strip()) else 8
             try:
                 if args.get("limit"):
                     limit = max(1, min(int(args["limit"]), 50))
@@ -735,12 +762,16 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             try:
                 if args.get("mode") == "keyword" or not query.strip():
                     results = notes_index.search_notes_keyword(
-                        conn, query, limit=limit, tag=tag)
+                        conn, query, limit=limit, tag=tag,
+                        created_from=created_from, created_to=created_to)
                 else:
                     vec = get_embedding(query)
-                    results = (notes_index.search_notes_semantic(conn, vec, limit=limit, tag=tag)
+                    results = (notes_index.search_notes_semantic(
+                                   conn, vec, limit=limit, tag=tag,
+                                   created_from=created_from, created_to=created_to)
                                if vec else notes_index.search_notes_keyword(
-                                   conn, query, limit=limit, tag=tag))
+                                   conn, query, limit=limit, tag=tag,
+                                   created_from=created_from, created_to=created_to))
             finally:
                 conn.close()
             return json.dumps([{
@@ -957,6 +988,22 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                                    "links": e["links"],
                                    "description": (e.get("body") or "")[:300],
                                } for e in events]})
+        if name == "graph_notes":
+            try:
+                depth = max(1, min(int(args.get("depth") or 1), 3))
+            except (TypeError, ValueError):
+                depth = 1
+            conn = sqlite3.connect(db_path)
+            try:
+                graph = notes_index.graph_neighborhood(
+                    conn, args.get("title") or "", depth=depth)
+            finally:
+                conn.close()
+            if graph is None:
+                return json.dumps({"error": f"no note titled "
+                                            f"{args.get('title', '')!r} — find the "
+                                            "exact title with search_notes first"})
+            return json.dumps(graph)
         if name == "calculate":
             return json.dumps(agent_tools.calculate(args.get("expression") or ""))
         if name == "git_read":
@@ -1975,13 +2022,16 @@ async def search_vault_notes(
     tag: Optional[str] = None,
     from_: Optional[str] = Query(None, alias="from"),
     to: Optional[str] = None,
+    created_from: Optional[str] = None,
+    created_to: Optional[str] = None,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
     """Search notes: mode=semantic (embeddings) or mode=keyword (lexical).
 
     Optional ?tag= filters to notes carrying the tag; with an empty q it lists
     the whole category (e.g. ?tag=user-profile = the full user profile).
-    ?from=/&to= (ISO dates, inclusive) window events by start/end — the
+    ?created_from=/&created_to= (ISO dates, inclusive) filter by approval date,
+    composable with q and tag. ?from=/&to= window EVENTS by start/end — the
     calendar screen's query (?tag=event&from=&to=).
     """
     _require_auth(passkey)
@@ -1991,10 +2041,14 @@ async def search_vault_notes(
             if from_ or to:
                 results = notes_index.list_events(conn, from_, to)
             elif mode == "keyword" or not q.strip():
-                results = notes_index.search_notes_keyword(conn, q, limit=limit, tag=tag)
+                results = notes_index.search_notes_keyword(
+                    conn, q, limit=limit, tag=tag,
+                    created_from=created_from, created_to=created_to)
             else:
                 vec = get_embedding(q)
-                results = notes_index.search_notes_semantic(conn, vec, limit=limit, tag=tag) if vec else []
+                results = notes_index.search_notes_semantic(
+                    conn, vec, limit=limit, tag=tag,
+                    created_from=created_from, created_to=created_to) if vec else []
         finally:
             conn.close()
         for n in results:

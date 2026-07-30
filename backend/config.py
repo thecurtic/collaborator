@@ -215,6 +215,7 @@ def load_config() -> dict:
                 "screenshot_page": True,  # self-gating: needs webtool_url + a vision model
                 "list_events": True,   # calendar window over notes tagged 'event'
                 "get_notes": True,     # batch note reads (graph traversal)
+                "graph_notes": True,   # BFS subgraph around a note (links+backlinks)
                 "calculate": True,     # AST-whitelisted arithmetic (no eval)
                 "git_read": True,      # self-gating: needs tools.git.api_url + token
                 "transcribe_video": True,  # yt-dlp audio -> STT (never captions)
