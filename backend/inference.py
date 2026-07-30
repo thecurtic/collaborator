@@ -474,6 +474,30 @@ def chat_with_retry(
 _ctx_cache: Dict[str, tuple] = {}   # model_id -> (monotonic_ts, tokens|None)
 
 
+def get_models_detail() -> List[Dict]:
+    """Per-model metadata from LM Studio's /api/v0/models: id, type, state
+    (loaded / not-loaded), quantization, context lengths. Empty list when the
+    endpoint doesn't expose it (non-LM-Studio server) — callers fall back to
+    the plain /v1/models name list."""
+    base = _get_endpoint_url().rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3].rstrip("/")
+    try:
+        r = requests.get(f"{base}/api/v0/models", timeout=5)
+        r.raise_for_status()
+        return [{
+            "id": m.get("id"),
+            "type": m.get("type"),
+            "state": m.get("state"),
+            "quantization": m.get("quantization"),
+            "max_context_length": m.get("max_context_length"),
+            "loaded_context_length": m.get("loaded_context_length"),
+        } for m in r.json().get("data", []) if m.get("id")]
+    except Exception as e:
+        print(f"Warning: could not read model details: {e}")
+        return []
+
+
 def get_model_context_tokens(model_id: Optional[str] = None) -> Optional[int]:
     """The model's context window in tokens, from LM Studio's /api/v0/models
     (loaded_context_length when loaded, else max_context_length). Cached 5 min;

@@ -18,6 +18,7 @@ def _setup():
     dot = os.path.join(tempfile.mkdtemp(), ".config.yaml")
     main._dot_config_path = lambda: dot
     main.get_available_models = lambda: ["qwen/qwen3-coder-next", "qwen/qwen3-30b-a3b"]
+    main.get_models_detail = lambda: []
     return TestClient(main.app), dot
 
 
@@ -26,7 +27,30 @@ def test_list_models():
     out = c.get("/api/models").json()
     assert out["current"] == config.get_config._config["inference"]["model_id"]
     assert "qwen/qwen3-30b-a3b" in out["available"]
+    assert "current_loaded" not in out          # no detail -> no load claims
     print("✓ GET /api/models: current + available")
+
+
+def test_list_models_load_state():
+    c, _ = _setup()
+    main.get_models_detail = lambda: [
+        {"id": "qwen/qwen3-30b-a3b", "type": "llm", "state": "loaded",
+         "quantization": "4bit", "max_context_length": 32768,
+         "loaded_context_length": 16384},
+        {"id": "qwen/qwen3-coder-next", "type": "llm", "state": "not-loaded",
+         "quantization": None, "max_context_length": 65536,
+         "loaded_context_length": None},
+        {"id": "whisper-large-v3-turbo", "type": "stt", "state": "loaded",
+         "quantization": None, "max_context_length": 4096,
+         "loaded_context_length": None},
+    ]
+    out = c.get("/api/models").json()
+    assert out["loaded"] == ["qwen/qwen3-30b-a3b"]      # llm only, stt excluded
+    # Configured model isn't the loaded one -> visible mismatch flag.
+    assert out["current_loaded"] is (
+        config.get_config._config["inference"]["model_id"] == "qwen/qwen3-30b-a3b")
+    assert any(m["quantization"] == "4bit" for m in out["models"])
+    print("✓ GET /api/models: load state exposed, mismatch flagged")
 
 
 def test_switch_applies_live_and_persists():

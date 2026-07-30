@@ -2326,13 +2326,30 @@ async def get_video_transcript(
 async def list_models(
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
-    """Models available at the inference endpoint, plus the active one."""
+    """Models available at the inference endpoint, plus the active one.
+
+    `models` adds per-model load state from LM Studio (state loaded/not-loaded,
+    quantization, context lengths) so the picker can SHOW what's resident on
+    the inference box. `current_loaded` is False when the selected model isn't
+    loaded — i.e. the next request will make LM Studio load it (slow, and heavy
+    if another big model is already resident). Selection stays the user's call;
+    this is visibility, not automation.
+    """
     _require_auth(passkey)
     try:
-        return {
-            "current": config.get("inference", {}).get("model_id"),
+        current = config.get("inference", {}).get("model_id")
+        detail = get_models_detail()
+        loaded = [m["id"] for m in detail
+                  if m.get("state") == "loaded" and m.get("type") in (None, "llm")]
+        out = {
+            "current": current,
             "available": get_available_models(),
+            "models": detail,
+            "loaded": loaded,
         }
+        if detail:
+            out["current_loaded"] = current in loaded
+        return out
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
