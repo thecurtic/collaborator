@@ -17,7 +17,16 @@ PORT="$(grep -E '^[[:space:]]*backend_port:' config.yaml 2>/dev/null | grep -oE 
 PORT="${PORT:-8001}"
 
 # --- Prefer systemd if a unit is installed (survives reboots, proper logs) ---
+# Checks BOTH system and user units: starting a nohup uvicorn underneath a
+# systemd-managed service leaves a zombie serving stale code on the port while
+# the unit crash-loops behind it (this happened; never again).
 if command -v systemctl >/dev/null 2>&1 && \
+   systemctl --user list-unit-files 2>/dev/null | grep -q '^collaborator-backend\.service'; then
+    echo "Restarting via systemd user unit (collaborator-backend)..."
+    systemctl --user restart collaborator-backend
+    sleep 1
+    systemctl --user --no-pager --lines=0 status collaborator-backend || true
+elif command -v systemctl >/dev/null 2>&1 && \
    systemctl list-unit-files 2>/dev/null | grep -q '^collaborator-backend\.service'; then
     echo "Restarting via systemd (collaborator-backend)..."
     sudo systemctl restart collaborator-backend
