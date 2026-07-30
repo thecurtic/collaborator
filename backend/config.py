@@ -61,6 +61,11 @@ def load_config() -> dict:
         },
         "memory": {
             "default_context_window": 20,
+            # Token budget for the whole prompt. None = auto-detect the active
+            # model's context from LM Studio (/api/v0/models), falling back to
+            # a conservative 30k. Turns select the window; tokens trim it so a
+            # few very long turns can't blow past the model's context.
+            "context_budget_tokens": None,
             "db_path": resolve_path("backend/data/conversations.db")
         },
         "server": {

@@ -30,6 +30,7 @@ from inference import (
     get_embedding, embed_texts, synthesize_recall, get_available_models,
     generate_with_tools, synthesize, synthesize_notes, web_search_searxng, fetch_url,
     screenshot_page, generate_title,
+    get_model_context_tokens, estimate_tokens,
     resolve_prompt_layer, DEFAULT_PARAGRAPH_STYLE, DEFAULT_VOICE_STYLE,
     DEFAULT_TOOLS_GUIDANCE, DEFAULT_RECALL_SYNTHESIS_PROMPT,
     DEFAULT_NOTES_SYNTHESIS_PROMPT, DEFAULT_DATETIME_TEXT,
@@ -249,6 +250,51 @@ def _maybe_update_title(db_path: str, leaf_turn_id: int, force: bool = False):
 def _effective_context_turns(value: Optional[int]) -> int:
     """Resolve a request's context_turns: None -> configured default; 0 -> fresh."""
     return _default_context_window() if value is None else value
+
+
+# Estimated prompt overhead beyond history + message: system prompt layers,
+# tool schemas, recall block, tool results accumulated mid-turn.
+_PROMPT_OVERHEAD_TOKENS = 3000
+# Fraction of the model context the whole prompt may use (headroom for the
+# estimator's error and mid-turn growth).
+_CONTEXT_USE_FRACTION = 0.8
+# When the model's context can't be detected and no override is configured.
+_FALLBACK_CONTEXT_TOKENS = 30000
+
+
+def _trim_context_to_token_budget(context_list: List[dict], message: str):
+    """Drop OLDEST context turns until the estimated prompt fits the model.
+
+    Turns are the unit the user reasons in (branching, context resets); tokens
+    are what the model dies by. The turns window picks the candidates; this
+    budget keeps them inside the context of the ACTIVE model — detected live
+    from LM Studio, overridable via memory.context_budget_tokens. Returns
+    (trimmed_list, dropped_count).
+    """
+    if not context_list:
+        return context_list, 0
+    mcfg = config.get("memory", {}) or {}
+    ctx_tokens = (mcfg.get("context_budget_tokens")
+                  or get_model_context_tokens()
+                  or _FALLBACK_CONTEXT_TOKENS)
+    max_out = config.get("inference", {}).get("max_tokens", 2048)
+    budget = (int(ctx_tokens * _CONTEXT_USE_FRACTION) - max_out
+              - _PROMPT_OVERHEAD_TOKENS - estimate_tokens(message))
+    if budget <= 0:
+        return [], len(context_list)
+    kept, total = [], 0
+    for turn in reversed(context_list):          # newest first
+        t = estimate_tokens(turn.get("content"))
+        if total + t > budget:
+            break
+        kept.append(turn)
+        total += t
+    kept.reverse()
+    dropped = len(context_list) - len(kept)
+    if dropped:
+        print(f"Context trimmed to token budget: dropped {dropped} oldest "
+              f"turn(s), kept {len(kept)} (~{total} tokens of ~{budget})")
+    return kept, dropped
 
 
 def _recall_config() -> dict:
@@ -1478,6 +1524,8 @@ async def send_message(
                 if parent is None:
                     raise HTTPException(status_code=404, detail=f"parent_turn_id {parent_id} not found")
                 context_list = get_ancestor_chain(conn, parent_id, limit=ctx_turns)
+                context_list, _dropped = _trim_context_to_token_budget(
+                    context_list, request.message)
                 # Continuations inherit the conversation's stage.
                 turn_state = parent.get("state") or "seed"
             else:
@@ -1543,6 +1591,8 @@ async def create_branch(
                     )
 
             context_list = get_ancestor_chain(conn, parent_turn_id, limit=ctx_turns)
+            context_list, _dropped = _trim_context_to_token_budget(
+                context_list, request.message)
             branch_state = parent.get("state") or "seed"   # a branch inherits the stage
         finally:
             conn.close()

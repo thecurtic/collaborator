@@ -469,6 +469,45 @@ def chat_with_retry(
             raise
 
 
+# --- Model context length (LM Studio /api/v0/models) ---------------------------
+
+_ctx_cache: Dict[str, tuple] = {}   # model_id -> (monotonic_ts, tokens|None)
+
+
+def get_model_context_tokens(model_id: Optional[str] = None) -> Optional[int]:
+    """The model's context window in tokens, from LM Studio's /api/v0/models
+    (loaded_context_length when loaded, else max_context_length). Cached 5 min;
+    None when the endpoint doesn't expose it (other OpenAI-compat servers)."""
+    import time as _t
+    model_id = model_id or _get_model_id()
+    now = _t.monotonic()
+    hit = _ctx_cache.get(model_id)
+    if hit and now - hit[0] < 300:
+        return hit[1]
+    base = _get_endpoint_url().rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3].rstrip("/")
+    tokens = None
+    try:
+        r = requests.get(f"{base}/api/v0/models", timeout=5)
+        r.raise_for_status()
+        for m in r.json().get("data", []):
+            if m.get("id") == model_id:
+                tokens = (m.get("loaded_context_length")
+                          or m.get("max_context_length"))
+                break
+    except Exception as e:
+        print(f"Warning: could not read model context length: {e}")
+    _ctx_cache[model_id] = (now, tokens)
+    return tokens
+
+
+def estimate_tokens(text: str) -> int:
+    """Cheap token estimate (~4 chars/token English prose). Deliberately on the
+    high side of reality for code/JSON so budgeting errs toward safety."""
+    return len(text or "") // 4 + 1
+
+
 # --- Recall: embeddings + synthesis (both via the LM Studio endpoint) ---------
 
 def _recall_config() -> Dict:
