@@ -60,6 +60,8 @@ const STOP_WORD_THRESHOLD = 0.97;
 
 interface Controls {
   endTurn: () => void;
+  /** Manual barge-in — same effect as the stop word / interrupt phrase. */
+  interruptNow: () => void;
   end: () => void;
   retry: () => void;
   skipTo: (turnId: number, text: string, fromParagraph: number) => void;
@@ -643,6 +645,10 @@ export function useCall(
         log('Done tapped');
         void finalize();
       },
+      interruptNow: () => {
+        log('Speak now tapped → interrupt');
+        interrupt();
+      },
       end: () => {
         cleanup();
         onClose();
@@ -665,6 +671,10 @@ export function useCall(
   }, [open, onClose]);
 
   const endTurn = useCallback(() => controlsRef.current?.endTurn(), []);
+  const interruptNow = useCallback(
+    () => controlsRef.current?.interruptNow(),
+    [],
+  );
   const end = useCallback(() => controlsRef.current?.end(), []);
   const retry = useCallback(() => controlsRef.current?.retry(), []);
   const skipTo = useCallback(
@@ -685,6 +695,7 @@ export function useCall(
     error,
     logs,
     endTurn,
+    interruptNow,
     end,
     retry,
     skipTo,

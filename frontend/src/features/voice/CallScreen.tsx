@@ -190,6 +190,7 @@ export function CallScreen({
     error,
     logs,
     endTurn,
+    interruptNow,
     end,
     retry,
     skipTo,
@@ -348,6 +349,18 @@ export function CallScreen({
           >
             <Check className="h-4 w-4" />
             Done speaking
+          </Button>
+        )}
+        {phase === 'responding' && (
+          // Manual barge-in — the button twin of the stop word/phrase: cuts
+          // the reply off and starts listening immediately.
+          <Button
+            variant="secondary"
+            onClick={interruptNow}
+            className="h-12 gap-2 rounded-full px-5 active:scale-95"
+          >
+            <Mic className="h-4 w-4" />
+            Speak now
           </Button>
         )}
         {phase === 'error' && (
