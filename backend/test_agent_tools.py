@@ -118,18 +118,82 @@ def test_git_403_surfaces_scope_hint(monkeypatch):
     print("✓ git 403: response body + scope-regeneration hint surfaced")
 
 
+def test_git_issue_create_and_comment(monkeypatch):
+    import requests
+    cfg = config.get_config()["tools"]["git"]
+    monkeypatch.setitem(cfg, "api_url", "http://forge:3000/api/v1")
+    monkeypatch.setitem(cfg, "token", "issue-token")
+
+    posts = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        assert url.endswith("/repos/curtis/collaborator/labels")
+        return _Resp([{"id": 7, "name": "enhancement"}, {"id": 9, "name": "bug"}])
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        posts.append((url, json))
+        if url.endswith("/issues"):
+            return _Resp({"number": 42, "title": json["title"],
+                          "html_url": "http://forge:3000/curtis/collaborator/issues/42"})
+        if url.endswith("/issues/42/comments"):
+            return _Resp({"html_url": "http://forge:3000/curtis/collaborator/issues/42#c1"})
+        return _Resp({}, status=404)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    out = agent_tools.git_issue("create", repo="curtis/collaborator",
+                                title="Add graph view", body="Details.",
+                                labels=["Enhancement", "nonexistent"])
+    assert out["created"] and out["number"] == 42 and "issues/42" in out["url"]
+    assert posts[0][1]["labels"] == [7]          # resolved by name, unknown dropped
+
+    out = agent_tools.git_issue("comment", repo="curtis/collaborator",
+                                issue_number=42, body="Follow-up.")
+    assert out["commented"] and out["issue_number"] == 42
+
+    # Validation + the read-only tool's old failure mode stays a clean error.
+    assert "title" in agent_tools.git_issue("create", repo="a/b")["error"]
+    assert "issue_number" in agent_tools.git_issue("comment", repo="a/b",
+                                                   body="x")["error"]
+    assert "unknown action" in agent_tools.git_issue("close", repo="a/b")["error"]
+    print("✓ git_issue: create with label resolution, comment, validation")
+
+
+def test_git_issue_403_scope_hint(monkeypatch):
+    import requests
+    cfg = config.get_config()["tools"]["git"]
+    monkeypatch.setitem(cfg, "api_url", "http://forge:3000/api/v1")
+    monkeypatch.setitem(cfg, "token", "read-only-token")
+
+    class _Forbidden:
+        status_code = 403
+        text = '{"message":"token does not have at least one of required scope(s): [write:issue]"}'
+        def raise_for_status(self):
+            err = requests.exceptions.HTTPError("403 Client Error")
+            err.response = self
+            raise err
+
+    monkeypatch.setattr(requests, "post", lambda *a, **k: _Forbidden())
+    out = agent_tools.git_issue("create", repo="a/b", title="T")
+    assert "write:issue" in out["error"]
+    print("✓ git_issue 403: scope hint surfaced")
+
+
 def test_git_tool_self_gating(monkeypatch):
     cfg = config.get_config()["tools"]["git"]
     monkeypatch.setitem(cfg, "api_url", None)
     monkeypatch.setitem(cfg, "token", None)
     schemas, _, _ = main._build_tools(os.environ["DB_PATH"])
-    assert "git_read" not in {s["function"]["name"] for s in schemas}
+    names = {s["function"]["name"] for s in schemas}
+    assert "git_read" not in names and "git_issue" not in names
 
     monkeypatch.setitem(cfg, "api_url", "http://forge:3000/api/v1")
     monkeypatch.setitem(cfg, "token", "t")
     schemas, _, _ = main._build_tools(os.environ["DB_PATH"])
-    assert "git_read" in {s["function"]["name"] for s in schemas}
-    print("✓ git_read registers only when tools.git is configured")
+    names = {s["function"]["name"] for s in schemas}
+    assert "git_read" in names and "git_issue" in names
+    print("✓ git_read + git_issue register only when tools.git is configured")
 
 
 # --- transcribe_video (yt-dlp + STT mocked) -------------------------------------

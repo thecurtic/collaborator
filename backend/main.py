@@ -432,6 +432,10 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                  "list_repos (their repos), list_files (a directory), read_file "
                  "(one file's content). Use when the user asks about their code "
                  "or projects; navigate list_repos -> list_files -> read_file."),
+    "git_issue": ("Create an issue or comment on one in the user's Gitea "
+                  "(write:issue only — never code). ONLY after the user asks or "
+                  "explicitly confirms: when filing on your own initiative, ask "
+                  "first ('want me to file this?'). Share the returned URL."),
     "transcribe_video": ("Transcribe a video or audio URL (YouTube etc.) from its "
                          "ACTUAL AUDIO via speech-to-text — not captions. Short "
                          "videos return the transcript immediately; long ones "
@@ -607,6 +611,22 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "ref": {"type": "string",
                         "description": "branch/tag/commit (default: default branch)"}},
                 "required": ["action"]}}})
+    if avail.get("git_issue", True) and agent_tools.git_configured():
+        schemas.append({"type": "function", "function": {
+            "name": "git_issue",
+            "description": descs["git_issue"],
+            "parameters": {"type": "object", "properties": {
+                "action": {"type": "string", "enum": ["create", "comment"],
+                           "description": "create a new issue, or comment on one"},
+                "repo": {"type": "string", "description": "owner/name"},
+                "title": {"type": "string", "description": "issue title (create)"},
+                "body": {"type": "string",
+                         "description": "issue body (create) or comment text (comment)"},
+                "labels": {"type": "array", "items": {"type": "string"},
+                           "description": "label names (create; unknown names ignored)"},
+                "issue_number": {"type": "integer",
+                                 "description": "issue number (comment)"}},
+                "required": ["action", "repo"]}}})
     if avail.get("transcribe_video", True):
         schemas.append({"type": "function", "function": {
             "name": "transcribe_video",
@@ -1010,6 +1030,12 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             return json.dumps(agent_tools.git_read(
                 args.get("action") or "", repo=args.get("repo"),
                 path=args.get("path"), ref=args.get("ref")))
+        if name == "git_issue":
+            return json.dumps(agent_tools.git_issue(
+                args.get("action") or "", repo=args.get("repo"),
+                title=args.get("title"), body=args.get("body"),
+                labels=args.get("labels"),
+                issue_number=args.get("issue_number")))
         if name == "transcribe_video":
             return json.dumps(agent_tools.transcribe_video(
                 db_path, args.get("url") or ""))

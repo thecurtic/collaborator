@@ -14,6 +14,7 @@ Never claim you lack access to history or notes. Pick by signal:
 | Many results worth condensing | synthesize → a concise memory block |
 | Current events, unknown facts, pasted URL | web_search / fetch_url (ALWAYS fetch a pasted URL before discussing it); screenshot_page when layout matters or fetch returns little |
 | Your notes about their code/repos | git_read: list_repos → list_files → read_file |
+| User asks to file/track something in a repo | git_issue (create/comment) — CONFIRM FIRST when the idea is yours; share the URL |
 | A video to understand | transcribe_video (long ones run in background — say so, re-ask later) |
 | A tool failing repeatedly | read_logs, then explain the actual cause |
 

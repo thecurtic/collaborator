@@ -1370,6 +1370,10 @@ def _tool_status_label(name: str, args: Dict) -> str:
         action = args.get("action", "")
         target = (args.get("repo") or "") + ("/" + args.get("path", "") if args.get("path") else "")
         return f"Reading git ({action}){f': {target[:50]}' if target else ''}…"
+    if name == "git_issue":
+        repo = (args.get("repo") or "").strip()
+        verb = "Commenting on issue" if args.get("action") == "comment" else "Filing issue"
+        return f"{verb}{f' in {repo[:40]}' if repo else ''}…"
     if name == "transcribe_video":
         u = (args.get("url") or "").strip()
         return f"Transcribing video {u[:50]}…" if u else "Transcribing video…"

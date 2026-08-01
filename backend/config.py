@@ -243,6 +243,7 @@ def load_config() -> dict:
                 "graph_notes": True,   # BFS subgraph around a note (links+backlinks)
                 "calculate": True,     # AST-whitelisted arithmetic (no eval)
                 "git_read": True,      # self-gating: needs tools.git.api_url + token
+                "git_issue": True,     # issue create/comment (token needs write:issue)
                 "transcribe_video": True,  # yt-dlp audio -> STT (never captions)
                 "read_logs": True,     # agent can read its own recent server logs
             },

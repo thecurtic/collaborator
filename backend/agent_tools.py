@@ -195,6 +195,77 @@ def git_read(action: str, repo: str = None, path: str = None, ref: str = None) -
         return {"error": f"git api request failed: {e}"}
 
 
+def git_issue(action: str, repo: str = None, title: str = None,
+              body: str = None, labels=None, issue_number=None) -> dict:
+    """Write to Gitea issues: create | comment. The ONLY write surface of the
+    git tools — git_read stays read-only forever. Requires a token with
+    write:issue scope (covers comments too); code remains untouchable (no
+    write:repository). Guidance requires user confirmation before calling."""
+    import requests
+    cfg = _git_cfg()
+    if not git_configured():
+        return {"error": "git access is not configured (tools.git.api_url + token)"}
+    base = cfg["api_url"].rstrip("/")
+    headers = {"Authorization": f"token {cfg['token']}"}
+    timeout = cfg.get("timeout", 15)
+    if not repo:
+        return {"error": f"{action} needs repo (owner/name)"}
+    try:
+        if action == "create":
+            if not (title or "").strip():
+                return {"error": "create needs a title"}
+            payload = {"title": title.strip(), "body": (body or "").strip()}
+            if labels:
+                # Gitea wants label IDs; resolve names best-effort, skip unknowns.
+                try:
+                    r = requests.get(f"{base}/repos/{repo}/labels",
+                                     headers=headers, timeout=timeout)
+                    r.raise_for_status()
+                    by_name = {l["name"].lower(): l["id"] for l in r.json()}
+                    ids = [by_name[str(n).lower()] for n in labels
+                           if str(n).lower() in by_name]
+                    if ids:
+                        payload["labels"] = ids
+                except requests.exceptions.RequestException:
+                    pass
+            r = requests.post(f"{base}/repos/{repo}/issues",
+                              json=payload, headers=headers, timeout=timeout)
+            r.raise_for_status()
+            data = r.json()
+            return {"created": True, "repo": repo,
+                    "number": data.get("number"),
+                    "title": data.get("title"),
+                    "url": data.get("html_url"),
+                    "note": "Share the issue URL with the user."}
+        if action == "comment":
+            try:
+                index = int(issue_number)
+            except (TypeError, ValueError):
+                return {"error": "comment needs issue_number (the issue's number)"}
+            if not (body or "").strip():
+                return {"error": "comment needs body"}
+            r = requests.post(f"{base}/repos/{repo}/issues/{index}/comments",
+                              json={"body": body.strip()},
+                              headers=headers, timeout=timeout)
+            if r.status_code == 404:
+                return {"error": f"no issue #{index} in {repo}"}
+            r.raise_for_status()
+            return {"commented": True, "repo": repo, "issue_number": index,
+                    "url": r.json().get("html_url")}
+        return {"error": f"unknown action {action!r} — use create or comment"}
+    except requests.exceptions.HTTPError as e:
+        resp = getattr(e, "response", None)
+        detail = f" — {resp.text[:200]}" if resp is not None and resp.text else ""
+        hint = ""
+        if resp is not None and resp.status_code == 403:
+            hint = (" (403: the token likely lacks the write:issue scope — "
+                    "regenerate it with write:issue added, or the collaborator "
+                    "account lacks issue permission on this repo)")
+        return {"error": f"git issue request failed: {e}{detail}{hint}"}
+    except requests.exceptions.RequestException as e:
+        return {"error": f"git issue request failed: {e}"}
+
+
 # --- Video transcription (yt-dlp audio -> STT, never captions) -------------------
 # Config: tools.transcribe_video {sync_max_minutes, max_minutes, proxy,
 # return_chars}. Videos under sync_max_minutes transcribe within the turn;
