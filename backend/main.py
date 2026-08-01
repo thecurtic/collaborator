@@ -39,6 +39,7 @@ from export_tree import export_forest, find_tree
 import logbuffer
 logbuffer.install()   # ring buffer behind the read_logs tool; tees, never redirects
 import agent_tools
+import auth
 import notes_index
 import voice
 from auth import validate_passkey, create_user_db
@@ -68,6 +69,28 @@ init_db()
 
 # Warm-load voice engines (STT/TTS) if configured to — never blocks startup.
 voice.preload_in_background()
+
+SESSION_COOKIE = "collaborator_session"
+
+
+@app.middleware("http")
+async def session_middleware(request: Request, call_next):
+    """Resolve a session (httpOnly cookie, or X-Session header for the
+    Capacitor wrapper) into a request-scoped context. Endpoints keep their
+    existing _require_auth(passkey) shape — a valid session simply satisfies
+    it, so the legacy X-Passkey header keeps working during migration."""
+    token = request.cookies.get(SESSION_COOKIE) or request.headers.get("X-Session")
+    ctx = None
+    if token and auth_enabled:
+        try:
+            ctx = auth.validate_session(token)
+        except Exception as e:
+            print(f"Warning: session validation failed: {e}")
+    reset = auth.current_session.set(ctx)
+    try:
+        return await call_next(request)
+    finally:
+        auth.current_session.reset(reset)
 
 
 class UserMessage(BaseModel):
@@ -196,12 +219,25 @@ SSE_HEADERS = {
 
 
 def _require_auth(passkey: Optional[str]) -> None:
-    """Raise 403 if auth is enabled and the passkey is missing/invalid."""
-    if auth_enabled:
-        if not passkey:
-            raise HTTPException(status_code=403, detail="Passkey required")
-        if not validate_passkey(passkey):
-            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+    """Raise if auth is enabled and neither a valid session nor a valid
+    passkey is present. Failed passkey attempts feed the lockout; a lockout
+    blocks NEW passkey auth (429) but never established sessions."""
+    if not auth_enabled:
+        return
+    if auth.current_session.get() is not None:
+        return
+    if not passkey:
+        raise HTTPException(status_code=403, detail="Passkey required")
+    remaining = auth.lockout_remaining()
+    if remaining:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts — locked for {remaining}s",
+            headers={"Retry-After": str(remaining)})
+    if not validate_passkey(passkey):
+        auth.record_auth_failure()
+        raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+    auth.record_auth_success()
 
 
 def _default_context_window() -> int:
@@ -1055,8 +1091,13 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
 
 
 def _resolve_db_path(passkey: Optional[str]) -> str:
-    """Resolve the conversation DB path (per-user when auth is enabled)."""
+    """Resolve the conversation DB path (per-user when auth is enabled).
+    Sessions carry the user identity directly; the passkey path remains for
+    legacy X-Passkey clients."""
     if auth_enabled:
+        ctx = auth.current_session.get()
+        if ctx is not None:
+            return auth.create_user_db_from_hash(ctx[0])
         return create_user_db(passkey)
     db_path_config = config.get("memory", {}).get("db_path")
     if db_path_config and not os.path.isabs(db_path_config):
@@ -3007,6 +3048,88 @@ def _consume_ws_ticket(ticket: Optional[str]) -> bool:
         return False
     expiry = _ws_tickets.pop(ticket, None)  # single-use: removed on first check
     return expiry is not None and time.time() <= expiry
+
+
+class LoginRequest(BaseModel):
+    passkey: str
+    # Shown in the sessions list ("my phone"); set it from the client.
+    device_label: Optional[str] = None
+
+
+@app.post("/api/auth/login")
+async def login(request: LoginRequest, response: Response):
+    """Exchange the passkey for a device session (the passkey is entered once
+    per device and never stored client-side).
+
+    Returns the session token AND sets it as an httpOnly cookie — browsers use
+    the cookie (JS never sees it); the Capacitor wrapper stores the token and
+    sends it as X-Session. Lockout applies here like everywhere passkeys do.
+    """
+    if not auth_enabled:
+        raise HTTPException(status_code=400, detail="Authentication is disabled")
+    remaining = auth.lockout_remaining()
+    if remaining:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts — locked for {remaining}s",
+            headers={"Retry-After": str(remaining)})
+    user_hash = auth.user_hash_for_passkey(request.passkey or "")
+    if not user_hash:
+        auth.record_auth_failure()
+        raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
+    auth.record_auth_success()
+    session = auth.create_session(user_hash, request.device_label)
+    cfg = config.get("authentication", {}) or {}
+    response.set_cookie(
+        SESSION_COOKIE, session["token"],
+        max_age=cfg.get("session_absolute_days", 90) * 86400,
+        httponly=True, secure=True, samesite="lax", path="/",
+    )
+    return {"token": session["token"], "session_id": session["id"],
+            "label": session["label"], "expires_at": session["expires_at"]}
+
+
+@app.post("/api/auth/logout")
+async def logout(response: Response):
+    """Revoke the CURRENT session and clear its cookie."""
+    ctx = auth.current_session.get()
+    if ctx is not None:
+        auth.revoke_session(ctx[0], ctx[1])
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"logged_out": True}
+
+
+@app.get("/api/auth/sessions")
+async def get_sessions(
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """List this user's active sessions (devices) — powers a 'your devices'
+    settings view with per-device revocation."""
+    _require_auth(passkey)
+    ctx = auth.current_session.get()
+    if ctx is not None:
+        user_hash, current_id = ctx
+    else:
+        user_hash, current_id = auth.user_hash_for_passkey(passkey), None
+        if not user_hash:
+            raise HTTPException(status_code=403, detail="Invalid passkey")
+    return {"sessions": auth.list_sessions(user_hash, current_id)}
+
+
+@app.delete("/api/auth/sessions/{session_id}")
+async def delete_session(
+    session_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Revoke one session (e.g. a lost phone) — takes effect immediately."""
+    _require_auth(passkey)
+    ctx = auth.current_session.get()
+    user_hash = ctx[0] if ctx is not None else auth.user_hash_for_passkey(passkey)
+    if not user_hash:
+        raise HTTPException(status_code=403, detail="Invalid passkey")
+    if not auth.revoke_session(user_hash, session_id):
+        raise HTTPException(status_code=404, detail=f"No session {session_id}")
+    return {"revoked": session_id}
 
 
 @app.post("/api/auth/ws-ticket")

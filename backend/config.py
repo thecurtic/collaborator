@@ -89,7 +89,16 @@ def load_config() -> dict:
         "authentication": {
             "enabled": True,
             "passkeys_db_path": resolve_path("backend/data/authentication/passkeys.db"),
-            "users_dir": resolve_path("backend/data/users")
+            "users_dir": resolve_path("backend/data/users"),
+            # Sessions: what devices hold after one passkey login (revocable,
+            # expiring). Idle = sliding window since last use; absolute = hard cap.
+            "session_idle_days": 30,
+            "session_absolute_days": 90,
+            # Lockout: exponential backoff on consecutive failed passkey
+            # attempts (new logins only — established sessions keep working).
+            "lockout_threshold": 5,
+            "lockout_base_seconds": 60,
+            "lockout_max_seconds": 3600,
         },
         "system_prompt": {
             "text": "You are Collaborator, a helpful assistant.",

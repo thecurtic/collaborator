@@ -60,20 +60,32 @@ def generate_passkey() -> str:
 
 
 def create_passkey() -> str:
-    """Create a new passkey and store it in the database."""
+    """Create a new passkey and store it in the database.
+
+    Writes BOTH hashes: the SHA-256 identity hash (names the user's data dir,
+    stable forever) and the Argon2id kdf_hash (the actual verifier)."""
     passkey = generate_passkey()
     hash_value, salt = hash_passkey(passkey)
-    
+    try:
+        import auth as _auth
+        kdf = _auth.kdf_hash(passkey)
+    except ImportError:
+        kdf = None
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
+        cursor.execute("PRAGMA table_info(passkeys)")
+        cols = {row[1] for row in cursor.fetchall()}
+        if "kdf_hash" not in cols:
+            cursor.execute("ALTER TABLE passkeys ADD COLUMN kdf_hash TEXT")
         cursor.execute(
             """
-            INSERT INTO passkeys (hash, salt, created_at)
-            VALUES (?, ?, ?)
+            INSERT INTO passkeys (hash, salt, created_at, kdf_hash)
+            VALUES (?, ?, ?, ?)
             """,
-            (hash_value, salt, datetime.now().isoformat())
+            (hash_value, salt, datetime.now().isoformat(), kdf)
         )
         conn.commit()
         print(f"✓ Generated passkey: {passkey}")
