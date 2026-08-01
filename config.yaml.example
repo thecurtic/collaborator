@@ -3,9 +3,10 @@
 # Copy this file to config.yaml (same directory) and edit. config.yaml is
 # GITIGNORED: it is your machine's actual config, holding machine-specific
 # values and secrets, and no git operation will ever touch or revert it.
+# It is the ONLY file a human edits — app-chosen settings (e.g. the model
+# dropdown) persist separately to backend/data/app_settings.json.
 #
-# Precedence: built-in defaults < config.yaml < .config.yaml (app-written
-# overrides — don't hand-edit) < environment variables.
+# Precedence: built-in defaults < config.yaml < app_settings.json < env vars.
 
 # Inference settings
 inference:

@@ -14,10 +14,11 @@ yarn-error.log*
 .env.local
 .env.*.local
 # The ACTUAL config is machine-local and never committed (copy from
-# config.yaml.example). .config.yaml holds app-written overrides (e.g. the
-# in-app model switch) — also machine-local.
+# config.yaml.example). App-written settings (model dropdown etc.) live in
+# backend/data/app_settings.json. .config.yaml is deprecated but still ignored.
 config.yaml
 .config.yaml
+backend/data/app_settings.json
 
 # OS files
 .DS_Store

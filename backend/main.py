@@ -2318,29 +2318,28 @@ async def edit_vault_note(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _dot_config_path() -> str:
-    """Path of the machine-specific config overrides (gitignored)."""
-    return resolve_path(".config.yaml")
+def _app_settings_path() -> str:
+    """Path of the app-written settings (state, not config — see config.py)."""
+    return resolve_path("backend/data/app_settings.json")
 
 
 def _persist_config_override(section: str, key: str, value) -> None:
-    """Persist one setting into .config.yaml so it survives restarts.
-
-    Never touches the tracked config.yaml — machine overrides only, so in-app
-    settings and git deploys can't collide.
-    """
-    import yaml
-    path = _dot_config_path()
+    """Persist one app-chosen setting (e.g. the model dropdown) so it survives
+    restarts. Settings are app STATE and live in backend/data/app_settings.json
+    — the app never writes into the human's config.yaml (it would destroy
+    comments/formatting, and state isn't config)."""
+    path = _app_settings_path()
     existing = {}
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
-                existing = yaml.safe_load(f) or {}
+                existing = json.load(f) or {}
         except Exception:
             existing = {}
     existing.setdefault(section, {})[key] = value
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        yaml.dump(existing, f)
+        json.dump(existing, f, indent=2)
 
 
 @app.get("/api/search")

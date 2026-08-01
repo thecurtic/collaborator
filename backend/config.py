@@ -1,13 +1,17 @@
 """Configuration loader for Collaborator backend.
 
-Two files, both at the project root, both gitignored:
-- config.yaml — YOUR config. Copy config.yaml.example and edit. Never committed,
+Config is config; settings are settings:
+- config.yaml (project root, gitignored) — YOUR config, the only file a human
+  edits. Copy config.yaml.example (tracked template) and edit. Never committed,
   so no git operation can revert it and secrets can't leak into history.
-- .config.yaml — app-written overrides (e.g. PUT /api/model persists here so it
-  never has to rewrite your hand-edited file). Don't edit by hand.
+- backend/data/app_settings.json — app STATE the app writes itself (e.g. the
+  model dropdown). Lives with the other app state; never hand-edited.
 
-Precedence: built-in defaults < config.yaml < .config.yaml < environment vars.
-config.yaml.example (tracked) is the documented template for every setting.
+Precedence: built-in defaults < config.yaml < app_settings.json < env vars.
+
+(.config.yaml is DEPRECATED: still read, between config.yaml and app settings,
+so old installs keep working — fold its values into config.yaml and delete it;
+a startup warning nags while it exists.)
 """
 
 import os
@@ -349,10 +353,15 @@ def load_config() -> dict:
     else:
         print(f"Warning: config.yaml not found at {config_path}, using defaults")
     
-    # Load machine-specific override from .config.yaml if exists
+    # DEPRECATED: .config.yaml (the old app-written overrides file). Still
+    # honored so existing installs keep working, but its contents belong in
+    # config.yaml (hand-authored values) or app_settings.json (app-written).
     if project_root:
         dot_config_path = os.path.join(project_root, ".config.yaml")
         if os.path.exists(dot_config_path):
+            print("Warning: .config.yaml is deprecated — fold its values into "
+                  "config.yaml and delete it (app-chosen settings now persist "
+                  "to backend/data/app_settings.json)")
             try:
                 with open(dot_config_path, 'r') as f:
                     dot_config = yaml.safe_load(f)
@@ -375,6 +384,20 @@ def load_config() -> dict:
             except IOError as e:
                 print(f"Warning: Failed to read .config.yaml at {dot_config_path}: {e}")
     
+    # App-written settings (state, not config): backend/data/app_settings.json,
+    # persisted by the app itself (e.g. PUT /api/model). Wins over both yaml
+    # files; env vars still trump everything.
+    settings_path = resolve_path("backend/data/app_settings.json")
+    if os.path.exists(settings_path):
+        try:
+            import json as _json
+            with open(settings_path, "r", encoding="utf-8") as f:
+                app_settings = _json.load(f)
+            if isinstance(app_settings, dict) and app_settings:
+                config = deep_merge(config, app_settings)
+        except (ValueError, IOError) as e:
+            print(f"Warning: Failed to read app settings at {settings_path}: {e}")
+
     # Override with environment variables (highest precedence)
     _apply_env_overrides(config)
     
