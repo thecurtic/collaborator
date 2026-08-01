@@ -129,12 +129,15 @@ The backend supports per-user database isolation via a passkey sent as the
 
 - **Auth is OFF by default** (`authentication.enabled: false`) — no passkey
   needed, all requests share one DB. This is the normal local dev mode.
-- The frontend attaches `X-Passkey` to every request automatically when a
-  passkey is stored (`localStorage` key `collaborator_passkey`).
-- On app load it probes `GET /api/messages?limit=1`; a **403 locks the app** and
-  shows the passkey screen. Submitting a passkey re-probes; on success it
-  unlocks, on 403 it clears the key and shows an error. A 403 at any later point
-  re-locks automatically.
+- **Device sessions (b60da69):** the passkey is NEVER stored client-side.
+  The lock screen exchanges it via `POST /api/auth/login` for a device
+  session — browsers get an httpOnly cookie (rides automatically); the
+  Android shell stores the response token and sends `X-Session`. Any legacy
+  `collaborator_passkey` in localStorage is deleted on load.
+- On app load it probes `GET /api/messages?limit=1`; a **403 locks the app**
+  and shows the login screen (sessions expire: 30d idle / 90d absolute). 429
+  = brute-force lockout — the screen shows the Retry-After wait. Devices are
+  listed/revocable in Settings → Devices.
 
 ### Testing the passkey UI locally
 

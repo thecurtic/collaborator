@@ -1,4 +1,4 @@
-import { getPasskey, notifyForbidden } from '@/auth/session';
+import { getSessionToken, notifyForbidden } from '@/auth/session';
 import type { ApiError } from './types';
 
 /** Thrown for any non-2xx response or network failure. */
@@ -6,6 +6,8 @@ export class ApiRequestError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** Seconds from a 429's Retry-After header (brute-force lockout). */
+    readonly retryAfterS?: number,
   ) {
     super(message);
     this.name = 'ApiRequestError';
@@ -55,8 +57,10 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
   if (!isFormData && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
-  const passkey = getPasskey();
-  if (passkey) headers.set('X-Passkey', passkey);
+  // Browsers authenticate via the httpOnly session cookie (rides on its own,
+  // same-origin); the Android shell attaches its session token instead.
+  const token = getSessionToken();
+  if (token) headers.set('X-Session', token);
 
   let res: Response;
   try {
@@ -69,10 +73,15 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
 
   if (!res.ok) {
     const message = await parseError(res);
-    // 403 (or 401, if a proxy/backend swaps codes) = missing/invalid passkey:
-    // clear it and let the UI prompt re-auth.
+    // 403 (or 401, if a proxy/backend swaps codes) = no valid session:
+    // drop the shell token and let the UI lock for re-login.
     if (res.status === 403 || res.status === 401) notifyForbidden();
-    throw new ApiRequestError(message, res.status);
+    const retryAfter = Number(res.headers.get('Retry-After'));
+    throw new ApiRequestError(
+      message,
+      res.status,
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+    );
   }
 
   return res;

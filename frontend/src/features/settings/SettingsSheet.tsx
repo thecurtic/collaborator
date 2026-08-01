@@ -1,4 +1,4 @@
-import { Loader2, Volume2, X } from 'lucide-react';
+import { Loader2, LogOut, Smartphone, Volume2, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { synthesize } from '@/features/voice/piperTts';
@@ -10,8 +10,8 @@ import { useCapabilities } from '@/lib/capabilities';
 import { KEYWORD_OPTIONS } from '@/features/voice/keywordSpotter';
 import { PIPER_VOICES } from '@/features/voice/piperVoices';
 import { webSpeechSupported } from '@/features/voice/speech';
-import { cn } from '@/lib/utils';
-import type { ModelsInfo, TtsVoices } from '@/domain/models';
+import { cn, parseApiDate } from '@/lib/utils';
+import type { DeviceSession, ModelsInfo, TtsVoices } from '@/domain/models';
 import { currentLocation } from '@/lib/location';
 import {
   DEFAULT_END_PHRASE,
@@ -326,6 +326,93 @@ function ServerVoicePicker() {
   );
 }
 
+/**
+ * Logged-in devices (b60da69) — the lost-phone story: see every session,
+ * revoke any other one instantly. Revokes are optimistic per house style.
+ */
+function DevicesSection() {
+  const [sessions, setSessions] = useState<DeviceSession[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      setSessions(await api.listSessions());
+    } catch (err) {
+      // Auth disabled (local dev) or older backend: keep the section quiet.
+      setError(err instanceof Error ? err.message : 'Could not load devices');
+      setSessions([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const revoke = (s: DeviceSession) => {
+    setSessions((prev) => prev?.filter((x) => x.id !== s.id) ?? null);
+    api.revokeSession(s.id).catch(() => {
+      setError(`Couldn't sign out "${s.label}" — try again.`);
+      void load();
+    });
+  };
+
+  const lastSeen = (s: DeviceSession) => {
+    const d = parseApiDate(s.lastSeen);
+    return d ? d.toLocaleString() : s.lastSeen;
+  };
+
+  if (sessions !== null && sessions.length === 0 && !error) return null;
+
+  return (
+    <div className="mt-5 space-y-3 border-t border-border pt-4">
+      <p className="text-sm font-medium">Devices</p>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      {sessions === null ? (
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading devices…
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {sessions.map((s) => (
+            <li key={s.id} className="flex items-center gap-2.5">
+              <Smartphone className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1.5 text-sm text-foreground">
+                  <span className="truncate">{s.label}</span>
+                  {s.current && (
+                    <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                      this device
+                    </span>
+                  )}
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  last seen {lastSeen(s)}
+                </span>
+              </span>
+              {!s.current && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Sign out ${s.label}`}
+                  title="Sign this device out immediately"
+                  onClick={() => revoke(s)}
+                  className="h-8 w-8 shrink-0 text-destructive"
+                >
+                  <LogOut className="h-4 w-4" />
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Lost a device? Sign it out here and its session dies instantly.
+      </p>
+    </div>
+  );
+}
+
 export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
   const debug = useDebugEnabled();
   const tools = useToolsEnabled();
@@ -631,6 +718,9 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
             />
           </button>
         </div>
+
+        {/* Logged-in devices (hidden when auth is off / list is empty). */}
+        <DevicesSection />
 
         {/* Client-side preference. */}
         <div className="mt-5 flex items-center justify-between border-t border-border pt-4">

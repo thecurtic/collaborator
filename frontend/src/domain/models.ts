@@ -123,6 +123,16 @@ export interface HealthStatus {
   capabilities: ServerCapabilities;
 }
 
+/** A logged-in device (b60da69) — the lost-phone story: revoke from anywhere. */
+export interface DeviceSession {
+  id: number;
+  label: string;
+  createdAt: string;
+  lastSeen: string;
+  expiresAt: string;
+  current: boolean;
+}
+
 /** One chat model as LM Studio reports it (f7e235b); nulls = unreported. */
 export interface ModelInfo {
   id: string;

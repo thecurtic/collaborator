@@ -72,8 +72,9 @@ added there (real or mocked) as the backend ships them, with no UI rewrite.
 - Load conversation history
 - Discard a turn (drops it from model context; stays in the DB)
 - Backend health indicator
-- Passkey authentication (`X-Passkey`) with a lock screen on 403 — optional when
-  the backend has auth disabled, enforced when enabled (see `DEV.md`)
+- Device-session authentication (passkey exchanged at login, never stored;
+  httpOnly cookie in browsers, `X-Session` in the Android shell) with a lock
+  screen on 403 — optional when the backend has auth disabled (see `DEV.md`)
 
 ## Roadmap (from INTENTS.md, pending backend)
 

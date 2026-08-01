@@ -20,6 +20,28 @@ export interface ApiHealth {
   };
 }
 
+/** POST /api/auth/login (b60da69) — also sets the httpOnly session cookie. */
+export interface ApiLoginResponse {
+  token: string;
+  session_id: number;
+  label: string;
+  expires_at: string;
+}
+
+/** One device session (GET /api/auth/sessions). */
+export interface ApiSession {
+  id: number;
+  label: string;
+  created_at: string;
+  last_seen: string;
+  expires_at: string;
+  current: boolean;
+}
+
+export interface ApiSessionsResponse {
+  sessions: ApiSession[];
+}
+
 /** GET /api/tts/voices */
 export interface ApiTtsVoices {
   voices: string[];

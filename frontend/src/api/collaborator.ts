@@ -11,6 +11,7 @@ import type {
   ReindexResult,
   SendMessageInput,
   SynthesisResult,
+  DeviceSession,
   ModelsInfo,
   Transcript,
   TtsVoices,
@@ -19,6 +20,7 @@ import type {
 } from '@/domain/models';
 import {
   toHealth,
+  toDeviceSession,
   toModelsInfo,
   toTranscript,
   toTtsVoices,
@@ -42,6 +44,8 @@ import type {
   ApiNotesResponse,
   ApiPromptsResponse,
   ApiRecall,
+  ApiLoginResponse,
+  ApiSessionsResponse,
   ApiSetModelResponse,
   ApiReindexResponse,
   ApiSendMessageResponse,
@@ -319,6 +323,24 @@ export interface CollaboratorApi {
   /** Short-lived single-use ticket for WS auth (fetch right before opening). */
   getWsTicket(): Promise<string>;
 
+  // --- Device sessions (b60da69) — the passkey is never stored client-side ---
+  /**
+   * Exchange the passkey for a device session. Browsers get an httpOnly
+   * cookie (ignore the returned token); the Android shell stores the token
+   * for the X-Session header. 403 = wrong passkey; 429 = lockout (see
+   * ApiRequestError.retryAfterS).
+   */
+  login(
+    passkey: string,
+    deviceLabel: string,
+  ): Promise<{ token: string; sessionId: number; expiresAt: string }>;
+  /** Every logged-in device, the current one flagged. */
+  listSessions(): Promise<DeviceSession[]>;
+  /** Revoke one device's session immediately (the lost-phone story). */
+  revokeSession(id: number): Promise<void>;
+  /** Revoke the current session and clear the cookie. */
+  logout(): Promise<void>;
+
   // --- Server voice tier (9acc3d1) — gate on health capabilities ---
   /** Server TTS voice roster for the picker (capabilities.ttsStream only). */
   getTtsVoices(): Promise<TtsVoices>;
@@ -542,6 +564,34 @@ class HttpCollaboratorApi implements CollaboratorApi {
       method: 'POST',
     });
     return res.ticket;
+  }
+
+  async login(
+    passkey: string,
+    deviceLabel: string,
+  ): Promise<{ token: string; sessionId: number; expiresAt: string }> {
+    const res = await request<ApiLoginResponse>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ passkey, device_label: deviceLabel }),
+    });
+    return {
+      token: res.token,
+      sessionId: res.session_id,
+      expiresAt: res.expires_at,
+    };
+  }
+
+  async listSessions(): Promise<DeviceSession[]> {
+    const res = await request<ApiSessionsResponse>('/api/auth/sessions');
+    return (res.sessions ?? []).map(toDeviceSession);
+  }
+
+  async revokeSession(id: number): Promise<void> {
+    await request<unknown>(`/api/auth/sessions/${id}`, { method: 'DELETE' });
+  }
+
+  async logout(): Promise<void> {
+    await request<unknown>('/api/auth/logout', { method: 'POST' });
   }
 
   async getTtsVoices(): Promise<TtsVoices> {

@@ -1,6 +1,7 @@
 import type {
   ApiHealth,
   ApiModelsResponse,
+  ApiSession,
   ApiNoteDraft,
   ApiNoteMeta,
   ApiNoteResponse,
@@ -16,6 +17,7 @@ import type {
 } from '@/api/types';
 import type {
   ConversationTree,
+  DeviceSession,
   HealthStatus,
   ModelsInfo,
   Note,
@@ -159,6 +161,17 @@ export function toHealth(api: ApiHealth): HealthStatus {
       ttsStream: Boolean(api.capabilities?.tts_stream),
       phrases: Boolean(api.capabilities?.phrases),
     },
+  };
+}
+
+export function toDeviceSession(api: ApiSession): DeviceSession {
+  return {
+    id: api.id,
+    label: api.label || 'Unnamed device',
+    createdAt: api.created_at,
+    lastSeen: api.last_seen,
+    expiresAt: api.expires_at,
+    current: Boolean(api.current),
   };
 }
 
