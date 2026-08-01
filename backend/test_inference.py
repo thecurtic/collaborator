@@ -192,6 +192,39 @@ def test_generate_title_with_reasoning_model():
     print("✓ generate_title: reasoning model handled, headroom budget")
 
 
+def test_utility_model_routing():
+    """Titles/synthesis route to utility_model when set; notes synthesis (vault-
+    authoring) always stays on the chat model."""
+    from unittest.mock import patch, MagicMock
+    import config as _config, inference
+    inf = _config.get_config()["inference"]
+    orig = inf.get("utility_model")
+    inf["utility_model"] = "small-utility"
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json = lambda: {"choices": [{"message": {"content": "Ok Title"}}]}
+    try:
+        with patch("requests.post", return_value=resp) as p:
+            inference.generate_title([{"role": "user", "content": "x"}])
+            assert p.call_args.kwargs["json"]["model"] == "small-utility"
+            inference.synthesize_recall("q", [{"text": "m", "tags": [], "score": 1}])
+            assert p.call_args.kwargs["json"]["model"] == "small-utility"
+            inference.synthesize("memory", ["a"])
+            assert p.call_args.kwargs["json"]["model"] == "small-utility"
+            resp.json = lambda: {"choices": [{"message": {"content": '{"notes": []}'}}]}
+            inference.synthesize_notes({"id": 1, "children": []})
+            assert p.call_args.kwargs["json"]["model"] == inf["model_id"]  # chat model
+        # Unset -> everything falls back to the chat model.
+        inf["utility_model"] = None
+        resp.json = lambda: {"choices": [{"message": {"content": "T"}}]}
+        with patch("requests.post", return_value=resp) as p:
+            inference.generate_title([{"role": "user", "content": "x"}])
+            assert p.call_args.kwargs["json"]["model"] == inf["model_id"]
+    finally:
+        inf["utility_model"] = orig
+    print("✓ utility model: titles/synthesis routed; vault-authoring stays on chat")
+
+
 def test_available_models():
     """Test getting available models."""
     mock_response = {

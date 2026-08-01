@@ -54,6 +54,15 @@ def load_config() -> dict:
         "inference": {
             "endpoint_url": "http://<inference-host>:1234/v1",
             "model_id": "qwen/qwen3-coder-next",
+            # Optional model for UTILITY calls — ephemeral background output
+            # (titles, recall/tool synthesis). A small model here is faster and
+            # stops utility calls from evicting the chat model's KV cache after
+            # every turn. None = chat model for everything (zero-config).
+            # ONE role by design, not per-task knobs. The boundary rule:
+            # anything authoring words destined for the VAULT (in-chat note
+            # proposals, notes synthesis) uses the chat model; utility covers
+            # ephemeral labels/summaries only.
+            "utility_model": None,
             "temperature": 0.7,
             "max_tokens": 2048,
             "thinking_mode": False,
@@ -121,6 +130,14 @@ def load_config() -> dict:
             # note. duplicate_of appears on the draft for review.
             "dedupe_threshold": 0.85,
             "dedupe_context_notes": 30,
+            # Ambient hints: on tools turns, semantic-search the vault for the
+            # user's message and inject matching note TITLES (never bodies) as
+            # a one-line scent trail in the dynamic system message — converts
+            # "remember to search" into "look what's here". No LLM cost (local
+            # embedding); the model still decides whether to read.
+            "ambient_hints": True,
+            "ambient_hints_limit": 3,
+            "ambient_hints_threshold": 0.5,
         },
         "voice": {
             # Server voice tier (see voice.py). Advertised via GET /api/health

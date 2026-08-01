@@ -11,6 +11,10 @@
 inference:
   endpoint_url: "http://<your-tailnet-ip>:1234/v1"  # Replace with your LM Studio's tailnet IP
   model_id: "qwen/qwen3-coder-next"
+  # Recommended when the chat model is large: a small model for UTILITY calls
+  # (titles, recall/tool synthesis) — faster, and background work stops
+  # evicting the chat model's KV cache. Note drafts always use the chat model.
+  # utility_model: "qwen/qwen3-4b-2507"
   temperature: 0.7
   max_tokens: 2048
   thinking_mode: false

@@ -30,6 +30,14 @@ def _get_model_id() -> str:
     return _get_config()["inference"]["model_id"]
 
 
+def _get_utility_model() -> str:
+    """Model for UTILITY calls — ephemeral background output (titles, recall
+    and tool synthesis). inference.utility_model when set, else the chat
+    model. One role by design; vault-authoring calls never use this (see the
+    boundary rule in config.py)."""
+    return _get_config()["inference"].get("utility_model") or _get_model_id()
+
+
 def _get_temperature() -> float:
     """Get temperature from config."""
     return _get_config()["inference"]["temperature"]
@@ -682,13 +690,13 @@ def synthesize_recall(query: str, matches: List[Dict]) -> str:
     )
 
     payload = {
-        "model": inference_config["model_id"],
+        "model": _get_utility_model(),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
         "temperature": rc.get("synthesis_temperature", 0.3),
-        "max_tokens": rc.get("synthesis_max_tokens", 256),
+        "max_tokens": rc.get("synthesis_max_tokens", 768),
         "stream": False,
     }
 
@@ -734,12 +742,7 @@ def generate_title(turns: List[Dict]) -> str:
     # thinking spends this same budget — 24 tokens starved MiniMax into
     # returning nothing at all. Keep generous; the first line is taken anyway.
     payload["max_tokens"] = tcfg.get("max_tokens", 512)
-    # Optional dedicated small model (titles.model): faster titles, AND it stops
-    # the post-turn title call from evicting the chat model's KV cache in LM
-    # Studio (single cache slot per model) — which would force a full history
-    # re-prefill on the next chat turn.
-    if tcfg.get("model"):
-        payload["model"] = tcfg["model"]
+    payload["model"] = _get_utility_model()
 
     response = requests.post(
         f"{_get_endpoint_url()}/chat/completions",
@@ -821,7 +824,9 @@ def synthesize_notes(tree: Dict, existing_notes: Optional[List[Dict]] = None) ->
             "[[wikilink]] instead:\n" + listing)
 
     payload = {
-        "model": _get_config()["inference"]["model_id"],
+        # Vault-authoring call: notes become the user's permanent knowledge, in
+        # their voice — always the CHAT model, never utility (boundary rule).
+        "model": _get_model_id(),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
@@ -1302,13 +1307,13 @@ def synthesize(kind: str, items: List, query: str = "") -> str:
         + f"Items to synthesize:\n{body}\n\nSynthesize these into a concise block."
     )
     payload = {
-        "model": inference_config["model_id"],
+        "model": _get_utility_model(),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
         "temperature": tcfg.get("temperature", 0.3),
-        "max_tokens": tcfg.get("max_tokens", 256),
+        "max_tokens": tcfg.get("max_tokens", 768),
         "stream": False,
     }
     try:

@@ -1347,6 +1347,43 @@ def _run_recall(db_path: str, message: str):
         return "", []
 
 
+def _ambient_note_hints(db_path: str, message: str) -> Optional[str]:
+    """One-line scent trail of vault notes semantically near the user's message.
+
+    Titles only, never bodies — the model still decides whether to read (it's
+    priming, not injection). No LLM call (local embedding); best-effort, and
+    silent when nothing clears the similarity threshold. Rides the late
+    dynamic system message, so it never busts the history's KV-cache prefix.
+    """
+    ncfg = config.get("notes", {}) or {}
+    if not ncfg.get("ambient_hints", True):
+        return None
+    try:
+        vec = get_embedding(message)
+        if not vec:
+            return None
+        conn = sqlite3.connect(db_path)
+        try:
+            hits = notes_index.search_notes_semantic(
+                conn, vec, limit=ncfg.get("ambient_hints_limit", 3))
+        finally:
+            conn.close()
+        threshold = ncfg.get("ambient_hints_threshold", 0.5)
+        hits = [n for n in hits if n.get("score", 0) >= threshold]
+        if not hits:
+            return None
+        parts = []
+        for n in hits:
+            tags = f" ({', '.join(n['tags'][:2])})" if n.get("tags") else ""
+            parts.append(f"[[{n['title']}]]{tags}")
+        return ("Possibly relevant vault notes: " + ", ".join(parts)
+                + " — read with get_notes if relevant; graph_notes maps their "
+                  "connections.")
+    except Exception as e:
+        print(f"Warning: ambient note hints failed: {e}")
+        return None
+
+
 def _stream_turn_response(
     db_path: str,
     *,
@@ -1371,8 +1408,18 @@ def _stream_turn_response(
     connection is opened INSIDE the generator (worker thread) to avoid cross-thread
     SQLite use.
     """
-    # Location context line for this turn (empty when no location was sent).
-    location_line = agent_tools.describe_location(location) if location else None
+    # Per-turn dynamic context: location line, plus (on tools turns) the
+    # ambient note hints. Joined into the late dynamic system message.
+    extra_lines = []
+    if location:
+        line = agent_tools.describe_location(location)
+        if line:
+            extra_lines.append(line)
+    if tools_enabled:
+        hint = _ambient_note_hints(db_path, message)
+        if hint:
+            extra_lines.append(hint)
+    dynamic_context = "\n\n".join(extra_lines) or None
     store_location = bool(config.get("location", {}).get("store", False))
 
     def event_generator():
@@ -1394,7 +1441,7 @@ def _stream_turn_response(
                     max_rounds=tcfg.get("max_rounds", 5),
                     emit_status=tcfg.get("status_notes", True),
                     emit_results=tcfg.get("show_step_results", False),
-                    extra_system=location_line,
+                    extra_system=dynamic_context,
                 ):
                     if ev.get("type") == "token":
                         full_response += ev["content"]
@@ -1445,7 +1492,7 @@ def _stream_turn_response(
         else:
             try:
                 for content in stream_llm_tokens(message, context_list, mode=mode,
-                                                 extra_system=location_line):
+                                                 extra_system=dynamic_context):
                     full_response += content
                     yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
             except Exception as e:

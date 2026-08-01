@@ -96,6 +96,35 @@ def test_search_notes_tag_filter_executor():
     print("✓ search_notes executor: tag filter + tag-only category listing")
 
 
+def test_ambient_note_hints():
+    c, cfg, dbp = _fresh()
+    _seed_note(cfg, dbp, "Sarah", "Ceramics person from the maker space.",
+               tags=["social-graph"])
+    _seed_note(cfg, dbp, "Unrelated", "Totally different topic.")
+
+    # Embeddings are length-vectors in these tests; make the query land near
+    # "Sarah"'s note vector so it clears the threshold.
+    sarah_len = float(len("Sarah\nCeramics person from the maker space."))
+    main.get_embedding = lambda text: [sarah_len, 1.0]
+
+    hint = main._ambient_note_hints(dbp, "met Sarah yesterday")
+    assert hint and "[[Sarah]]" in hint and "social-graph" in hint
+    assert "Ceramics" not in hint                      # titles only, never bodies
+
+    # Below-threshold matches stay silent.
+    cfg["notes"]["ambient_hints_threshold"] = 1.01     # cosine can't reach this
+    assert main._ambient_note_hints(dbp, "met Sarah") is None
+    cfg["notes"]["ambient_hints_threshold"] = 0.5
+
+    # Config off -> silent; embedding failure -> silent, never raises.
+    cfg["notes"]["ambient_hints"] = False
+    assert main._ambient_note_hints(dbp, "met Sarah") is None
+    cfg["notes"]["ambient_hints"] = True
+    main.get_embedding = lambda text: None
+    assert main._ambient_note_hints(dbp, "met Sarah") is None
+    print("✓ ambient hints: titles-only scent trail, threshold, off-switch, safe")
+
+
 def test_search_created_range_composes():
     c, cfg, dbp = _fresh()
     vault = cfg["notes"]["vault_dir"]
