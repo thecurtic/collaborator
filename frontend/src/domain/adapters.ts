@@ -312,7 +312,16 @@ export function toNoteMeta(api: ApiNoteMeta): NoteMeta {
     sourceTurns: api.source_turns ?? [],
     links: api.links ?? [],
     score: typeof api.score === 'number' ? api.score : null,
-    fields: toNoteFields(api.fields),
+    // Event times arrive as top-level event_* columns, NOT inside the
+    // backend's fields dict (INDEXED_FIELD_KEYS excludes them) — merge them
+    // so NoteFields.start is the one truth the UI reads. Without this the
+    // calendar saw every event as start-less and dropped it.
+    fields: toNoteFields({
+      ...(api.fields ?? {}),
+      start: api.fields?.start ?? api.event_start,
+      end: api.fields?.end ?? api.event_end,
+      all_day: api.fields?.all_day ?? api.event_all_day,
+    }),
   };
 }
 

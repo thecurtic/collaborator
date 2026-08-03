@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ApiRecall, ApiTurn } from '@/api/types';
-import { toHealth, toNoteDraft, toRecallBlock, toTurn } from './adapters';
+import {
+  toHealth,
+  toNoteDraft,
+  toNoteMeta,
+  toRecallBlock,
+  toTurn,
+} from './adapters';
 
 const baseTurn: ApiTurn = {
   id: 1,
@@ -131,6 +137,30 @@ describe('toNoteDraft event fields', () => {
       }).fields,
     ).toBeNull();
     expect(toNoteDraft({ ...base }).fields).toBeNull();
+  });
+});
+
+describe('toNoteMeta event fields', () => {
+  it('merges top-level event_* columns into NoteFields (calendar bug)', () => {
+    const m = toNoteMeta({
+      filename: 'Dentist.md',
+      title: 'Dentist',
+      tags: ['event'],
+      event_start: '2026-08-11T09:00-06:00',
+      event_end: null,
+      event_all_day: false,
+      fields: { location: 'Boulder' }, // backend fields NEVER carry times
+    });
+    expect(m.fields).toMatchObject({
+      start: '2026-08-11T09:00-06:00',
+      allDay: false,
+      location: 'Boulder',
+    });
+  });
+
+  it('still collapses plain notes to null fields', () => {
+    const m = toNoteMeta({ filename: 'a.md', title: 'a', fields: {} });
+    expect(m.fields).toBeNull();
   });
 });
 

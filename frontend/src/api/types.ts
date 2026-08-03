@@ -265,6 +265,14 @@ export interface ApiNoteMeta {
   score?: number;
   /** 1f18a9b: present on search/get/list/graph results after reindex. */
   fields?: ApiNoteFields | null;
+  /**
+   * Event times live as TOP-LEVEL columns on note rows — the backend's
+   * `fields` dict deliberately excludes start/end/all_day (they're indexed
+   * separately). The adapter merges them back into NoteFields.
+   */
+  event_start?: string | null;
+  event_end?: string | null;
+  event_all_day?: boolean;
 }
 
 /** GET /api/notes */
