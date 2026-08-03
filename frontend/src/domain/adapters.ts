@@ -1,6 +1,7 @@
 import type {
   ApiHealth,
   ApiModelsResponse,
+  ApiNoteFields,
   ApiSession,
   ApiNoteDraft,
   ApiNoteMeta,
@@ -22,6 +23,7 @@ import type {
   ModelsInfo,
   Note,
   NoteDraft,
+  NoteFields,
   NoteMeta,
   PromptInfo,
   RecallBlock,
@@ -245,19 +247,60 @@ export function toNoteDraft(api: ApiNoteDraft): NoteDraft {
       title: d.title,
       score: d.score,
     })),
-    // Event fields require a real start — the backend serializes a `fields`
-    // column for EVERY draft (empty object/nulls on non-events), and a
-    // start-less "event" is meaningless. Without this guard every draft
-    // editor grew date pickers.
-    fields:
-      api.fields && typeof api.fields.start === 'string' && api.fields.start
-        ? {
-            start: api.fields.start,
-            end: typeof api.fields.end === 'string' ? api.fields.end : null,
-            allDay: Boolean(api.fields.all_day),
-          }
-        : null,
+    // Shared mapper: empty/contentless fields dicts (every draft carries the
+    // column) collapse to null so plain drafts don't grow typed editors.
+    fields: toNoteFields(api.fields),
   };
+}
+
+const str = (v: unknown): string | null =>
+  typeof v === 'string' && v ? v : null;
+const strList = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+
+/**
+ * Typed frontmatter (1f18a9b) — one flat superset, defensively mapped.
+ * Returns null when nothing meaningful is set (the backend serializes an
+ * empty fields dict on plain notes; that must not read as "has fields").
+ */
+export function toNoteFields(
+  api: ApiNoteFields | null | undefined,
+): NoteFields | null {
+  if (!api) return null;
+  const f: NoteFields = {
+    start: str(api.start),
+    end: str(api.end),
+    allDay: Boolean(api.all_day),
+    location: str(api.location),
+    people: strList(api.people),
+    state: str(api.state),
+    due: str(api.due),
+    aliases: strList(api.aliases),
+    kind: str(api.kind),
+    relation: str(api.relation),
+    birthday: str(api.birthday),
+    area: str(api.area),
+    name: str(api.name),
+    dob: str(api.dob),
+    residesIn: str(api.resides_in),
+    timezone: str(api.timezone),
+  };
+  const meaningful =
+    f.start != null ||
+    f.state != null ||
+    f.due != null ||
+    f.location != null ||
+    f.people.length > 0 ||
+    f.aliases.length > 0 ||
+    f.kind != null ||
+    f.relation != null ||
+    f.birthday != null ||
+    f.area != null ||
+    f.name != null ||
+    f.dob != null ||
+    f.residesIn != null ||
+    f.timezone != null;
+  return meaningful ? f : null;
 }
 
 export function toNoteMeta(api: ApiNoteMeta): NoteMeta {
@@ -269,6 +312,7 @@ export function toNoteMeta(api: ApiNoteMeta): NoteMeta {
     sourceTurns: api.source_turns ?? [],
     links: api.links ?? [],
     score: typeof api.score === 'number' ? api.score : null,
+    fields: toNoteFields(api.fields),
   };
 }
 

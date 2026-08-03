@@ -10,6 +10,7 @@ const meta = (title: string, links: string[] = []): NoteMeta => ({
   sourceTurns: [],
   links,
   score: null,
+  fields: null,
 });
 
 describe('buildEdges', () => {

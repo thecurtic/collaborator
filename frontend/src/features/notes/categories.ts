@@ -20,6 +20,28 @@ export const NOTE_CATEGORIES: NoteCategory[] = [
   { tag: 'event', label: 'Events' },
 ];
 
+/**
+ * Valid `fields.state` values per category (1f18a9b) — one shared key,
+ * per-category vocabularies, rendered by the one generic StateChip.
+ */
+export const CATEGORY_STATES: Record<string, string[]> = {
+  goal: ['proposed', 'started', 'finished', 'discarded'],
+  question: ['open', 'answered'],
+  project: ['proposed', 'started', 'paused', 'done', 'abandoned'],
+};
+
+/** USER.md fixed section headings, lowercased = valid `area` values. */
+export const PROFILE_AREAS = [
+  'background',
+  'significant relationships',
+  'work',
+  'interests',
+  'philosophy & values',
+  'health & habits',
+  'preferences',
+  'current focus',
+];
+
 const BY_TAG = new Map(NOTE_CATEGORIES.map((c) => [c.tag, c]));
 
 /** The first reserved category among `tags`, or null for uncategorized. */

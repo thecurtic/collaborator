@@ -200,14 +200,10 @@ export interface ApiNoteDraft {
   decided_at: string | null;
   duplicate_of?: ApiDuplicateRef[];
   /**
-   * Structured fields on event drafts (85c508c): wall-clock ISO times the
-   * backend validates and serializes into frontmatter at approval.
+   * Structured per-category fields (85c508c events; 1f18a9b all categories):
+   * validated by the backend and serialized into frontmatter at approval.
    */
-  fields?: {
-    start?: string | null;
-    end?: string | null;
-    all_day?: boolean;
-  } | null;
+  fields?: ApiNoteFields | null;
 }
 
 /** GET /api/notes/drafts */
@@ -235,6 +231,30 @@ export interface ApiSynthesisResponse {
 }
 
 /** Vault note metadata (list/search entries; search adds `score`). */
+/**
+ * Per-category typed frontmatter (1f18a9b). One flat superset — the note's
+ * single category tag decides which keys are meaningful.
+ */
+export interface ApiNoteFields {
+  start?: string | null;
+  end?: string | null;
+  all_day?: boolean;
+  location?: string | null;
+  people?: string[];
+  state?: string | null;
+  due?: string | null;
+  aliases?: string[];
+  kind?: string | null;
+  relation?: string | null;
+  birthday?: string | null;
+  area?: string | null;
+  // USER.md hub note only:
+  name?: string | null;
+  dob?: string | null;
+  resides_in?: string | null;
+  timezone?: string | null;
+}
+
 export interface ApiNoteMeta {
   filename: string;
   title: string;
@@ -243,6 +263,8 @@ export interface ApiNoteMeta {
   source_turns?: number[];
   links?: string[];
   score?: number;
+  /** 1f18a9b: present on search/get/list/graph results after reindex. */
+  fields?: ApiNoteFields | null;
 }
 
 /** GET /api/notes */

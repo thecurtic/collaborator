@@ -107,11 +107,19 @@ describe('toNoteDraft event fields', () => {
       ...base,
       fields: { start: '2026-08-02T14:00', end: null, all_day: false },
     });
-    expect(d.fields).toEqual({
+    expect(d.fields).toMatchObject({
       start: '2026-08-02T14:00',
       end: null,
       allDay: false,
     });
+  });
+
+  it('maps goal fields (state/due) through the shared superset', () => {
+    const d = toNoteDraft({
+      ...base,
+      fields: { state: 'started', due: '2026-08-15' },
+    });
+    expect(d.fields).toMatchObject({ state: 'started', due: '2026-08-15' });
   });
 
   it('treats the backend\'s empty fields column as "not an event"', () => {

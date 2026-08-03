@@ -252,19 +252,44 @@ export interface NoteDraft {
   decidedAt: string | null;
   /** Near-duplicate vault notes — flagged, never dropped. */
   duplicateOf: DuplicateRef[];
-  /** Structured event times (event drafts, 85c508c); null otherwise. */
-  fields: EventDraftFields | null;
+  /** Structured per-category fields; null when the draft has none set. */
+  fields: NoteFields | null;
 }
 
 /**
- * Event-draft fields: wall-clock ISO strings (no offset — the backend stamps
- * the offset at approval). `start` date-only when allDay.
+ * Per-category typed frontmatter (1f18a9b) as one flat superset — the note's
+ * single category decides which keys mean anything. null/[] = unset.
  */
-export interface EventDraftFields {
+export interface NoteFields {
+  // event
   start: string | null;
   end: string | null;
   allDay: boolean;
+  location: string | null;
+  /** Social-graph note titles — real graph edges. */
+  people: string[];
+  // goal / question / project (shared state key, per-category value sets)
+  state: string | null;
+  due: string | null;
+  // social-graph
+  aliases: string[];
+  kind: string | null;
+  relation: string | null;
+  birthday: string | null;
+  // user-profile satellites
+  area: string | null;
+  // USER.md hub note only
+  name: string | null;
+  dob: string | null;
+  residesIn: string | null;
+  timezone: string | null;
 }
+
+/**
+ * PATCH shape for fields (notes and drafts): omitted keys keep their value,
+ * '' or [] clears one. Server-validated (422 with a readable reason).
+ */
+export type NoteFieldsPatch = Record<string, string | string[] | boolean>;
 
 /** Vault note metadata (list/search rows). */
 export interface NoteMeta {
@@ -277,6 +302,8 @@ export interface NoteMeta {
   links: string[];
   /** Search relevance, when this row came from /api/notes/search. */
   score: number | null;
+  /** Typed frontmatter (1f18a9b); null when the note has none set. */
+  fields: NoteFields | null;
 }
 
 /** A full vault note (body + incoming links). */

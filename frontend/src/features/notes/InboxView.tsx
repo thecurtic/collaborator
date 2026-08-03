@@ -148,9 +148,10 @@ function DraftView({
             .filter(Boolean),
           ...(fieldsDirty
             ? {
+                // '' clears a key server-side (1f18a9b patch semantics).
                 fields: {
                   start: startText,
-                  end: endText || null,
+                  end: endText,
                   all_day: allDay,
                 },
               }

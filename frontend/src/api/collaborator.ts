@@ -13,6 +13,7 @@ import type {
   SynthesisResult,
   DeviceSession,
   ModelsInfo,
+  NoteFieldsPatch,
   Transcript,
   TtsVoices,
   TurnsPage,
@@ -372,7 +373,7 @@ export interface CollaboratorApi {
       tags?: string[];
       links?: string[];
       /** Event drafts: corrected times (85c508c). */
-      fields?: { start?: string; end?: string | null; all_day?: boolean };
+      fields?: NoteFieldsPatch;
     },
   ): Promise<void>;
   /**
@@ -404,7 +405,13 @@ export interface CollaboratorApi {
    */
   updateNote(
     title: string,
-    patch: { title?: string; body?: string; tags?: string[] },
+    patch: {
+      title?: string;
+      body?: string;
+      tags?: string[];
+      /** 1f18a9b: typed frontmatter; '' / [] clears a key (422 on invalid). */
+      fields?: NoteFieldsPatch;
+    },
   ): Promise<{ note: Note; renamed: boolean; linksRewritten: string[] }>;
 
   /**
@@ -639,7 +646,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
       tags?: string[];
       links?: string[];
       /** Event drafts: corrected times (85c508c). */
-      fields?: { start?: string; end?: string | null; all_day?: boolean };
+      fields?: NoteFieldsPatch;
     },
   ): Promise<void> {
     await request<unknown>(`/api/notes/drafts/${id}`, {
@@ -704,7 +711,12 @@ class HttpCollaboratorApi implements CollaboratorApi {
 
   async updateNote(
     title: string,
-    patch: { title?: string; body?: string; tags?: string[] },
+    patch: {
+      title?: string;
+      body?: string;
+      tags?: string[];
+      fields?: NoteFieldsPatch;
+    },
   ): Promise<{ note: Note; renamed: boolean; linksRewritten: string[] }> {
     const res = await request<ApiNoteUpdateResponse>(
       `/api/notes/${encodeURIComponent(title)}`,

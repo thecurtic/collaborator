@@ -1,4 +1,9 @@
-import type { EventDraftFields } from '@/domain/models';
+/** The temporal slice of NoteFields (structural, so partial literals work). */
+export interface EventTimeFields {
+  start: string | null;
+  end: string | null;
+  allDay: boolean;
+}
 
 /**
  * Display/edit helpers for event-draft times (85c508c). Values are wall-clock
@@ -40,7 +45,7 @@ function fmtTime(d: Date): string {
  * all day", "Sun, Aug 2, 2:00 PM – Mon, Aug 3, 9:00 AM". Falls back to the
  * raw string for anything unparseable (never hide a value under review).
  */
-export function formatEventRange(f: EventDraftFields, now = new Date()): string {
+export function formatEventRange(f: EventTimeFields, now = new Date()): string {
   if (!f.start) return '';
   const start = parseWallClock(f.start);
   if (!start) return f.start;
