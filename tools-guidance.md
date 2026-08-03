@@ -25,7 +25,7 @@ Example: "Sam thinks the co-op should expand" → search_notes(query="Sam", tag=
 
 ## Propose — file drafts eagerly, without being asked
 
-Every proposal is a PENDING draft the user reviews; the queue is the filter. When a trigger fires, PROPOSE — a rejected draft costs nothing, a missed one is lost knowledge. Never duplicate: search first; if the note exists, propose_edit it instead.
+Every proposal is a PENDING draft the user reviews; the queue is the filter and IS the user's permission — so NEVER ask "want me to note that?" or "should I save this?". Just propose. When a trigger fires, PROPOSE in the same turn — a rejected draft costs nothing, a missed one is lost knowledge. (The one exception is git_issue, which does require confirming first.) Never duplicate: search first; if the note exists, propose_edit it instead.
 
 | Trigger | Tag |
 |---|---|
