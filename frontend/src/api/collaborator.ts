@@ -395,6 +395,13 @@ export interface CollaboratorApi {
     tag?: string,
   ): Promise<NoteMeta[]>;
   getNote(title: string): Promise<Note>;
+  /**
+   * Event notes overlapping [from, to] (inclusive ISO dates), sorted by
+   * start — the calendar query (85c508c).
+   */
+  listEvents(from: string, to: string): Promise<NoteMeta[]>;
+  /** RFC 5545 export of events (85c508c) — offer as a file download. */
+  downloadEventsIcs(): Promise<Blob>;
   /** Reconcile the index with the vault (after external Obsidian edits). */
   reindexNotes(): Promise<ReindexResult>;
 
@@ -599,6 +606,19 @@ class HttpCollaboratorApi implements CollaboratorApi {
 
   async logout(): Promise<void> {
     await request<unknown>('/api/auth/logout', { method: 'POST' });
+  }
+
+  async listEvents(from: string, to: string): Promise<NoteMeta[]> {
+    const search = new URLSearchParams({ tag: 'event', from, to });
+    const res = await request<ApiNoteSearchResponse>(
+      `/api/notes/search?${search.toString()}`,
+    );
+    return (res.results ?? []).map(toNoteMeta);
+  }
+
+  async downloadEventsIcs(): Promise<Blob> {
+    const res = await requestStream('/api/events.ics');
+    return res.blob();
   }
 
   async getTtsVoices(): Promise<TtsVoices> {
