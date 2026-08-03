@@ -192,7 +192,9 @@ export function PeopleView({
   const orgs = sorted.filter((n) => n.fields?.kind === 'org');
 
   return (
-    <div className="pb-4">
+    // Own scroll region — without it the whole app shell scrolls and drags
+    // the bottom tab bar along.
+    <div className="h-full overflow-y-auto overscroll-contain pb-4">
       {birthdays.length > 0 && (
         <div className="border-b border-border px-4 py-3">
           <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">

@@ -147,8 +147,11 @@ export function ProfileView({
   const grouped = groupSatellites(satellites ?? []);
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-4">
-      {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
+    // Own scroll region — without it the whole app shell scrolls and drags
+    // the bottom tab bar along.
+    <div className="h-full overflow-y-auto overscroll-contain">
+      <div className="mx-auto max-w-3xl px-4 py-4">
+        {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
 
       {userMissing && (
         <div className="py-8 text-center text-muted-foreground">
@@ -223,6 +226,7 @@ export function ProfileView({
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }
