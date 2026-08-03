@@ -547,7 +547,10 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
     state = {"last_matches": [], "semantic_matches": [], "synthesis": None,
              "synthesis_kind": None,
              "chat_run_id": f"chat-{secrets.token_hex(4)}", "proposed_drafts": [],
-             "fetch_count": 0, "first_fetch_host": None, "denied_fetches": []}
+             "fetch_count": 0, "first_fetch_host": None, "denied_fetches": [],
+             # Titles whose FULL current body the model has read this turn —
+             # body-replacing propose_edit is gated on this (see below).
+             "read_titles": set()}
 
     def _search_schema(name, desc):
         return {"type": "function", "function": {
@@ -905,6 +908,7 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                         continue
                     body = note["body"][:6000]
                     total += len(body)
+                    state["read_titles"].add(note["title"].lower())
                     out.append({"title": note["title"], "body": body,
                                 "tags": note["tags"], "links": note["links"],
                                 "fields": note.get("fields") or {},
@@ -925,6 +929,7 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 backlinks = [b["title"] for b in notes_index.get_backlinks(conn, note["title"])]
             finally:
                 conn.close()
+            state["read_titles"].add(note["title"].lower())
             return json.dumps({
                 "title": note["title"], "body": note["body"], "tags": note["tags"],
                 "links": note["links"], "backlinks": backlinks,
@@ -936,6 +941,13 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             body = (args.get("body") or "").strip()
             if not title or not body:
                 return json.dumps({"error": "propose_note needs a title and a body"})
+            smell = _body_metadata_smell(body)
+            if smell:
+                return json.dumps({"error": f"the body repeats structured "
+                                            f"metadata ('{smell}: …') — pass "
+                                            "such values as typed fields (they "
+                                            "become frontmatter automatically) "
+                                            "and keep the body pure prose"})
             tags = [str(t) for t in (args.get("tags") or [])]
             fields, ferr = _normalize_note_fields(args, tags=tags, title=title)
             if ferr:
@@ -980,6 +992,19 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 if note is None:
                     return json.dumps({"error": f"no note titled \"{target}\" — find "
                                                 "the exact title with search_notes first"})
+                # Read-before-edit: a body replacement is only accepted after the
+                # model has READ the current body this turn (get_note/get_notes).
+                # The user may have edited the note since the model last saw it —
+                # composing a body from memory silently reverts their changes.
+                if ((args.get("body") or "").strip()
+                        and note["title"].lower() not in state["read_titles"]):
+                    return json.dumps({"error": f"read \"{note['title']}\" with "
+                                                "get_note FIRST, then base your "
+                                                "edit on its CURRENT text — the "
+                                                "user may have changed it since "
+                                                "you last saw it; preserve their "
+                                                "edits and change only what the "
+                                                "new information requires"})
                 vault = _resolve_vault_dir(db_path)
                 parsed = notes_index.parse_note_file(
                     os.path.join(vault, note["filename"]))
@@ -992,7 +1017,16 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                         new_title = _validate_note_title(new_title)
                     except HTTPException as e:
                         return json.dumps({"error": f"invalid new_title: {e.detail}"})
-                body = (args.get("body") or "").strip() or parsed["body"]
+                proposed_body = (args.get("body") or "").strip()
+                if proposed_body:
+                    smell = _body_metadata_smell(proposed_body)
+                    if smell:
+                        return json.dumps({"error": f"the body repeats structured "
+                                                    f"metadata ('{smell}: …') — "
+                                                    "pass such values as typed "
+                                                    "fields and keep the body "
+                                                    "pure prose"})
+                body = proposed_body or parsed["body"]
                 tags = args.get("tags")
                 tags = ([str(t) for t in tags] if isinstance(tags, list)
                         else (note.get("tags") or []))
@@ -1473,6 +1507,24 @@ def _apply_fields_to_front(front: dict, fields: Optional[dict]) -> dict:
         else:
             front[key] = value
     return front
+
+
+# Body lines that look like frontmatter smuggled into prose ("Due: Friday",
+# "**Location:** annex") — the model repeating its typed fields in the body.
+_BODY_METADATA_RE = _re_mod.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?(start|end|all[ _]day|state|due|location|people|"
+    r"aliases|kind|relation|birthday|area|when|where|date|time)(?:\*\*)?\s*:",
+    _re_mod.IGNORECASE)
+
+
+def _body_metadata_smell(body: str) -> Optional[str]:
+    """Key name when the body's opening lines duplicate structured metadata."""
+    lines = [l for l in (body or "").splitlines() if l.strip()][:3]
+    for line in lines:
+        m = _BODY_METADATA_RE.match(line)
+        if m:
+            return m.group(1)
+    return None
 
 
 # Characters that break filesystems or Obsidian [[wikilinks]] (NOTES-FORMAT.md).

@@ -108,6 +108,7 @@ def test_approve_applies_edit_and_rewrites_wikilinks():
     _seed_note(cfg, dbp, "Cars are a trap",
                "Ownership costs compound; see [[Transit is freedom]].", ["cars"])
     _, execute, _ = main._build_tools(dbp)
+    execute("get_note", {"title": "Transit is freedom"})   # read-before-edit gate
     out = json.loads(execute("propose_edit", {
         "title": "Transit is freedom", "new_title": "Good transit is freedom",
         "body": "I believe frequent buses beat cars on every axis I care about.",
@@ -186,3 +187,53 @@ if __name__ == "__main__":
     test_approve_409_when_target_gone_and_reject_untouched()
     test_many_edits_one_per_note()
     print("\n✓ All propose_edit tests passed!")
+
+
+def test_read_before_edit_gate():
+    """A body replacement is refused until the model has READ the current note
+    this turn — composing from memory silently reverts the user's own edits."""
+    c, cfg, dbp = _fresh()
+    _seed_note(cfg, dbp, "Transit is freedom", "User-amended body.", ["transit"])
+    _, execute, _ = main._build_tools(dbp)
+
+    out = json.loads(execute("propose_edit", {
+        "title": "Transit is freedom", "body": "Rewritten from stale memory."}))
+    assert "get_note FIRST" in out["error"]
+
+    execute("get_note", {"title": "transit is freedom"})   # case-insensitive read
+    out = json.loads(execute("propose_edit", {
+        "title": "Transit is freedom", "body": "Informed rewrite."}))
+    assert out["status"] == "pending"
+
+    # Field-only edits (state, tags) don't need the read — no body to clobber.
+    _seed_note(cfg, dbp, "Ship the app", "Goal body.", ["goal"])
+    out = json.loads(execute("propose_edit", {
+        "title": "Ship the app", "state": "started"}))
+    assert out["status"] == "pending"
+    print("✓ read-before-edit: body needs a fresh read; field-only edits don't")
+
+
+def test_body_metadata_duplication_rejected():
+    """Field values repeated in the body ('Due: Friday') are rejected — typed
+    fields become frontmatter; the body is pure prose."""
+    c, cfg, dbp = _fresh()
+    _, execute, _ = main._build_tools(dbp)
+
+    out = json.loads(execute("propose_note", {
+        "title": "Ship the deck", "tags": ["goal"], "state": "started",
+        "due": "2026-08-15",
+        "body": "Due: 2026-08-15\nFinish the investor deck."}))
+    assert "pure prose" in out["error"]
+
+    out = json.loads(execute("propose_note", {
+        "title": "Kiln day", "tags": ["event"], "start": "2026-08-15T10:00",
+        "body": "**Location:** the annex\nA hands-on firing day."}))
+    assert "pure prose" in out["error"]
+
+    # Prose that merely mentions a date inline is fine.
+    out = json.loads(execute("propose_note", {
+        "title": "Ship the deck", "tags": ["goal"], "state": "started",
+        "due": "2026-08-15",
+        "body": "Finish the investor deck before the board meeting."}))
+    assert out["status"] == "pending"
+    print("✓ metadata smuggled into the body rejected; clean prose accepted")
