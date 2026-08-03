@@ -15,11 +15,16 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Note, NoteDraft } from '@/domain/models';
 import { categoryOf } from './categories';
+import { formatEventRange } from './eventFields';
 import {
-  formatEventRange,
-  toDateInput,
-  toDateTimeLocalInput,
-} from './eventFields';
+  draftToFields,
+  draftToPatch,
+  FieldsEditor,
+  fieldsToDraft,
+  FieldsSummary,
+  type FieldsDraft,
+} from './FieldsEditor';
+import { StateChip } from './StateChip';
 import { lineDiff } from './lineDiff';
 import { NoteBody } from './NoteBody';
 
@@ -65,25 +70,12 @@ function DraftView({
   const [title, setTitle] = useState(draft.title);
   const [body, setBody] = useState(draft.body);
   const [tagsText, setTagsText] = useState(draft.tags.join(', '));
-  // Event drafts (85c508c): structured times, editable during review. Input
-  // values are wall-clock ISO (what datetime-local/date inputs emit) — the
-  // backend validates and stamps the offset at approval.
-  const ef = draft.fields;
-  const [allDay, setAllDay] = useState(ef?.allDay ?? false);
-  const [startText, setStartText] = useState(
-    ef?.start
-      ? ef.allDay
-        ? toDateInput(ef.start)
-        : toDateTimeLocalInput(ef.start)
-      : '',
-  );
-  const [endText, setEndText] = useState(
-    ef?.end
-      ? ef.allDay
-        ? toDateInput(ef.end)
-        : toDateTimeLocalInput(ef.end)
-      : '',
-  );
+  // Typed per-category fields (85c508c events; 1f18a9b everything): edited
+  // through the shared FieldsEditor; the backend validates at approval.
+  // Category comes from the PROPOSED tags (categories are discrete).
+  const category = categoryOf(draft.tags)?.tag ?? null;
+  const fields0 = fieldsToDraft(category, draft.fields);
+  const [fieldsDraft, setFieldsDraft] = useState<FieldsDraft>(fields0);
   const [busy, setBusy] = useState<null | 'approve' | 'reject'>(null);
   const [error, setError] = useState<string | null>(null);
   // Edit drafts diff against the CURRENT note (snapshot semantics: the draft
@@ -109,30 +101,13 @@ function DraftView({
     };
   }, [isEdit, draft.targetTitle]);
 
-  // Live field values in wall-clock form, for display and dirty-checking.
-  const liveFields = ef
-    ? { start: startText || null, end: endText || null, allDay }
-    : null;
-  const fieldsDirty =
-    ef != null &&
-    (allDay !== ef.allDay ||
-      startText !==
-        (ef.start
-          ? ef.allDay
-            ? toDateInput(ef.start)
-            : toDateTimeLocalInput(ef.start)
-          : '') ||
-      endText !==
-        (ef.end
-          ? ef.allDay
-            ? toDateInput(ef.end)
-            : toDateTimeLocalInput(ef.end)
-          : ''));
+  // Only the changed field keys go into the PATCH ('' clears, 1f18a9b).
+  const fieldsPatch = draftToPatch(fieldsDraft, fields0);
   const dirty =
     title !== draft.title ||
     body !== draft.body ||
     tagsText !== draft.tags.join(', ') ||
-    fieldsDirty;
+    fieldsPatch !== undefined;
 
   const approve = async () => {
     setBusy('approve');
@@ -146,16 +121,7 @@ function DraftView({
             .split(',')
             .map((t) => t.trim())
             .filter(Boolean),
-          ...(fieldsDirty
-            ? {
-                // '' clears a key server-side (1f18a9b patch semantics).
-                fields: {
-                  start: startText,
-                  end: endText,
-                  all_day: allDay,
-                },
-              }
-            : {}),
+          ...(fieldsPatch ? { fields: fieldsPatch } : {}),
         });
       }
       const res = await api.approveDraft(draft.id);
@@ -235,52 +201,13 @@ function DraftView({
               aria-label="Tags"
               className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
-            {/* Event times (85c508c) — native pickers; a wrong date in a
-                structured field is exactly what review exists to catch. */}
-            {ef && (
-              <div className="space-y-2 rounded-md border border-border px-3 py-2">
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={allDay}
-                    onChange={(e) => {
-                      const v = e.target.checked;
-                      setAllDay(v);
-                      // date ↔ datetime-local: truncate, or default to noon.
-                      const convert = (s: string) =>
-                        !s ? s : v ? s.slice(0, 10) : `${s.slice(0, 10)}T12:00`;
-                      setStartText(convert);
-                      setEndText(convert);
-                    }}
-                  />
-                  All day
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="block">
-                    <span className="text-xs text-muted-foreground">Starts</span>
-                    <input
-                      type={allDay ? 'date' : 'datetime-local'}
-                      value={startText}
-                      onChange={(e) => setStartText(e.target.value)}
-                      aria-label="Event start"
-                      className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs text-muted-foreground">
-                      Ends (optional)
-                    </span>
-                    <input
-                      type={allDay ? 'date' : 'datetime-local'}
-                      value={endText}
-                      onChange={(e) => setEndText(e.target.value)}
-                      aria-label="Event end"
-                      className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    />
-                  </label>
-                </div>
-              </div>
-            )}
+            {/* Typed fields — a wrong value in a structured field is exactly
+                what review exists to catch (renders nothing for plain notes). */}
+            <FieldsEditor
+              category={category}
+              draft={fieldsDraft}
+              onChange={setFieldsDraft}
+            />
             <textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
@@ -338,13 +265,12 @@ function DraftView({
                 )}
               </div>
             )}
-            {/* Event times, front and center (85c508c: "render prominently"). */}
-            {liveFields?.start && (
-              <div className="mb-3 flex items-center gap-2 rounded-md bg-primary/10 px-2.5 py-2 text-sm font-medium text-foreground">
-                <CalendarDays className="h-4 w-4 shrink-0 text-primary" />
-                {formatEventRange(liveFields)}
-              </div>
-            )}
+            {/* Structured fields, front and center — reflects unsaved edits. */}
+            <FieldsSummary
+              category={category}
+              fields={draftToFields(draft.fields, fieldsDraft)}
+              onOpenNote={onOpenNote}
+            />
             {tags.length > 0 && (
               <div className="mb-3 flex flex-wrap gap-1.5">
                 {tags.map((t) => (
@@ -588,11 +514,21 @@ export function InboxView({
                     <span className="block truncate text-sm font-medium text-foreground">
                       {d.title}
                     </span>
-                    {/* Event times, prominent on the card (85c508c). */}
+                    {/* Structured fields, prominent on the card (85c508c/1f18a9b). */}
                     {d.fields?.start && (
                       <span className="mt-0.5 flex items-center gap-1 text-xs font-medium text-primary">
                         <CalendarDays className="h-3.5 w-3.5 shrink-0" />
                         {formatEventRange(d.fields)}
+                      </span>
+                    )}
+                    {categoryOf(d.tags)?.tag === 'goal' && d.fields && (
+                      <span className="mt-0.5 flex items-center gap-1.5">
+                        <StateChip category="goal" state={d.fields.state} />
+                        {d.fields.due && (
+                          <span className="text-xs text-muted-foreground">
+                            due {d.fields.due}
+                          </span>
+                        )}
                       </span>
                     )}
                     <span className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">

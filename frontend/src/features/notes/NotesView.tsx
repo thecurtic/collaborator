@@ -14,10 +14,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { Note, NoteMeta } from '@/domain/models';
-import { NOTE_CATEGORIES } from './categories';
+import type { Note, NoteFieldsPatch, NoteMeta } from '@/domain/models';
+import { categoryOf, NOTE_CATEGORIES } from './categories';
+import {
+  draftToPatch,
+  FieldsEditor,
+  fieldsToDraft,
+  FieldsSummary,
+  type FieldsDraft,
+} from './FieldsEditor';
+import { CalendarView } from './CalendarView';
 import { GraphView } from './GraphView';
 import { InboxView } from './InboxView';
+import { PeopleView } from './PeopleView';
+import { ProfileView } from './ProfileView';
+import { StateListView } from './StateListView';
 import { NoteBody } from './NoteBody';
 
 /** Which screen the Notes tab is showing. */
@@ -57,11 +68,14 @@ function NoteScreen({
 }) {
   const [note, setNote] = useState<Note | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Edit mode (approved notes are editable since backend aa86110).
+  // Edit mode (approved notes are editable since backend aa86110). `fields0`
+  // is the entry snapshot — draftToPatch diffs against it on save (1f18a9b).
   const [draft, setDraft] = useState<{
     title: string;
     body: string;
     tagsText: string;
+    fields: FieldsDraft;
+    fields0: FieldsDraft;
   } | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -101,10 +115,17 @@ function NoteScreen({
       .split(',')
       .map((t) => t.trim())
       .filter(Boolean);
-    const patch: { title?: string; body?: string; tags?: string[] } = {};
+    const patch: {
+      title?: string;
+      body?: string;
+      tags?: string[];
+      fields?: NoteFieldsPatch;
+    } = {};
     if (draft.title.trim() !== note.title) patch.title = draft.title.trim();
     if (draft.body !== note.body) patch.body = draft.body;
     if (tags.join(',') !== note.tags.join(',')) patch.tags = tags;
+    const fieldsPatch = draftToPatch(draft.fields, draft.fields0);
+    if (fieldsPatch) patch.fields = fieldsPatch;
     if (Object.keys(patch).length === 0) {
       setDraft(null);
       return;
@@ -151,13 +172,20 @@ function NoteScreen({
             size="icon"
             aria-label="Edit note"
             title="Edit note"
-            onClick={() =>
+            onClick={() => {
+              const f = fieldsToDraft(
+                categoryOf(note.tags)?.tag ?? null,
+                note.fields,
+                note.title === 'USER',
+              );
               setDraft({
                 title: note.title,
                 body: note.body,
                 tagsText: note.tags.join(', '),
-              })
-            }
+                fields: f,
+                fields0: f,
+              });
+            }}
             className="h-8 w-8 text-muted-foreground"
           >
             <Pencil className="h-4 w-4" />
@@ -212,6 +240,12 @@ function NoteScreen({
               aria-label="Tags"
               className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
+            <FieldsEditor
+              category={categoryOf(note.tags)?.tag ?? null}
+              draft={draft.fields}
+              onChange={(fields) => setDraft({ ...draft, fields })}
+              isUserHub={note.title === 'USER'}
+            />
             <textarea
               value={draft.body}
               onChange={(e) => setDraft({ ...draft, body: e.target.value })}
@@ -256,6 +290,31 @@ function NoteScreen({
                   ))}
                 </div>
               )}
+              <FieldsSummary
+                category={categoryOf(note.tags)?.tag ?? null}
+                fields={note.fields}
+                onOpenNote={onOpenNote}
+                onStateChange={(next) => {
+                  // Optimistic per house style; resync on failure.
+                  setNote((n) =>
+                    n?.fields ? { ...n, fields: { ...n.fields, state: next } } : n,
+                  );
+                  api
+                    .updateNote(note.title, { fields: { state: next } })
+                    .catch((err) => {
+                      setNotice(null);
+                      setSaveError(errMessage(err));
+                      loadedTitle.current = null; // force refetch on next render
+                      api
+                        .getNote(note.title)
+                        .then((n) => {
+                          loadedTitle.current = note.title;
+                          setNote(n);
+                        })
+                        .catch(() => {});
+                    });
+                }}
+              />
               <NoteBody body={note.body} onOpenNote={onOpenNote} />
               {note.backlinks.length > 0 && (
                 <div className="mt-6 border-t border-border pt-3">
@@ -519,6 +578,29 @@ export function NotesView({
         )}
       </div>
 
+      {/* Typed surfaces (1f18a9b): with a category chip active and no query,
+          the chip IS the view — calendar, goals, people, profile… A typed
+          query drops back to the scoped flat search list below. */}
+      {!query.trim() && tagFilter === 'event' ? (
+        <div className="min-h-0 flex-1">
+          <CalendarView onOpenNote={openNote} />
+        </div>
+      ) : !query.trim() &&
+        (tagFilter === 'goal' ||
+          tagFilter === 'question' ||
+          tagFilter === 'project') ? (
+        <div className="min-h-0 flex-1">
+          <StateListView category={tagFilter} onOpenNote={openNote} />
+        </div>
+      ) : !query.trim() && tagFilter === 'social-graph' ? (
+        <div className="min-h-0 flex-1">
+          <PeopleView onOpenNote={openNote} />
+        </div>
+      ) : !query.trim() && tagFilter === 'user-profile' ? (
+        <div className="min-h-0 flex-1">
+          <ProfileView onOpenNote={openNote} />
+        </div>
+      ) : (
       <div className="flex-1 overflow-y-auto overscroll-contain">
         {error && (
           <p className="px-4 py-3 text-sm text-destructive">{error}</p>
@@ -573,6 +655,7 @@ export function NotesView({
           </ul>
         )}
       </div>
+      )}
     </div>
   );
 }
