@@ -205,6 +205,9 @@ class NoteEditRequest(BaseModel):
     title: Optional[str] = None   # rename (rewrites inbound [[links]])
     body: Optional[str] = None
     tags: Optional[List[str]] = None
+    # Whitelisted per-type fields (event start/end/…, goal state/due, person
+    # aliases/…). Empty string clears a field; omitted keys keep their value.
+    fields: Optional[dict] = None
 
 
 def get_passkey_from_header(passkey: Optional[str] = Header(None, alias="X-Passkey")) -> str:
@@ -594,7 +597,11 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                                                 "against today's date"},
                 "created_to": {"type": "string",
                                "description": "only notes approved on/before "
-                                              "this ISO date (inclusive)"}},
+                                              "this ISO date (inclusive)"},
+                "area": {"type": "string",
+                         "description": "user-profile notes only: filter by "
+                                        "USER.md section (work, interests, "
+                                        "relationships, ...)"}},
                 "required": ["query"]}}})
     if avail.get("get_note", True):
         schemas.append({"type": "function", "function": {
@@ -706,7 +713,36 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                         "description": "event end, same format as start "
                                        "(omit when unknown)"},
                 "all_day": {"type": "boolean",
-                            "description": "true for date-only events"}},
+                            "description": "true for date-only events"},
+                "location": {"type": "string",
+                             "description": "event only: where it happens"},
+                "people": {"type": "array", "items": {"type": "string"},
+                           "description": "event only: social-graph note titles "
+                                          "of people involved (become graph "
+                                          "edges)"},
+                "state": {"type": "string",
+                          "description": "lifecycle — goal: proposed/started/"
+                                         "finished/discarded; question: open/"
+                                         "answered; project: proposed/started/"
+                                         "paused/done/abandoned"},
+                "due": {"type": "string",
+                        "description": "goal only: deadline, ISO date "
+                                       "(YYYY-MM-DD, resolved against today)"},
+                "aliases": {"type": "array", "items": {"type": "string"},
+                            "description": "social-graph only: other names this "
+                                           "person/entity goes by"},
+                "kind": {"type": "string", "enum": ["person", "org"],
+                         "description": "social-graph only"},
+                "relation": {"type": "string",
+                             "description": "social-graph only: e.g. friend, "
+                                            "colleague, sister"},
+                "birthday": {"type": "string",
+                             "description": "social-graph only: YYYY-MM-DD, or "
+                                            "MM-DD when the year is unknown"},
+                "area": {"type": "string",
+                         "description": "user-profile satellite notes only: the "
+                                        "USER.md section this belongs to (e.g. "
+                                        "work, interests, relationships)"}},
                 "required": ["title", "body"]}}})
     if avail.get("propose_edit", True):
         schemas.append({"type": "function", "function": {
@@ -729,6 +765,22 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                         "description": "events only: new end (ISO 8601; omit to keep)"},
                 "all_day": {"type": "boolean",
                             "description": "events only: change all-day flag (omit to keep)"},
+                "location": {"type": "string", "description": "events only"},
+                "people": {"type": "array", "items": {"type": "string"},
+                           "description": "events only: full replacement list"},
+                "state": {"type": "string",
+                          "description": "goal/question/project lifecycle — the "
+                                         "usual way to record progress ('I "
+                                         "finished X' -> state finished)"},
+                "due": {"type": "string", "description": "goal only: ISO date"},
+                "aliases": {"type": "array", "items": {"type": "string"},
+                            "description": "social-graph only: full replacement"},
+                "kind": {"type": "string", "enum": ["person", "org"]},
+                "relation": {"type": "string", "description": "social-graph only"},
+                "birthday": {"type": "string",
+                             "description": "social-graph only: YYYY-MM-DD or MM-DD"},
+                "area": {"type": "string",
+                         "description": "user-profile satellites: USER.md section"},
                 "reason": {"type": "string",
                            "description": "one line: why this edit, shown to the user in review"}},
                 "required": ["title"]}}})
@@ -806,6 +858,7 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             tag = (args.get("tag") or "").strip() or None
             created_from = (args.get("created_from") or "").strip() or None
             created_to = (args.get("created_to") or "").strip() or None
+            area = (args.get("area") or "").strip() or None
             # Filter-only listing (no query) gets more room.
             limit = 20 if ((tag or created_from or created_to)
                            and not query.strip()) else 8
@@ -818,21 +871,22 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             try:
                 if args.get("mode") == "keyword" or not query.strip():
                     results = notes_index.search_notes_keyword(
-                        conn, query, limit=limit, tag=tag,
+                        conn, query, limit=limit, tag=tag, area=area,
                         created_from=created_from, created_to=created_to)
                 else:
                     vec = get_embedding(query)
                     results = (notes_index.search_notes_semantic(
-                                   conn, vec, limit=limit, tag=tag,
+                                   conn, vec, limit=limit, tag=tag, area=area,
                                    created_from=created_from, created_to=created_to)
                                if vec else notes_index.search_notes_keyword(
-                                   conn, query, limit=limit, tag=tag,
+                                   conn, query, limit=limit, tag=tag, area=area,
                                    created_from=created_from, created_to=created_to))
             finally:
                 conn.close()
             return json.dumps([{
                 "title": n["title"], "tags": n["tags"], "links": n["links"],
                 "created": n.get("created"),
+                "fields": n.get("fields") or {},
                 "score": round(n.get("score", 0), 4),
                 "preview": (n.get("body") or "")[:300],
             } for n in results])
@@ -853,6 +907,7 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                     total += len(body)
                     out.append({"title": note["title"], "body": body,
                                 "tags": note["tags"], "links": note["links"],
+                                "fields": note.get("fields") or {},
                                 "created": note["created"]})
                     if total > 60000:
                         out.append({"note": "batch character budget reached; "
@@ -873,6 +928,7 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             return json.dumps({
                 "title": note["title"], "body": note["body"], "tags": note["tags"],
                 "links": note["links"], "backlinks": backlinks,
+                "fields": note.get("fields") or {},
                 "created": note["created"],
             })
         if name == "propose_note":
@@ -881,10 +937,10 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             if not title or not body:
                 return json.dumps({"error": "propose_note needs a title and a body"})
             tags = [str(t) for t in (args.get("tags") or [])]
-            fields, ferr = _normalize_event_fields(args)
+            fields, ferr = _normalize_note_fields(args, tags=tags, title=title)
             if ferr:
                 return json.dumps({"error": ferr})
-            if any(_normalize_tag(t) == "event" for t in tags) and not fields:
+            if (_note_category(tags) == "event" and not fields.get("start")):
                 return json.dumps({"error": "notes tagged 'event' need a start "
                                             "(ISO 8601) — pass start (and end/"
                                             "all_day as appropriate)"})
@@ -940,7 +996,8 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 tags = args.get("tags")
                 tags = ([str(t) for t in tags] if isinstance(tags, list)
                         else (note.get("tags") or []))
-                fields, ferr = _normalize_event_fields(args)
+                fields, ferr = _normalize_note_fields(args, tags=tags,
+                                                      title=new_title)
                 if ferr:
                     return json.dumps({"error": ferr})
                 if (new_title == note["title"] and body == parsed["body"]
@@ -1040,6 +1097,8 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                                    "start": e["event_start"],
                                    "end": e["event_end"],
                                    "all_day": e["event_all_day"],
+                                   "location": (e.get("fields") or {}).get("location"),
+                                   "people": (e.get("fields") or {}).get("people") or [],
                                    "tags": e["tags"],
                                    "links": e["links"],
                                    "description": (e.get("body") or "")[:300],
@@ -1186,6 +1245,130 @@ import re as _re_mod
 _EVENT_DATE_RE = _re_mod.compile(r"^\d{4}-\d{2}-\d{2}$")
 _EVENT_DT_RE = _re_mod.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?([+-]\d{2}:\d{2}|Z)?$")
+_BIRTHDAY_RE = _re_mod.compile(r"^(\d{4}-)?\d{2}-\d{2}$")   # YYYY-MM-DD or MM-DD
+
+# Category tags are DISCRETE: a note carries at most one (validation rejects
+# more). The shared `state` key's allowed values depend on that one category.
+CATEGORY_TAGS = {"user-profile", "social-graph", "memory", "goal", "decision",
+                 "question", "project", "event"}
+STATE_ENUMS = {
+    "goal": ("proposed", "started", "finished", "discarded"),
+    "question": ("open", "answered"),
+    "project": ("proposed", "started", "paused", "done", "abandoned"),
+}
+# Per-category field whitelist (beyond app-managed created/tags/source_turns).
+# The USER note (title "USER", the profile hub) has its own additional set.
+CATEGORY_FIELDS = {
+    "event": {"start", "end", "all_day", "location", "people"},
+    "goal": {"state", "due"},
+    "question": {"state"},
+    "project": {"state"},
+    "social-graph": {"aliases", "kind", "relation", "birthday"},
+    "user-profile": {"area"},
+}
+USER_NOTE_FIELDS = {"name", "dob", "resides_in", "timezone"}
+# A finished goal IS the memory — category exclusivity forbids tag graduation,
+# and tag=goal state=finished is exactly queryable as "intended and done".
+
+
+def _note_category(tags: Optional[List[str]]) -> Optional[str]:
+    cats = [t for t in (_normalize_tag(t) for t in (tags or []))
+            if t in CATEGORY_TAGS]
+    return cats[0] if cats else None
+
+
+def _normalize_note_fields(args: dict, tags: Optional[List[str]] = None,
+                           title: Optional[str] = None):
+    """Validate ALL whitelisted per-type fields in one place. Returns
+    (fields, error). Every entry path — propose tools, draft edits, direct
+    PATCH — goes through here, so they cannot drift. Empty-string values mean
+    "clear this field" and pass through for the writers to drop."""
+    norm_tags = [_normalize_tag(t) for t in (tags or [])]
+    cats = [t for t in norm_tags if t in CATEGORY_TAGS]
+    if len(cats) > 1:
+        return {}, ("a note carries at most ONE category tag "
+                    f"(got: {', '.join(sorted(set(cats)))}) — the categories "
+                    "are discrete; split this into separate notes")
+    category = cats[0] if cats else None
+    is_user_note = (title or "").strip().upper() == "USER"
+
+    allowed = set(CATEGORY_FIELDS.get(category, set()))
+    if is_user_note:
+        allowed |= USER_NOTE_FIELDS
+
+    fields, err = _normalize_event_fields(args)
+    if err:
+        return {}, err
+    if fields and category != "event":
+        return {}, "start/end/all_day apply only to notes tagged 'event'"
+
+    def _clean_str(key, cap=200):
+        value = args.get(key)
+        if value is None:
+            return None
+        value = str(value).strip()
+        return value[:cap]
+
+    def _clean_list(key, cap=20, item_cap=120):
+        value = args.get(key)
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            return []
+        return [str(v).strip()[:item_cap] for v in value if str(v).strip()][:cap]
+
+    for key in ("location", "people", "state", "due", "aliases", "kind",
+                "relation", "birthday", "area", "name", "dob", "resides_in",
+                "timezone"):
+        if key not in args or args.get(key) is None:
+            continue
+        if key not in allowed:
+            where = f"notes tagged '{category}'" if category else "this note"
+            return {}, (f"field '{key}' does not apply to {where} — "
+                        "check the category's field list")
+        value = args[key]
+        if value == "" or value == []:
+            fields[key] = ""          # explicit clear
+            continue
+        if key in ("people", "aliases"):
+            fields[key] = _clean_list(key)
+        elif key == "state":
+            state = str(value).strip().lower()
+            enum = STATE_ENUMS.get(category or "", ())
+            if state not in enum:
+                return {}, (f"state for a '{category}' note must be one of "
+                            f"{', '.join(enum)}; got {state!r}")
+            fields[key] = state
+        elif key in ("due", "dob"):
+            v = str(value).strip()
+            if not _EVENT_DATE_RE.match(v):
+                return {}, f"{key} must be an ISO date (YYYY-MM-DD); got {v!r}"
+            fields[key] = v
+        elif key == "birthday":
+            v = str(value).strip()
+            if not _BIRTHDAY_RE.match(v):
+                return {}, ("birthday must be YYYY-MM-DD or MM-DD (year "
+                            f"unknown); got {v!r}")
+            fields[key] = v
+        elif key == "kind":
+            v = str(value).strip().lower()
+            if v not in ("person", "org"):
+                return {}, f"kind must be 'person' or 'org'; got {v!r}"
+            fields[key] = v
+        elif key == "timezone":
+            v = str(value).strip()
+            try:
+                from zoneinfo import ZoneInfo
+                ZoneInfo(v)
+            except Exception:
+                return {}, (f"timezone {v!r} is not a valid IANA zone "
+                            "(e.g. America/Chicago)")
+            fields[key] = v
+        elif key == "area":
+            fields[key] = _normalize_tag(str(value))
+        else:   # location, relation, name, resides_in — free strings
+            fields[key] = _clean_str(key)
+    return fields, None
 
 
 def _normalize_event_fields(args: dict):
@@ -1248,6 +1431,50 @@ def _finalize_event_fields(fields: dict) -> dict:
     return out
 
 
+# Frontmatter serialization order for whitelisted fields (stable, readable).
+_FIELD_ORDER = ["start", "end", "all_day", "location", "people", "state", "due",
+                "aliases", "kind", "relation", "birthday", "area",
+                "name", "dob", "resides_in", "timezone"]
+
+
+def _field_front_lines(fields: Optional[dict]) -> List[str]:
+    """Serialize validated fields to frontmatter lines (new-note path)."""
+    import yaml as _yaml
+    fields = _finalize_event_fields(fields or {})
+    lines = []
+    for key in _FIELD_ORDER:
+        value = fields.get(key)
+        if value in (None, "", []):
+            continue
+        if key == "all_day":
+            if value:
+                lines.append("all_day: true")
+            continue
+        lines.append(_yaml.safe_dump({key: value}, default_flow_style=False,
+                                     allow_unicode=True).strip())
+    return lines
+
+
+def _apply_fields_to_front(front: dict, fields: Optional[dict]) -> dict:
+    """Merge validated fields into an existing frontmatter dict (edit path).
+    Empty-string/empty-list values CLEAR the key; omitted keys are untouched."""
+    fields = _finalize_event_fields(fields or {})
+    for key in _FIELD_ORDER:
+        if key not in fields:
+            continue
+        value = fields[key]
+        if value in ("", []):
+            front.pop(key, None)
+        elif key == "all_day":
+            if value:
+                front[key] = True
+            else:
+                front.pop(key, None)
+        else:
+            front[key] = value
+    return front
+
+
 # Characters that break filesystems or Obsidian [[wikilinks]] (NOTES-FORMAT.md).
 _TITLE_FORBIDDEN = set('/\\:*?"<>|#^[]')
 
@@ -1306,14 +1533,10 @@ def _write_note_file(vault_dir: str, title: str, body: str,
         front.append(f"tags: [{', '.join(norm_tags)}]")
     if source_turns:
         front.append(f"source_turns: [{', '.join(str(i) for i in source_turns)}]")
-    # Whitelisted structured fields (event start/end/all_day), normalized at
-    # approval — the only frontmatter whose values originate from the model.
-    fields = _finalize_event_fields(fields or {})
-    for key in ("start", "end"):
-        if fields.get(key):
-            front.append(f"{key}: {fields[key]}")
-    if fields.get("all_day"):
-        front.append("all_day: true")
+    # Whitelisted per-type fields, normalized at approval — the only
+    # frontmatter whose VALUES originate from the model. yaml-dumped per key so
+    # lists and special characters serialize correctly.
+    front.extend(_field_front_lines(fields))
     front.append("---")
 
     content = "\n".join(front) + f"\n\n# {title}\n\n{clean_body}\n"
@@ -1984,9 +2207,18 @@ async def edit_draft(
                 raise HTTPException(status_code=404, detail=f"Draft {draft_id} not found")
             if draft["status"] != "pending":
                 raise HTTPException(status_code=409, detail=f"Draft {draft_id} is {draft['status']}, not editable")
+            fields = request.fields
+            if fields:
+                effective_tags = (request.tags if request.tags is not None
+                                  else draft.get("tags") or [])
+                fields, ferr = _normalize_note_fields(
+                    fields, tags=effective_tags,
+                    title=request.title or draft["title"])
+                if ferr:
+                    raise HTTPException(status_code=422, detail=ferr)
             draft = update_note_draft(
                 conn, draft_id, title=request.title, body=request.body,
-                tags=request.tags, links=request.links, fields=request.fields,
+                tags=request.tags, links=request.links, fields=fields,
             )
         finally:
             conn.close()
@@ -2098,7 +2330,10 @@ async def reindex_notes(
         vault = _resolve_vault_dir(db_path)
         conn = sqlite3.connect(db_path)
         try:
-            stats = notes_index.reindex_vault(conn, vault, embed_fn=embed_texts)
+            stats = notes_index.reindex_vault(
+                conn, vault, embed_fn=embed_texts,
+                ensure_user=bool(config.get("notes", {}).get(
+                    "bootstrap_user_note", True)))
         finally:
             conn.close()
         return stats
@@ -2138,6 +2373,7 @@ async def search_vault_notes(
     to: Optional[str] = None,
     created_from: Optional[str] = None,
     created_to: Optional[str] = None,
+    area: Optional[str] = None,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
     """Search notes: mode=semantic (embeddings) or mode=keyword (lexical).
@@ -2156,12 +2392,12 @@ async def search_vault_notes(
                 results = notes_index.list_events(conn, from_, to)
             elif mode == "keyword" or not q.strip():
                 results = notes_index.search_notes_keyword(
-                    conn, q, limit=limit, tag=tag,
+                    conn, q, limit=limit, tag=tag, area=area,
                     created_from=created_from, created_to=created_to)
             else:
                 vec = get_embedding(q)
                 results = notes_index.search_notes_semantic(
-                    conn, vec, limit=limit, tag=tag,
+                    conn, vec, limit=limit, tag=tag, area=area,
                     created_from=created_from, created_to=created_to) if vec else []
         finally:
             conn.close()
@@ -2211,6 +2447,9 @@ def _events_to_ics(events: List[dict]) -> str:
             lines.append(f"DTSTART:{_ics_datetime(start)}")
             if end and len(end) > 10:
                 lines.append(f"DTEND:{_ics_datetime(end)}")
+        loc = (e.get("fields") or {}).get("location")
+        if loc:
+            lines.append("LOCATION:" + _ics_escape(str(loc)))
         body = (e.get("body") or "").strip()
         if body:
             lines.append("DESCRIPTION:" + _ics_escape(body[:800]))
@@ -2305,15 +2544,7 @@ def _apply_note_edit(conn, vault: str, title: str,
     if tags is not None:
         front["tags"] = [t for t in (_normalize_tag(t) for t in tags) if t]
     if fields:
-        finalized = _finalize_event_fields(fields)
-        for key in ("start", "end"):
-            if finalized.get(key):
-                front[key] = finalized[key]
-        if "all_day" in finalized:
-            if finalized["all_day"]:
-                front["all_day"] = True
-            else:
-                front.pop("all_day", None)
+        front = _apply_fields_to_front(front, fields)
 
     new_title = " ".join((new_title or old_title).split())
     renamed = new_title != old_title
@@ -2375,8 +2606,22 @@ async def edit_vault_note(
         vault = _resolve_vault_dir(db_path)
         conn = sqlite3.connect(db_path)
         try:
+            fields = None
+            if request.fields:
+                note = notes_index.get_note_by_title(conn, title)
+                if note is None:
+                    raise HTTPException(status_code=404,
+                                        detail=f"Note \"{title}\" not found")
+                effective_tags = (request.tags if request.tags is not None
+                                  else note.get("tags") or [])
+                effective_title = request.title or note["title"]
+                fields, ferr = _normalize_note_fields(
+                    request.fields, tags=effective_tags, title=effective_title)
+                if ferr:
+                    raise HTTPException(status_code=422, detail=ferr)
             return _apply_note_edit(conn, vault, title, new_title=request.title,
-                                    body=request.body, tags=request.tags)
+                                    body=request.body, tags=request.tags,
+                                    fields=fields)
         finally:
             conn.close()
     except HTTPException:

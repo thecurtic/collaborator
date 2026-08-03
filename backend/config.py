@@ -151,6 +151,9 @@ def load_config() -> dict:
             "ambient_hints": True,
             "ambient_hints_limit": 3,
             "ambient_hints_threshold": 0.5,
+            # Seed USER.md (the profile hub: fixed sections, app-stamped
+            # frontmatter) into the vault on reindex when absent.
+            "bootstrap_user_note": True,
         },
         "voice": {
             # Server voice tier (see voice.py). Advertised via GET /api/health

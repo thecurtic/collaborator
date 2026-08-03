@@ -20,6 +20,7 @@ def _fresh():
     os.environ["DB_PATH"] = path
     cfg = config.load_config()
     cfg["notes"]["vault_dir"] = os.path.join(tempfile.mkdtemp(), "vault")
+    cfg["notes"]["bootstrap_user_note"] = False   # deterministic vault contents
     config.get_config._config = cfg
     importlib.reload(db)
     importlib.reload(main)
@@ -64,7 +65,7 @@ def test_reindex_reconciles_and_backlinks():
     _write(vault, "Beta claim", "Standalone.")
     conn = sqlite3.connect(dbp)
 
-    stats = notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+    stats = notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed, ensure_user=False)
     assert stats["added"] == 2 and stats["total"] == 2
 
     # Backlinks derive from content edges.
@@ -74,7 +75,7 @@ def test_reindex_reconciles_and_backlinks():
     # Edit one file -> updated; delete the other -> removed.
     _write(vault, "Alpha claim", "Rewritten, no links now.")
     os.remove(os.path.join(vault, "Beta claim.md"))
-    stats = notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+    stats = notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed, ensure_user=False)
     assert stats["updated"] == 1 and stats["removed"] == 1 and stats["total"] == 1
     assert notes_index.get_backlinks(conn, "Beta claim") == []
     conn.close()
@@ -91,7 +92,7 @@ def test_graph_reconstructable_from_files_alone():
     _write(vault, "C", "Leaf note.", tags=["open-question"])
     conn = sqlite3.connect(dbp)
 
-    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed, ensure_user=False)
     def graph(c):
         return {n["title"]: (sorted(n["links"]), sorted(n["tags"]))
                 for n in notes_index.list_notes(c)}
@@ -100,7 +101,7 @@ def test_graph_reconstructable_from_files_alone():
     conn.execute("DROP TABLE notes_index")   # nuke the cache completely
     conn.commit()
     db.ensure_conversation_schema(conn)
-    notes_index.reindex_vault(conn, vault)   # rebuild purely from files (no embeddings)
+    notes_index.reindex_vault(conn, vault, ensure_user=False)   # rebuild purely from files
     after = graph(conn)
     conn.close()
 
@@ -113,7 +114,7 @@ def test_search_semantic_and_keyword():
     _write(vault, "Short", "tiny")
     _write(vault, "A much longer note title", "this body is considerably longer than the other one")
     conn = sqlite3.connect(dbp)
-    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed, ensure_user=False)
 
     # Semantic: query vector near the long note's length-vector ranks it first.
     long_len = float(len("A much longer note title\nthis body is considerably longer than the other one"))
@@ -132,7 +133,7 @@ def test_search_tag_filter_and_tag_only_listing():
     _write(vault, "Sam", "friend from the maker space", tags=["social-graph"])
     _write(vault, "Unrelated idea", "no category tag here")
     conn = sqlite3.connect(dbp)
-    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed, ensure_user=False)
 
     # Keyword search constrained to a tag never returns untagged notes.
     res = notes_index.search_notes_keyword(conn, "idea fact friend", tag="user-profile")
@@ -165,7 +166,7 @@ def test_event_fields_indexed_and_windowed():
     _event("Dated but not event", ["tags: [memory]", "start: 2026-08-02"])
     _event("Event without start", ["tags: [event]"])
     conn = sqlite3.connect(dbp)
-    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed, ensure_user=False)
 
     # YAML hands back datetime/date objects; both normalize to ISO strings.
     dentist = notes_index.get_note_by_title(conn, "Dentist")

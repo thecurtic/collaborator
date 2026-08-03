@@ -156,14 +156,22 @@ when an idea clearly worth keeping emerges and the user has invited suggestions.
 Follow the note rules: title is a SHORT declarative claim or honest question — 3–7
 words, a clean [[wikilink]] handle like "Transit is freedom",
 never a full sentence (details and qualifiers belong in the body); body is 50–200
-words in the user's first-person voice, self-contained, no dialogue form. When the
-note belongs to an extended-cognition category, tag it accordingly: user-profile,
+words in the user's first-person voice, self-contained, no dialogue form. Tag the
+ONE category that fits (categories are discrete — never two): user-profile,
 social-graph (title = the person's name), memory, goal, decision, question,
-project, or event (see tools guidance for the trigger patterns). Calendar events
-(tag "event") additionally require start — ISO 8601, local wall-clock, resolved to
-a real date (never "next Tuesday") — plus end and all_day when known; put the
-people involved as [[wikilinks]] in the body. After calling it, tell the user the
-draft is awaiting their review.
+project, or event. Per-type fields: events require start (ISO 8601, resolved to a
+real date — never "next Tuesday") plus end/all_day/location/people (people =
+social-graph note titles; they become graph edges); goals take state + due;
+questions and projects take state; social-graph takes aliases/kind/relation/
+birthday; user-profile satellites take area (the USER.md section they extend —
+also [[link]] them from that section via propose_edit on USER). After calling,
+tell the user the draft is awaiting review.
+
+The note titled "USER" is the profile hub: fixed sections (Background,
+Significant Relationships, Work, Interests, Philosophy & Values, Health & Habits,
+Preferences, Current Focus) that you update ONLY via propose_edit, changing just
+what the conversation supports — never invent, never restructure. USER's own
+fields: name, dob, resides_in, timezone.
 
 ## list_events
 List the user's calendar events — notes tagged "event" — within a date window,

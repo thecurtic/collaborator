@@ -147,6 +147,7 @@ def ensure_conversation_schema(conn) -> None:
             event_start TEXT,
             event_end TEXT,
             event_all_day INTEGER,
+            fields TEXT,
             embedding BLOB
         )
     """)
@@ -207,9 +208,11 @@ def ensure_conversation_schema(conn) -> None:
         )
     """)
 
-    # Event columns on the notes index (parsed from frontmatter at index time).
+    # Event columns + the generic per-type fields JSON on the notes index
+    # (parsed from frontmatter at index time).
     ni_cols = {row[1] for row in cursor.execute("PRAGMA table_info(notes_index)").fetchall()}
-    for col in ("event_start TEXT", "event_end TEXT", "event_all_day INTEGER"):
+    for col in ("event_start TEXT", "event_end TEXT", "event_all_day INTEGER",
+                "fields TEXT"):
         if ni_cols and col.split()[0] not in ni_cols:
             cursor.execute(f"ALTER TABLE notes_index ADD COLUMN {col}")
     conn.commit()

@@ -40,7 +40,7 @@ def _seed_note(cfg, dbp, title, body, tags=None):
     with open(os.path.join(vault, f"{title}.md"), "w", encoding="utf-8") as f:
         f.write(f"---\ncreated: 2026-07-06\ntags: [{', '.join(tags or [])}]\n---\n\n# {title}\n\n{body}\n")
     conn = sqlite3.connect(dbp)
-    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed, ensure_user=False)
     conn.close()
 
 
@@ -136,7 +136,7 @@ def test_search_created_range_composes():
     _note("Fresh transit idea", "2026-07-28", "transit is freedom", tags="decision")
     _note("Fresh unrelated", "2026-07-29", "gardening notes")
     conn = sqlite3.connect(dbp)
-    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed, ensure_user=False)
     conn.close()
 
     _, execute, _ = main._build_tools(dbp)
@@ -263,7 +263,7 @@ def test_events_ics_export():
         f.write("---\ntags: [event]\nstart: 2026-08-02T14:00-05:00\n---\n\n"
                 "# Dentist\n\nCheckup; note the , and ; escaping.\n")
     conn = sqlite3.connect(dbp)
-    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed)
+    notes_index.reindex_vault(conn, vault, embed_fn=_fake_embed, ensure_user=False)
     conn.close()
 
     r = c.get("/api/events.ics")

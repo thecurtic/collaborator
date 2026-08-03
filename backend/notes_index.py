@@ -23,9 +23,15 @@ WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 NOTES_INDEX_COLUMNS = [
     "filename", "title", "created", "tags", "source_turns", "links",
     "body", "content_hash", "mtime",
-    "event_start", "event_end", "event_all_day",
+    "event_start", "event_end", "event_all_day", "fields",
 ]
 _COLS = ", ".join(NOTES_INDEX_COLUMNS)
+
+# Per-type frontmatter keys mirrored into the generic `fields` JSON column —
+# one column, so the whitelist can grow without index migrations.
+INDEXED_FIELD_KEYS = ("location", "people", "state", "due", "aliases", "kind",
+                      "relation", "birthday", "area",
+                      "name", "dob", "resides_in", "timezone")
 
 
 def extract_wikilinks(body: str):
@@ -95,19 +101,40 @@ def parse_note_file(path: str) -> dict:
     event_all_day = bool(event_start) and (bool(front.get("all_day"))
                                            or len(event_start) == 10)
 
+    fields = {}
+    for key in INDEXED_FIELD_KEYS:
+        value = front.get(key)
+        if value in (None, "", []):
+            continue
+        if key in ("people", "aliases"):
+            if not isinstance(value, list):
+                value = [str(value)]
+            fields[key] = [str(v) for v in value if str(v).strip()]
+        else:
+            fields[key] = _norm_when(value) if key in ("due", "dob") else str(value)
+
+    # Graph edges = body [[wikilinks]] UNION event `people` (frontmatter is
+    # file content, so the rebuildable-from-files invariant holds; one source
+    # of truth for who-was-there).
+    links = extract_wikilinks(body)
+    for person in fields.get("people", []):
+        if person and person not in links:
+            links.append(person)
+
     return {
         "filename": os.path.basename(path),
         "title": title,
         "created": str(front.get("created")) if front.get("created") is not None else None,
         "tags": [str(t) for t in tags],
         "source_turns": [int(i) for i in source_turns if isinstance(i, (int, float))],
-        "links": extract_wikilinks(body),
+        "links": links,
         "body": body,
         "content_hash": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         "mtime": os.path.getmtime(path),
         "event_start": event_start,
         "event_end": event_end,
         "event_all_day": event_all_day,
+        "fields": fields,
         # Full frontmatter dict (incl. unknown keys) — NOT indexed; used by editing
         # so tooling preserves keys it doesn't understand (NOTES-FORMAT.md rule).
         "front": front,
@@ -143,6 +170,12 @@ def _row_to_note(row) -> dict:
             d[key] = json.loads(d[key]) if d[key] else []
         except Exception:
             d[key] = []
+    try:
+        d["fields"] = json.loads(d["fields"]) if d.get("fields") else {}
+        if not isinstance(d["fields"], dict):
+            d["fields"] = {}
+    except Exception:
+        d["fields"] = {}
     d["event_all_day"] = bool(d.get("event_all_day"))
     return d
 
@@ -152,15 +185,16 @@ def _upsert(conn, note: dict, embedding=None) -> None:
         """
         INSERT INTO notes_index
             (filename, title, created, tags, source_turns, links, body,
-             content_hash, mtime, event_start, event_end, event_all_day, embedding)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             content_hash, mtime, event_start, event_end, event_all_day,
+             fields, embedding)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(filename) DO UPDATE SET
             title = excluded.title, created = excluded.created,
             tags = excluded.tags, source_turns = excluded.source_turns,
             links = excluded.links, body = excluded.body,
             content_hash = excluded.content_hash, mtime = excluded.mtime,
             event_start = excluded.event_start, event_end = excluded.event_end,
-            event_all_day = excluded.event_all_day,
+            event_all_day = excluded.event_all_day, fields = excluded.fields,
             embedding = COALESCE(excluded.embedding, notes_index.embedding)
         """,
         (note["filename"], note["title"], note["created"],
@@ -168,7 +202,8 @@ def _upsert(conn, note: dict, embedding=None) -> None:
          json.dumps(note["links"]), note["body"],
          note["content_hash"], note["mtime"],
          note.get("event_start"), note.get("event_end"),
-         1 if note.get("event_all_day") else 0, embedding),
+         1 if note.get("event_all_day") else 0,
+         json.dumps(note.get("fields") or {}), embedding),
     )
     conn.commit()
 
@@ -187,7 +222,7 @@ def index_note_file(conn, path: str, embed_fn=None) -> dict:
     blob = None
     if embed_fn is not None:
         try:
-            vecs = embed_fn([f"{note['title']}\n{note['body']}"])
+            vecs = embed_fn([_embed_text(note)])
             blob = _embed_blob(vecs[0] if vecs else None)
         except Exception:
             blob = None
@@ -195,12 +230,54 @@ def index_note_file(conn, path: str, embed_fn=None) -> dict:
     return note
 
 
-def reindex_vault(conn, vault_dir: str, embed_fn=None) -> dict:
+# USER.md: the profile hub. Fixed section headings are GUARDRAILS — the LLM
+# only ever proposes edits within them (reviewed), never invents structure.
+# Each section is a branch point: satellite user-profile notes (frontmatter
+# `area`) hang off it via [[wikilinks]].
+USER_NOTE_SECTIONS = [
+    "Background", "Significant Relationships", "Work", "Interests",
+    "Philosophy & Values", "Health & Habits", "Preferences", "Current Focus",
+]
+
+
+def ensure_user_note(vault_dir: str) -> bool:
+    """Seed USER.md (empty sections, app-stamped frontmatter) if absent.
+    Structure only — every word of content still arrives via the review queue.
+    Returns True when the file was created."""
+    import time as _time
+    os.makedirs(vault_dir, exist_ok=True)
+    path = os.path.join(vault_dir, "USER.md")
+    if any(f.lower() == "user.md" for f in os.listdir(vault_dir)):
+        return False
+    sections = "\n\n".join(
+        f"## {s}\n\n_Nothing recorded yet._" for s in USER_NOTE_SECTIONS)
+    content = ("---\n"
+               f"created: {_time.strftime('%Y-%m-%d')}\n"
+               "tags: [user-profile]\n"
+               "---\n\n"
+               "# USER\n\n"
+               "The hub of the user profile. Each section below is a branch "
+               "point — satellite notes tagged `user-profile` (frontmatter "
+               "`area`) link from here.\n\n" + sections + "\n")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return True
+
+
+def reindex_vault(conn, vault_dir: str, embed_fn=None,
+                  ensure_user: bool = True) -> dict:
     """Reconcile the index against the vault directory (files win, always).
 
     New/changed files (by content hash) are re-parsed and re-embedded; rows whose
-    files vanished are removed. Returns {"added", "updated", "removed", "total"}.
+    files vanished are removed. Seeds USER.md when absent. Returns
+    {"added", "updated", "removed", "total", "user_note_created"}.
     """
+    user_created = False
+    if ensure_user:
+        try:
+            user_created = ensure_user_note(vault_dir)
+        except OSError as e:
+            print(f"Warning: could not seed USER.md: {e}")
     cursor = conn.cursor()
     on_disk = {}
     if os.path.isdir(vault_dir):
@@ -228,7 +305,7 @@ def reindex_vault(conn, vault_dir: str, embed_fn=None) -> dict:
         for start in range(0, len(changed), CHUNK):
             chunk = changed[start:start + CHUNK]
             try:
-                vecs = embed_fn([f"{n['title']}\n{n['body']}" for n in chunk])
+                vecs = embed_fn([_embed_text(n) for n in chunk])
             except Exception:
                 vecs = [None] * len(chunk)
             for note, vec in zip(chunk, vecs):
@@ -244,7 +321,8 @@ def reindex_vault(conn, vault_dir: str, embed_fn=None) -> dict:
     conn.commit()
 
     total = cursor.execute("SELECT COUNT(*) FROM notes_index").fetchone()[0]
-    return {"added": added, "updated": updated, "removed": removed, "total": total}
+    return {"added": added, "updated": updated, "removed": removed,
+            "total": total, "user_note_created": user_created}
 
 
 def list_notes(conn, tag: str = None):
@@ -284,6 +362,20 @@ def _note_has_tag(note: dict, tag: str) -> bool:
     return tag.lower() in [t.lower() for t in note.get("tags") or []]
 
 
+def _embed_text(note: dict) -> str:
+    """Text embedded for a note: title + aliases (a person's nicknames should
+    hit their note) + body."""
+    aliases = (note.get("fields") or {}).get("aliases") or []
+    alias_line = f"\n{' / '.join(aliases)}" if aliases else ""
+    return f"{note['title']}{alias_line}\n{note['body']}"
+
+
+def _note_matches_area(note: dict, area: str = None) -> bool:
+    if not area:
+        return True
+    return (note.get("fields") or {}).get("area") == area
+
+
 def _note_in_created_range(note: dict, created_from: str = None,
                            created_to: str = None) -> bool:
     """created is day-granular ISO (the approval date); range is inclusive.
@@ -301,7 +393,8 @@ def _note_in_created_range(note: dict, created_from: str = None,
 
 
 def search_notes_semantic(conn, query_vector, limit: int = 10, tag: str = None,
-                          created_from: str = None, created_to: str = None):
+                          created_from: str = None, created_to: str = None,
+                          area: str = None):
     """Cosine similarity over indexed note embeddings. Optional tag and
     created-date-range filters (composable)."""
     if not query_vector:
@@ -327,6 +420,8 @@ def search_notes_semantic(conn, query_vector, limit: int = 10, tag: str = None,
         if tag and not _note_has_tag(note, tag):
             continue
         if not _note_in_created_range(note, created_from, created_to):
+            continue
+        if not _note_matches_area(note, area):
             continue
         note["score"] = float(np.dot(q, vec) / denom)
         scored.append(note)
@@ -446,7 +541,8 @@ def list_events(conn, window_start: str = None, window_end: str = None):
 
 
 def search_notes_keyword(conn, query: str, limit: int = 10, tag: str = None,
-                         created_from: str = None, created_to: str = None):
+                         created_from: str = None, created_to: str = None,
+                         area: str = None):
     """Lexical search over title/body/tags by term overlap. Optional tag and
     created-date-range filters (composable).
 
@@ -464,11 +560,15 @@ def search_notes_keyword(conn, query: str, limit: int = 10, tag: str = None,
             continue
         if not _note_in_created_range(note, created_from, created_to):
             continue
+        if not _note_matches_area(note, area):
+            continue
         if not terms:
             note["score"] = 1
             scored.append(note)
             continue
-        haystack = f"{note['title']}\n{note['body']}\n{' '.join(note['tags'])}".lower()
+        aliases = " ".join((note.get("fields") or {}).get("aliases") or [])
+        haystack = (f"{note['title']}\n{aliases}\n{note['body']}\n"
+                    f"{' '.join(note['tags'])}").lower()
         hits = sum(1 for t in set(terms) if t in haystack)
         if hits:
             note["score"] = hits

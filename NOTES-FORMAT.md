@@ -109,11 +109,49 @@ system; don't reuse them for unrelated organic tagging:
 | `decision` | explicit choices **with their reasoning** | "I'm going with X because Y" — the Y is the point |
 | `question` | unresolved queries, expressed uncertainty, open threads | |
 | `project` | container grouping related notes/goals/memories | membership = wikilinks from the project note |
-| `event` | calendar events: appointments, meetings, deadlines | structured `start`/`end`/`all_day` frontmatter (below); exportable via `GET /api/events.ics` |
+| `event` | calendar events: appointments, meetings, deadlines | structured `start`/`end`/`all_day`/`location`/`people` frontmatter (below); exportable via `GET /api/events.ics` |
 
 Every entry in every category passes through the drafts review queue — the agent
 proposes, the user approves. The agent can never silently update its model of the
 user or anyone else. (`expertise` is deliberately deferred: no crisp trigger yet.)
+
+**Categories are DISCRETE: a note carries at most one category tag** (validation
+rejects more — they exist to be distinct views over the vault; a thing that is
+two categories is two notes). Consequence: a finished goal does NOT gain the
+memory tag — `tag: goal, state: finished` IS the record of what was intended
+and done, queryable as such.
+
+### Per-type frontmatter (agreed 2026-08-03)
+
+One shared `state` key; its allowed values depend on the note's category:
+
+| category | fields (all optional unless noted) |
+|---|---|
+| `event` | `start` (required), `end`, `all_day`, `location` (free text), `people` (list of social-graph note titles — indexed as GRAPH EDGES, same as body wikilinks) |
+| `goal` | `state`: proposed / started / finished / discarded; `due` (ISO date) |
+| `question` | `state`: open / answered |
+| `project` | `state`: proposed / started / paused / done / abandoned |
+| `social-graph` | `aliases` (list — other names, matched in search), `kind`: person / org, `relation` (free text), `birthday` (YYYY-MM-DD, or MM-DD when year unknown) |
+| `user-profile` | `area` — which USER.md section a satellite note belongs to (lowercase-hyphenated) |
+| `memory`, `decision` | none — their value is prose |
+
+Empty-string on edit clears a field. All values flow model→typed tool params→
+validation→review→app-written YAML, per the frontmatter boundary below.
+
+### USER.md — the profile hub
+
+The note titled `USER` (file `USER.md`, tag `user-profile`) is the center of
+the user profile. Its OWN extra frontmatter (this note only): `name`, `dob`,
+`resides_in`, `timezone` (IANA zone, validated).
+
+Its body carries FIXED section headings (scaffolded by the app when absent —
+structure only; content still always arrives via review): Background,
+Significant Relationships, Work, Interests, Philosophy & Values, Health &
+Habits, Preferences, Current Focus. The sections are guardrails: the LLM
+proposes edits *within* them, never new structure. Each section is a branch
+point — satellite `user-profile` notes (frontmatter `area`) hang off it via
+[[wikilinks]], giving retrieval a spine to crawl: USER.md → section → area
+notes. "The full profile" = USER.md + all notes tagged `user-profile`.
 
 ### The frontmatter boundary (agreed 2026-07-27)
 
