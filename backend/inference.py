@@ -241,6 +241,20 @@ def _build_messages(
     return messages
 
 
+def _message_shape(messages: List[Dict]) -> str:
+    """Compact, content-free description of a message array for failure logs:
+    role(chars)[+tool_calls][!None] per message. Lets a template failure be
+    diagnosed from the journal without exposing conversation content."""
+    parts = []
+    for m in messages or []:
+        c = m.get("content")
+        desc = f"{m.get('role','?')}({'None' if c is None else len(str(c))})"
+        if m.get("tool_calls"):
+            desc += f"+tc{len(m['tool_calls'])}"
+        parts.append(desc)
+    return " ".join(parts)
+
+
 def _build_payload(messages: List[Dict], stream: bool) -> Dict:
     """Build the chat/completions request payload from config."""
     inference_config = _get_config()["inference"]
@@ -348,6 +362,9 @@ def stream_llm_tokens(
         raise ConnectionError(f"Failed to connect to LLM endpoint at {_get_endpoint_url()}: {e}")
     except requests.exceptions.RequestException as e:
         raise ConnectionError(f"Request to LLM endpoint failed: {e}")
+    except RuntimeError as e:
+        print(f"LLM stream error: {e} — message shape: {_message_shape(messages)}")
+        raise
 
 
 def call_llm_streaming(
@@ -1781,9 +1798,11 @@ def generate_with_tools(
                     if fn.get("arguments"):
                         slot["args"] += fn["arguments"]
         except requests.exceptions.RequestException as e:
+            print(f"LLM request failed: {e} — message shape: {_message_shape(messages)}")
             yield {"type": "error", "detail": f"LLM request failed: {e}"}
             return
         except Exception as e:
+            print(f"LLM round error: {e} — message shape: {_message_shape(messages)}")
             yield {"type": "error", "detail": f"Error during generation: {e}"}
             return
 
