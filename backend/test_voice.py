@@ -115,6 +115,23 @@ def test_session_interrupt_rearm(monkeypatch):
     print("✓ interrupt fires once per utterance position (no repeat-fire)")
 
 
+def test_finalize_without_final_pass_trusts_partials(monkeypatch):
+    """final_pass=False: the partial transcript becomes the message; the final
+    model is never invoked at end of turn."""
+    cfg = config.get_config()["voice"]["stt"]
+    monkeypatch.setitem(cfg, "final_pass", False)
+    monkeypatch.setattr(voice, "decode_partial_pcm",
+                        lambda pcm, language=None: ("Buy oat milk. That is all", []))
+    monkeypatch.setattr(voice, "decode_final_pcm",
+                        lambda pcm, language=None: (_ for _ in ()).throw(
+                            AssertionError("final model must not run")))
+    s = voice.StreamSession()
+    s.set_phrases([{"kind": "end", "text": "that is all"}])
+    s.feed(SILENCE)
+    assert s.finalize() == "Buy oat milk."     # partials trusted, phrase stripped
+    print("✓ final_pass off: partial transcript is final; big model never runs")
+
+
 def test_session_finalize_strips_end_phrase(monkeypatch):
     monkeypatch.setattr(voice, "decode_final_pcm",
                         lambda pcm, language=None: "Remind me tomorrow. That is all.")

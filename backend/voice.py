@@ -351,6 +351,7 @@ class StreamSession:
         self.last_interrupt_at = -1             # word position of the last interrupt fire
         self.rms = RmsTracker()
 
+        self.final_pass = bool(cfg.get("final_pass", True))
         self.partial_interval_bytes = int(
             BYTES_PER_SEC * cfg.get("partial_interval_ms", 400) / 1000)
         self.window_bytes = int(BYTES_PER_SEC * cfg.get("window_seconds", 15))
@@ -451,11 +452,18 @@ class StreamSession:
     def finalize(self) -> str:
         """Blocking: the definitive transcript, end phrases stripped from the tail.
 
-        Sessions up to final_full_pass_seconds get a full re-decode with the
-        (better) final model; longer ones reuse the committed prefix and
-        final-decode only the uncommitted tail, keeping finalization latency flat.
+        final_pass=True (default): sessions up to final_full_pass_seconds get a
+        full re-decode with the (better) final model; longer ones reuse the
+        committed prefix and final-decode only the uncommitted tail.
+        final_pass=False: trust the partial model — decode only audio the
+        partials haven't covered yet, so end-of-turn cost is one small window
+        decode instead of a whole-utterance re-upload + big-model pass.
         """
-        if len(self.audio) <= self.final_full_pass_bytes:
+        if not self.final_pass:
+            if len(self.audio) > self.last_decoded_len or not self.tail_text:
+                self.decode_partial()
+            text = self.transcript
+        elif len(self.audio) <= self.final_full_pass_bytes:
             text = decode_final_pcm(bytes(self.audio), self.language)
         else:
             tail = decode_final_pcm(bytes(self.audio[self.committed_bytes:]),

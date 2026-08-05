@@ -173,6 +173,13 @@ def load_config() -> dict:
                 "remote_final_timeout": 120,
                 "partial_model": "small",    # rolling partials (speed matters); remote: the server's model id
                 "final_model": "small",      # final pass (accuracy matters); remote: the server's model id
+                # False = no end-of-turn re-decode with the final model: the
+                # partial transcript IS the message (end-of-turn cost drops to
+                # one small window decode). Set when partials prove accurate
+                # enough — the final pass is the round-trip's biggest chunk.
+                # Batch /api/transcribe and transcribe_video still use
+                # final_model regardless.
+                "final_pass": True,
                 "device": "cpu",             # cpu | cuda (local backend)
                 "compute_type": "int8",      # int8 (cpu) | float16 (gpu) (local backend)
                 "preload": False,            # True: warm-load at startup (remote: probe the server)
