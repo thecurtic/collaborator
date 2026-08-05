@@ -31,6 +31,7 @@ import { ReferencesView } from '@/features/reference/ReferencesView';
 import { WebSearchView } from '@/features/search/WebSearchView';
 import { TranscriptsView } from '@/features/transcripts/TranscriptsView';
 import { useLongPress } from '@/lib/useLongPress';
+import { cleanUrlsInText } from '@/lib/urlClean';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
 import { RootList } from '@/features/chat/RootList';
@@ -177,6 +178,27 @@ function AppShell() {
   useEffect(() => {
     if (convo.proposedDrafts.length > 0) void refreshDrafts();
   }, [convo.proposedDrafts, refreshDrafts]);
+
+  // Shared-in text (PWA share_target GET params / SEND intents forwarded by
+  // the Android shell as ?text=&title=): capture into Scratch, then land
+  // there. The URL is consumed immediately so reloads can't double-capture.
+  useEffect(() => {
+    if (gate !== 'open') return;
+    const sp = new URLSearchParams(window.location.search);
+    const shared = [sp.get('title'), sp.get('text'), sp.get('url')]
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+    if (!shared) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    void api
+      .addScratch(cleanUrlsInText(shared))
+      .catch(() => {}) // offline: the text is lost, but never double-posted
+      .finally(() => {
+        setChatOpen(false);
+        setTab('scratch');
+      });
+  }, [gate]);
 
   /** Open the Mind tab on the inbox, optionally filtered to one run. */
   const openInbox = useCallback((runId: string | null) => {

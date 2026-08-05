@@ -6,9 +6,13 @@ import {
   FileQuestion,
   Loader2,
   MessageSquare,
+  Mic,
+  Paperclip,
+  Play,
   Search,
   SendHorizontal,
   ShieldAlert,
+  Square,
   StickyNote,
   Trash2,
   X,
@@ -19,6 +23,7 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
@@ -28,6 +33,8 @@ import { cn, parseApiDate } from '@/lib/utils';
 import type { NoteDraft, ScratchItem } from '@/domain/models';
 import { categoryOf } from '@/features/notes/categories';
 import { FieldsSummary } from '@/features/notes/FieldsEditor';
+import { useDictation } from '@/features/voice/useDictation';
+import { scratchMediaUrl } from './mediaCache';
 
 const PAGE = 50;
 
@@ -156,6 +163,72 @@ function ProposedCard({
   );
 }
 
+/** Image thumbnail / audio playback for media items (authed blob fetch). */
+function MediaBlock({ item }: { item: ScratchItem }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [wanted, setWanted] = useState(item.kind === 'image');
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!wanted || !item.mediaHash) return;
+    let cancelled = false;
+    scratchMediaUrl(item.id, item.mediaHash)
+      .then((u) => {
+        if (!cancelled) setUrl(u);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wanted, item.id, item.mediaHash]);
+
+  if (!item.mediaHash) return null;
+  if (failed) {
+    return (
+      <p className="mt-1 text-xs text-muted-foreground">
+        (media unavailable{item.mediaMime ? ` · ${item.mediaMime}` : ''})
+      </p>
+    );
+  }
+  if (item.kind === 'image') {
+    return url ? (
+      <img
+        src={url}
+        alt={item.content || 'scratch image'}
+        className="mt-1.5 max-h-48 rounded-lg border border-border object-contain"
+      />
+    ) : (
+      <p className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" /> loading image…
+      </p>
+    );
+  }
+  if (item.kind === 'audio') {
+    return url ? (
+      // eslint-disable-next-line jsx-a11y/media-has-caption
+      <audio controls autoPlay src={url} className="mt-1.5 h-9 w-full" />
+    ) : (
+      <button
+        type="button"
+        onClick={() => setWanted(true)}
+        className="mt-1.5 flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <Play className="h-3.5 w-3.5" />
+        Play voice note
+      </button>
+    );
+  }
+  // video/file: metadata only for now (phase B keeps it honest, not fancy).
+  return (
+    <p className="mt-1 text-xs text-muted-foreground">
+      ({item.kind}
+      {item.mediaMime ? ` · ${item.mediaMime}` : ''})
+    </p>
+  );
+}
+
 /** The action_result section of a card, by result kind. */
 function ActionResult({
   item,
@@ -253,6 +326,7 @@ export function ScratchView({
   const [acting, setActing] = useState<Set<number>>(new Set());
   const seqRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async (q: string) => {
     const seq = ++seqRef.current;
@@ -303,35 +377,169 @@ export function ScratchView({
       prev ? prev.map((i) => (i.id === next.id ? next : i)) : prev,
     );
 
-  /** Capture; with `act` (hold-send) the agent gets one shot at the item. */
+  /** The hold-send action, shared by text/media/voice captures. */
+  const runAct = async (item: ScratchItem) => {
+    setActing((prev) => new Set(prev).add(item.id));
+    try {
+      replaceItem(await api.actScratch(item.id));
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setActing((prev) => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  // --- Raw voice notes: swipe UP on the mic to record; send stops & saves. ---
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const [recording, setRecording] = useState(false);
+
+  const startRecording = async () => {
+    if (recording || recorderRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      const rec = new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      rec.start();
+      recorderRef.current = rec;
+      setRecording(true);
+    } catch {
+      setError('Microphone unavailable.');
+    }
+  };
+
+  const finishRecording = (): Promise<Blob | null> =>
+    new Promise((resolve) => {
+      const rec = recorderRef.current;
+      if (!rec) return resolve(null);
+      rec.onstop = () => {
+        rec.stream.getTracks().forEach((t) => t.stop());
+        recorderRef.current = null;
+        setRecording(false);
+        resolve(
+          chunksRef.current.length > 0
+            ? new Blob(chunksRef.current, {
+                type: rec.mimeType || 'audio/webm',
+              })
+            : null,
+        );
+      };
+      rec.stop();
+    });
+
+  const cancelRecording = () => {
+    chunksRef.current = [];
+    void finishRecording();
+  };
+
+  // Recorder must not outlive the tab (mic indicator honesty).
+  useEffect(() => cancelRecording, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Capture; with `act` (hold-send) the agent gets one shot at the item.
+   * While recording, send stops the recording and posts the audio (with any
+   * typed text as its caption) — tap-send-to-stop, per the agreed gesture.
+   */
   const send = async (act: boolean) => {
+    if (sending) return;
     const text = value.trim();
-    if (!text || sending) return;
+    setError(null);
+
+    if (recording) {
+      setSending(true);
+      try {
+        const blob = await finishRecording();
+        if (!blob) return;
+        const ext = (blob.type.split('/')[1] ?? 'webm').split(';')[0] || 'webm';
+        const item = await api.addScratchMedia(
+          blob,
+          `voice-note.${ext}`,
+          text || undefined,
+        );
+        setValue('');
+        setItems((prev) => [item, ...(prev ?? [])]);
+        if (act) await runAct(item);
+      } catch (err) {
+        setError(errMessage(err));
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
+    if (!text) return;
     setValue('');
     setSending(true);
-    setError(null);
     try {
       const item = await api.addScratch(text);
       setItems((prev) => [item, ...(prev ?? [])]);
-      if (act) {
-        setActing((prev) => new Set(prev).add(item.id));
-        try {
-          replaceItem(await api.actScratch(item.id));
-        } catch (err) {
-          setError(errMessage(err));
-        } finally {
-          setActing((prev) => {
-            const next = new Set(prev);
-            next.delete(item.id);
-            return next;
-          });
-        }
-      }
+      if (act) await runAct(item);
     } catch (err) {
       setError(errMessage(err));
       setValue((v) => (v ? v : text)); // capture failed — restore the draft
     } finally {
       setSending(false);
+    }
+  };
+
+  /** Attach any file (photo etc.) with the typed text as caption. Inert. */
+  const attach = async (file: File) => {
+    setSending(true);
+    setError(null);
+    try {
+      const item = await api.addScratchMedia(
+        file,
+        file.name,
+        value.trim() || undefined,
+      );
+      setValue('');
+      setItems((prev) => [item, ...(prev ?? [])]);
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // --- Mic gestures: tap = dictate into the field; swipe UP = raw record. ---
+  const {
+    status: dictation,
+    partial,
+    supported: dictationSupported,
+    start: startDictation,
+    stop: stopDictation,
+  } = useDictation();
+  const micGesture = useRef<{ y: number; swiped: boolean } | null>(null);
+  const micDown = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    micGesture.current = { y: e.clientY, swiped: false };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const micMove = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    const g = micGesture.current;
+    if (g && !g.swiped && g.y - e.clientY > 40 && !recording) {
+      g.swiped = true; // swipe up: raw recording, not dictation
+      if (dictation === 'idle') void startRecording();
+    }
+  };
+  const micUp = () => {
+    const g = micGesture.current;
+    micGesture.current = null;
+    if (!g || g.swiped || recording) return;
+    if (dictation === 'listening') {
+      void stopDictation().then((t) => {
+        if (t) setValue((v) => (v ? `${v.trimEnd()} ${t}` : t));
+      });
+    } else if (dictation === 'idle') {
+      void startDictation();
     }
   };
 
@@ -490,8 +698,13 @@ export function ScratchView({
                   </a>
                 ) : (
                   <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground">
-                    {item.content ||
-                      (item.mediaMime ? `(${item.mediaMime})` : '')}
+                    {item.content}
+                  </p>
+                )}
+                <MediaBlock item={item} />
+                {item.transcript && (
+                  <p className="mt-1 whitespace-pre-wrap break-words text-xs italic text-muted-foreground">
+                    “{item.transcript}”
                   </p>
                 )}
                 <ActionResult
@@ -523,10 +736,59 @@ export function ScratchView({
         )}
       </div>
 
-      {/* Capture bar. Tap send: inert. Hold send: the agent gets one shot. */}
+      {/* Capture bar. Tap send: inert. Hold send: the agent gets one shot.
+          Mic: tap = dictate into the field; swipe UP = raw voice note,
+          stopped by send (or discarded by the X). */}
       <div className="px-safe pb-safe border-t border-border bg-background">
+        {recording && (
+          <p className="flex items-center gap-2 px-4 pt-2 text-xs text-muted-foreground">
+            <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-destructive" />
+            Recording voice note — tap send to save it
+            <button
+              type="button"
+              aria-label="Discard recording"
+              onClick={cancelRecording}
+              className="ml-auto rounded p-1 hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </p>
+        )}
+        {(dictation === 'listening' || dictation === 'starting') && (
+          <p className="flex items-start gap-2 px-4 pt-2 text-xs text-muted-foreground">
+            <span className="mt-1 h-2 w-2 shrink-0 animate-pulse rounded-full bg-destructive" />
+            <span className="line-clamp-2 min-w-0">
+              {partial ||
+                (dictation === 'listening'
+                  ? 'Listening… tap the mic when you’re done.'
+                  : 'Connecting…')}
+            </span>
+          </p>
+        )}
         <div className="px-3 pb-5 pt-3 sm:px-4">
-          <div className="flex items-end gap-2 rounded-2xl border border-input bg-card px-3 py-2 focus-within:ring-2 focus-within:ring-ring">
+          <div className="flex items-end gap-1.5 rounded-2xl border border-input bg-card px-3 py-2 focus-within:ring-2 focus-within:ring-ring">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={sending || recording}
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Attach a file"
+              title="Attach a photo or file (typed text becomes its caption)"
+              className="h-9 w-9 shrink-0 rounded-full text-muted-foreground"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = '';
+                if (f) void attach(f);
+              }}
+            />
             <textarea
               ref={textareaRef}
               rows={1}
@@ -538,17 +800,44 @@ export function ScratchView({
                 el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
               }}
               onPaste={handlePaste}
-              placeholder="Note to self…"
+              placeholder={
+                recording ? 'Caption for the voice note…' : 'Note to self…'
+              }
               className="max-h-40 min-h-[2.25rem] w-full resize-none border-0 bg-transparent px-1 py-1.5 text-base text-foreground outline-none placeholder:text-muted-foreground sm:text-sm"
             />
+            {(dictationSupported || recording) && (
+              <Button
+                type="button"
+                variant={dictation === 'listening' ? 'destructive' : 'ghost'}
+                size="icon"
+                disabled={sending || recording || dictation === 'finishing'}
+                onPointerDown={micDown}
+                onPointerMove={micMove}
+                onPointerUp={micUp}
+                aria-label="Dictate (swipe up to record a voice note)"
+                title="Tap: dictate into the field · Swipe up: record a voice note"
+                className="h-9 w-9 shrink-0 touch-none select-none rounded-full"
+              >
+                {dictation === 'starting' || dictation === 'finishing' ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : dictation === 'listening' ? (
+                  <Square className="h-4 w-4" />
+                ) : (
+                  <Mic className="h-4 w-4" />
+                )}
+              </Button>
+            )}
             <Button
               type="button"
               size="icon"
-              disabled={sending || !value.trim()}
+              disabled={sending || (!value.trim() && !recording)}
               {...sendHold}
               aria-label="Save note to self (hold to let the agent act on it)"
               title="Tap: save silently · Hold: let the agent act on it"
-              className="h-9 w-9 shrink-0 select-none rounded-full"
+              className={cn(
+                'h-9 w-9 shrink-0 select-none rounded-full',
+                recording && 'ring-2 ring-destructive/50',
+              )}
             >
               <SendHorizontal className="h-4 w-4" />
             </Button>

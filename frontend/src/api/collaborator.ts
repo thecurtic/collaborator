@@ -448,6 +448,10 @@ export interface CollaboratorApi {
   // --- Scratch (notes-to-self, 7444138): inert capture, opt-in actions ---
   /** Capture text/URL. Inert forever — zero model contact. */
   addScratch(content: string): Promise<ScratchItem>;
+  /** Capture a file (photo/audio/anything) with an optional caption. */
+  addScratchMedia(file: File | Blob, filename: string, content?: string): Promise<ScratchItem>;
+  /** Authenticated media bytes for an item (thumbnails, audio playback). */
+  getScratchMedia(id: number): Promise<Blob>;
   /** Newest first; `q` searches content + transcripts; `before` pages older. */
   listScratch(params?: {
     q?: string;
@@ -799,6 +803,28 @@ class HttpCollaboratorApi implements CollaboratorApi {
       body: JSON.stringify({ content }),
     });
     return toScratchItem(res.item);
+  }
+
+  async addScratchMedia(
+    file: File | Blob,
+    filename: string,
+    content?: string,
+  ): Promise<ScratchItem> {
+    const form = new FormData();
+    form.append('file', file, filename);
+    if (content) form.append('content', content);
+    // http.ts skips the JSON Content-Type for FormData (browser sets the
+    // multipart boundary itself).
+    const res = await request<{ item: ApiScratchItem }>('/api/scratch/media', {
+      method: 'POST',
+      body: form,
+    });
+    return toScratchItem(res.item);
+  }
+
+  async getScratchMedia(id: number): Promise<Blob> {
+    const res = await requestStream(`/api/scratch/${id}/media`);
+    return res.blob();
   }
 
   async listScratch(

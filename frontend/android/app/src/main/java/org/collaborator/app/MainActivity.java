@@ -1,5 +1,51 @@
 package org.collaborator.app;
 
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Bundle;
+
 import com.getcapacitor.BridgeActivity;
 
-public class MainActivity extends BridgeActivity {}
+public class MainActivity extends BridgeActivity {
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        handleSendIntent(getIntent());
+    }
+
+    @Override
+    public void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        // launchMode=singleTask: shares while the app is alive land here.
+        handleSendIntent(intent);
+    }
+
+    /**
+     * Share sheet → Scratch. The web app owns the capture flow (it reads
+     * ?text= on load and posts to /api/scratch), so the shell's only job is
+     * forwarding the shared text as a query param on the remote URL.
+     */
+    private void handleSendIntent(Intent intent) {
+        if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) {
+            return;
+        }
+        if (!"text/plain".equals(intent.getType())) {
+            return;
+        }
+        String shared = intent.getStringExtra(Intent.EXTRA_TEXT);
+        String subject = intent.getStringExtra(Intent.EXTRA_SUBJECT);
+        if (shared == null || shared.trim().isEmpty()) {
+            return;
+        }
+        StringBuilder url = new StringBuilder(bridge.getServerUrl());
+        url.append("?text=").append(Uri.encode(shared));
+        if (subject != null && !subject.trim().isEmpty()) {
+            url.append("&title=").append(Uri.encode(subject));
+        }
+        // Consume the extra so a config-change recreate doesn't re-share.
+        intent.removeExtra(Intent.EXTRA_TEXT);
+        final String target = url.toString();
+        bridge.getWebView().post(() -> bridge.getWebView().loadUrl(target));
+    }
+}
