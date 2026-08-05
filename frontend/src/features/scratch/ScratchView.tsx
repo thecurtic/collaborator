@@ -32,7 +32,14 @@ import { cleanUrlsInText } from '@/lib/urlClean';
 import { cn, parseApiDate } from '@/lib/utils';
 import type { NoteDraft, ScratchItem } from '@/domain/models';
 import { categoryOf } from '@/features/notes/categories';
-import { FieldsSummary } from '@/features/notes/FieldsEditor';
+import {
+  draftToFields,
+  draftToPatch,
+  FieldsEditor,
+  fieldsToDraft,
+  FieldsSummary,
+  type FieldsDraft,
+} from '@/features/notes/FieldsEditor';
 import { useDictation } from '@/features/voice/useDictation';
 import { scratchMediaUrl } from './mediaCache';
 
@@ -74,34 +81,96 @@ function ProposedCard({
   item: ScratchItem;
   onDecided: () => void;
 }) {
-  const [draft, setDraft] = useState<NoteDraft | null>(null);
-  const [busy, setBusy] = useState<null | 'approve' | 'reject'>(null);
-  const [error, setError] = useState<string | null>(null);
+  // One hold-send can propose SEVERAL notes (66ae41e re-tags every sibling
+  // with this run_id) — the card is the whole set's only home.
+  const [drafts, setDrafts] = useState<NoteDraft[] | null>(null);
 
   useEffect(() => {
     if (item.status !== 'pending') return;
     let cancelled = false;
     api
       .listDrafts({ status: 'pending', runId: `scratch-${item.id}` })
-      .then((drafts) => {
-        if (!cancelled) setDraft(drafts[0] ?? null);
+      .then((all) => {
+        if (!cancelled) setDrafts(all);
       })
       .catch(() => {
-        /* the note line below still renders */
+        if (!cancelled) setDrafts([]); // the note line below still renders
       });
     return () => {
       cancelled = true;
     };
   }, [item.id, item.status]);
 
-  const decide = async (action: 'approve' | 'reject') => {
-    if (!draft) return;
-    setBusy(action);
+  return (
+    <div className="mt-2 space-y-2">
+      {(item.actionResult?.note || item.status !== 'pending') && (
+        <div className="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-2">
+          {item.status !== 'pending' && (
+            <p className="text-sm font-medium text-foreground">
+              {item.actionResult?.draftTitle ?? 'Proposed note'}
+            </p>
+          )}
+          {item.actionResult?.note && (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {item.actionResult.note}
+            </p>
+          )}
+        </div>
+      )}
+      {item.status === 'pending' && drafts === null && (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" /> loading proposals…
+        </p>
+      )}
+      {drafts?.map((d) => (
+        <DraftDecision key={d.id} draft={d} onDecided={onDecided} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One proposal on a scratch card: summary + approve/reject. Approval can be
+ * refused with instructions (e.g. a start-less event, 66ae41e) — the typed
+ * fields editor then opens right here so the fix never leaves the card.
+ */
+function DraftDecision({
+  draft,
+  onDecided,
+}: {
+  draft: NoteDraft;
+  onDecided: () => void;
+}) {
+  const category = categoryOf(draft.tags)?.tag ?? null;
+  const fields0 = fieldsToDraft(category, draft.fields);
+  const [fieldsDraft, setFieldsDraft] = useState<FieldsDraft>(fields0);
+  const [fixing, setFixing] = useState(false);
+  const [busy, setBusy] = useState<null | 'approve' | 'reject'>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const approve = async () => {
+    setBusy('approve');
     setError(null);
     try {
-      if (action === 'approve') await api.approveDraft(draft.id);
-      else await api.rejectDraft(draft.id);
-      onDecided(); // item status derives from the draft — refetch the list
+      const patch = draftToPatch(fieldsDraft, fields0);
+      if (patch) await api.updateDraft(draft.id, { fields: patch });
+      await api.approveDraft(draft.id);
+      onDecided(); // item status derives from its drafts — refetch the list
+    } catch (err) {
+      setError(errMessage(err));
+      // 422 with instructions (missing start etc.) → open the editor here.
+      if (category) setFixing(true);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reject = async () => {
+    setBusy('reject');
+    setError(null);
+    try {
+      await api.rejectDraft(draft.id);
+      onDecided();
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -110,55 +179,53 @@ function ProposedCard({
   };
 
   return (
-    <div className="mt-2 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-2">
-      <p className="text-sm font-medium text-foreground">
-        {item.actionResult?.draftTitle ?? draft?.title ?? 'Proposed note'}
-      </p>
-      {item.actionResult?.note && (
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {item.actionResult.note}
-        </p>
-      )}
-      {draft && (
-        <div className="mt-2">
-          <FieldsSummary
-            category={categoryOf(draft.tags)?.tag ?? null}
-            fields={draft.fields}
+    <div className="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-2">
+      <p className="text-sm font-medium text-foreground">{draft.title}</p>
+      <div className="mt-1.5">
+        <FieldsSummary
+          category={category}
+          fields={draftToFields(draft.fields, fieldsDraft)}
+        />
+      </div>
+      {fixing && (
+        <div className="mt-1.5">
+          <FieldsEditor
+            category={category}
+            draft={fieldsDraft}
+            onChange={setFieldsDraft}
           />
         </div>
       )}
       {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
-      {item.status === 'pending' && (
-        <div className="mt-2 flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy != null || !draft}
-            onClick={() => void decide('reject')}
-            className="h-8 flex-1 gap-1"
-          >
-            {busy === 'reject' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <X className="h-3.5 w-3.5" />
-            )}
-            Reject
-          </Button>
-          <Button
-            size="sm"
-            disabled={busy != null || !draft}
-            onClick={() => void decide('approve')}
-            className="h-8 flex-1 gap-1"
-          >
-            {busy === 'approve' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Check className="h-3.5 w-3.5" />
-            )}
-            Approve
-          </Button>
-        </div>
-      )}
+      <div className="mt-2 flex gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy != null}
+          onClick={() => void reject()}
+          className="h-8 flex-1 gap-1"
+        >
+          {busy === 'reject' ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <X className="h-3.5 w-3.5" />
+          )}
+          Reject
+        </Button>
+        <Button
+          size="sm"
+          disabled={busy != null}
+          onClick={() => void approve()}
+          className="h-8 flex-1 gap-1"
+        >
+          {busy === 'approve' ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Check className="h-3.5 w-3.5" />
+          )}
+          {fixing ? 'Save & approve' : 'Approve'}
+        </Button>
+      </div>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   FileVideo,
   Loader2,
   RefreshCw,
+  Trash2,
   TriangleAlert,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -168,6 +169,20 @@ export function TranscriptsView({ onBack }: { onBack: () => void }) {
     }
   }, []);
 
+  // Optimistic delete (house style): remove, restore in place on failure.
+  const remove = (t: Transcript) => {
+    const idx = items?.findIndex((x) => x.id === t.id) ?? -1;
+    setItems((prev) => prev?.filter((x) => x.id !== t.id) ?? prev);
+    api.deleteTranscript(t.id).catch((err: unknown) => {
+      setItems((prev) => {
+        const next = prev ? [...prev] : [];
+        next.splice(Math.min(Math.max(idx, 0), next.length), 0, t);
+        return next;
+      });
+      setError(errMessage(err));
+    });
+  };
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -263,6 +278,25 @@ export function TranscriptsView({ onBack }: { onBack: () => void }) {
                     )}
                   >
                     {t.status}
+                  </span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Delete transcript"
+                    title="Delete transcript"
+                    onClick={(e) => {
+                      e.stopPropagation(); // the row itself opens the detail
+                      remove(t);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.stopPropagation();
+                        remove(t);
+                      }
+                    }}
+                    className="shrink-0 rounded p-1.5 opacity-60 hover:opacity-100"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
                   </span>
                   <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                 </button>

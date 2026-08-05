@@ -406,6 +406,12 @@ export interface CollaboratorApi {
   listEvents(from: string, to: string): Promise<NoteMeta[]>;
   /** RFC 5545 export of events (85c508c) — offer as a file download. */
   downloadEventsIcs(): Promise<Blob>;
+  /**
+   * Delete a vault note (file + index). Inbound wikilinks become unresolved
+   * (Obsidian semantics); deleting USER resets the profile hub. Returns the
+   * titles of notes now holding unresolved links.
+   */
+  deleteNote(title: string): Promise<{ linksNowUnresolvedIn: string[] }>;
   /** Reconcile the index with the vault (after external Obsidian edits). */
   reindexNotes(): Promise<ReindexResult>;
 
@@ -468,6 +474,8 @@ export interface CollaboratorApi {
   listTranscripts(): Promise<Transcript[]>;
   /** One job including its full text. */
   getTranscript(id: number): Promise<Transcript>;
+  /** Delete a stored transcript (row only; the source video is remote). */
+  deleteTranscript(id: number): Promise<void>;
   /**
    * Switch the chat model — applies to the very next message and persists.
    * PER-INSTALL: changes the model for every user, not just this passkey.
@@ -743,6 +751,20 @@ class HttpCollaboratorApi implements CollaboratorApi {
     return toNote(res.note);
   }
 
+  async deleteNote(
+    title: string,
+  ): Promise<{ linksNowUnresolvedIn: string[] }> {
+    const res = await request<{ links_now_unresolved_in?: string[] }>(
+      `/api/notes/${encodeURIComponent(title)}`,
+      { method: 'DELETE' },
+    );
+    return {
+      linksNowUnresolvedIn: (res.links_now_unresolved_in ?? []).filter(
+        (t): t is string => typeof t === 'string',
+      ),
+    };
+  }
+
   async reindexNotes(): Promise<ReindexResult> {
     return request<ApiReindexResponse>('/api/notes/reindex', { method: 'POST' });
   }
@@ -862,6 +884,10 @@ class HttpCollaboratorApi implements CollaboratorApi {
 
   async deleteScratch(id: number): Promise<void> {
     await request<unknown>(`/api/scratch/${id}`, { method: 'DELETE' });
+  }
+
+  async deleteTranscript(id: number): Promise<void> {
+    await request<unknown>(`/api/transcripts/${id}`, { method: 'DELETE' });
   }
 
   async listTranscripts(): Promise<Transcript[]> {

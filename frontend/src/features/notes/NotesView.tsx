@@ -7,6 +7,7 @@ import {
   Pencil,
   RefreshCw,
   Search,
+  Trash2,
   Waypoints,
   X,
 } from 'lucide-react';
@@ -58,6 +59,7 @@ function NoteScreen({
   onOpenNote,
   onOpenTurn,
   onRetitle,
+  onDeleted,
 }: {
   title: string;
   onBack: () => void;
@@ -65,6 +67,8 @@ function NoteScreen({
   onOpenTurn: (turnId: number) => void;
   /** A rename went through — repoint this screen at the new title. */
   onRetitle: (newTitle: string) => void;
+  /** The note was deleted — leave this screen and update the list. */
+  onDeleted: (title: string, unresolvedIn: string[]) => void;
 }) {
   const [note, setNote] = useState<Note | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -166,6 +170,29 @@ function NoteScreen({
           <ChevronLeft className="h-5 w-5" />
         </Button>
         <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</h2>
+        {note && !draft && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Delete note"
+            title={
+              note.title === 'USER'
+                ? 'Delete USER — resets the profile hub (re-scaffolds empty on next reindex)'
+                : 'Delete this note (links to it become unresolved)'
+            }
+            onClick={() => {
+              // House style: no confirm; the list restores via reload if the
+              // call fails.
+              api.deleteNote(note.title).then(
+                (res) => onDeleted(note.title, res.linksNowUnresolvedIn),
+                (err: unknown) => setError(errMessage(err)),
+              );
+            }}
+            className="h-8 w-8 text-destructive/70 hover:text-destructive"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        )}
         {note && !draft && (
           <Button
             variant="ghost"
@@ -460,6 +487,17 @@ export function NotesView({
         onOpenNote={openNote}
         onOpenTurn={onOpenTurn}
         onRetitle={(t) => setScreen({ kind: 'note', title: t })}
+        onDeleted={(t, unresolvedIn) => {
+          setNotes((prev) => prev?.filter((n) => n.title !== t) ?? prev);
+          setScreen({ kind: 'list' });
+          setReindexNotice(
+            unresolvedIn.length > 0
+              ? `Deleted “${t}” — ${unresolvedIn.length} linking ${
+                  unresolvedIn.length === 1 ? 'note now has' : 'notes now have'
+                } unresolved links`
+              : `Deleted “${t}”`,
+          );
+        }}
       />
     );
   }
