@@ -209,18 +209,23 @@ def _build_messages(
             "content": "Relevant memory from earlier conversations (your recall):\n\n" + recall.strip(),
         })
 
-    # Add context from previous turns. EMPTY turns are skipped: a failed
-    # generation once persisted "" assistant messages, and some chat templates
-    # (qwen3.6) choke on empty-content messages — poisoning the conversation
-    # forever. Filtering on read heals existing histories with no migration.
-    if context_turns and len(context_turns) > 0:
-        for turn in context_turns:
-            if not (turn.get("content") or "").strip():
-                continue
-            if turn.get("role") == "user":
-                messages.append({"role": "user", "content": turn["content"]})
-            elif turn.get("role") == "assistant":
-                messages.append({"role": "assistant", "content": turn["content"]})
+    # Add context from previous turns, with two template-safety repairs:
+    # - EMPTY turns are skipped (a failed generation once persisted ""
+    #   assistant messages; some templates choke on them).
+    # - LEADING assistant turns are dropped: the turns window and the token
+    #   trimmer can slice the chain mid-pair, stranding an assistant reply at
+    #   the front — and qwen3.6's template hard-errors ("No user query found")
+    #   on any history that opens with the assistant. History always starts
+    #   with a user turn.
+    history = []
+    for turn in (context_turns or []):
+        if not (turn.get("content") or "").strip():
+            continue
+        if turn.get("role") in ("user", "assistant"):
+            history.append({"role": turn["role"], "content": turn["content"]})
+    while history and history[0]["role"] == "assistant":
+        history.pop(0)
+    messages.extend(history)
 
     # Per-turn DYNAMIC context goes LAST, not in the main system prompt: the
     # datetime line changes every minute and location every turn, and anything

@@ -372,3 +372,30 @@ def test_model_ids_match_loose():
     assert not model_ids_match("qwen3-4b-2507", "qwen3-32b")
     assert not model_ids_match(None, "x") and not model_ids_match("x", "")
     print("✓ loose id matching: case, publisher prefix, instance suffix")
+
+
+def test_leading_assistant_turns_dropped():
+    """The turns window / token trimmer can slice a chain mid-pair, stranding
+    an assistant turn at the front of history — qwen3.6's template hard-errors
+    on it ('No user query found'). History must always open with a user turn."""
+    import inference
+    ctx = [
+        {"role": "assistant", "content": "stranded reply"},
+        {"role": "user", "content": "first real question"},
+        {"role": "assistant", "content": "answer"},
+    ]
+    msgs = inference._build_messages("now", ctx)
+    convo = [m for m in msgs if m["role"] in ("user", "assistant")]
+    assert convo[0]["role"] == "user" and convo[0]["content"] == "first real question"
+    assert all(m["content"] != "stranded reply" for m in convo)
+
+    # Empty-filtering can CREATE the stranded case: empty user then assistant.
+    ctx2 = [
+        {"role": "user", "content": "   "},
+        {"role": "assistant", "content": "reply to nothing"},
+        {"role": "user", "content": "real"},
+    ]
+    msgs = inference._build_messages("now", ctx2)
+    convo = [m for m in msgs if m["role"] in ("user", "assistant")]
+    assert convo[0]["content"] == "real"
+    print("✓ history never opens with an assistant turn")
