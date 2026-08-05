@@ -290,3 +290,42 @@ if __name__ == "__main__":
     print("✓ chat with retry success test passed")
     
     print("\n✓ All inference tests passed!")
+
+
+def test_empty_reasoning_only_stream_is_honest():
+    """A stream of pure reasoning_content (budget exhausted before the answer)
+    must yield an explanatory message, never silent emptiness."""
+    from unittest.mock import patch, MagicMock
+    import inference
+    lines = [
+        b'data: {"choices":[{"delta":{"reasoning_content":"thinking..."},"finish_reason":null}]}',
+        b'data: {"choices":[{"delta":{},"finish_reason":"length"}]}',
+        b'data: [DONE]',
+    ]
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.iter_lines = lambda: iter(lines)
+    with patch("requests.post", return_value=resp):
+        out = "".join(inference.stream_llm_tokens("hard question"))
+    assert "internal reasoning" in out and "max_tokens" in out
+    print("✓ reasoning-only stream yields an honest message, not emptiness")
+
+
+def test_title_excerpt_spans_whole_conversation():
+    """Long threads: the title excerpt samples opening + recent turns, so the
+    title names the thread, not the latest tangent."""
+    from unittest.mock import patch, MagicMock
+    import inference
+    turns = ([{"role": "user", "content": "OPENING: let's design a birdhouse"}]
+             + [{"role": "assistant", "content": f"mid {i}"} for i in range(30)]
+             + [{"role": "user", "content": "RECENT: paint color tangent"}])
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json = lambda: {"choices": [{"message": {"content": "Birdhouse Design"}}]}
+    with patch("requests.post", return_value=resp) as p:
+        inference.generate_title(turns)
+    excerpt = p.call_args.kwargs["json"]["messages"][1]["content"]
+    assert "OPENING: let's design a birdhouse" in excerpt
+    assert "RECENT: paint color tangent" in excerpt
+    assert "turns omitted" in excerpt
+    print("✓ title excerpt includes the opening AND the tail of long threads")

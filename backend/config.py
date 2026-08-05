@@ -68,7 +68,9 @@ def load_config() -> dict:
             # ephemeral labels/summaries only.
             "utility_model": None,
             "temperature": 0.7,
-            "max_tokens": 2048,
+            # Reasoning models (MiniMax) spend this same budget on thinking
+            # BEFORE the answer — 2048 starves them into empty responses.
+            "max_tokens": 4096,
             "thinking_mode": False,
             "streaming": True
         },

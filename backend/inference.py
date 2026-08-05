@@ -279,6 +279,9 @@ def stream_llm_tokens(
                                extra_system=extra_system)
     payload = _build_payload(messages, stream=True)
 
+    emitted_any = False
+    saw_reasoning = False
+    hit_length = False
     try:
         response = requests.post(
             f"{_get_endpoint_url()}/chat/completions",
@@ -307,10 +310,28 @@ def stream_llm_tokens(
                     # Skip malformed SSE lines
                     continue
                 if "choices" in data and len(data["choices"]) > 0:
-                    delta = data["choices"][0].get("delta", {})
+                    choice = data["choices"][0]
+                    delta = choice.get("delta", {})
+                    if delta.get("reasoning_content"):
+                        saw_reasoning = True
+                    if choice.get("finish_reason") == "length":
+                        hit_length = True
                     content = delta.get("content", "")
                     if content:
+                        emitted_any = True
                         yield content
+
+        # Reasoning models can burn the entire max_tokens budget on thinking
+        # and emit no answer at all — the model "works hard" and the app shows
+        # nothing. Never end silently: say what happened.
+        if not emitted_any and saw_reasoning:
+            print("Warning: model produced reasoning but no answer "
+                  f"(finish_reason=length: {hit_length}) — raise "
+                  "inference.max_tokens (thinking spends the same budget)")
+            yield ("[The model spent its entire response budget on internal "
+                   "reasoning and produced no answer. Try again, or raise "
+                   "inference.max_tokens — reasoning models need thinking "
+                   "headroom beyond the answer length.]")
 
     except requests.exceptions.Timeout:
         raise ConnectionError("LLM endpoint timeout after 60 seconds")
@@ -731,9 +752,17 @@ def generate_title(turns: List[Dict]) -> str:
     """
     tcfg = _get_config().get("titles", {}) or {}
     prompt = _load_prompt_layer(tcfg, "prompt_file", "prompt_text", DEFAULT_TITLE_PROMPT)
+    # Sample the WHOLE conversation, not a recency window: the opening turns
+    # define the subject; the latest turns show where it went. A small model
+    # given only the tail titles the latest tangent instead of the thread.
+    if len(turns) > 12:
+        sampled = turns[:3] + [{"role": "...", "content":
+                                f"[{len(turns) - 12} turns omitted]"}] + turns[-9:]
+    else:
+        sampled = turns
     excerpt = "\n".join(
         f"{t.get('role', '?')}: {(t.get('content') or '')[:400]}"
-        for t in turns[-12:])[:6000]
+        for t in sampled)[:6000]
     payload = _build_payload(
         [{"role": "system", "content": prompt},
          {"role": "user", "content": excerpt}], stream=False)
@@ -1696,6 +1725,8 @@ def generate_with_tools(
         tool_calls: Dict[int, Dict] = {}
         round_started = time.monotonic()
         first_delta_at = None
+        saw_reasoning = False
+        hit_length = False
         try:
             for choice, delta in _iter_stream_events(payload):
                 if first_delta_at is None:
@@ -1703,6 +1734,10 @@ def generate_with_tools(
                     print(f"timing: LLM first delta after "
                           f"{first_delta_at - round_started:.2f}s "
                           f"(round {round_index}, ~{sum(len(str(m.get('content') or '')) for m in messages) // 4} prompt tokens est)")
+                if delta.get("reasoning_content"):
+                    saw_reasoning = True
+                if choice.get("finish_reason") == "length":
+                    hit_length = True
                 content = delta.get("content")
                 if content:
                     content_parts.append(content)
@@ -1767,6 +1802,17 @@ def generate_with_tools(
             if held_text:
                 # Held-back content turned out not to be a tool call — deliver it.
                 yield {"type": "token", "content": held_text}
+            elif not emitted_parts and saw_reasoning:
+                # Reasoning ate the whole budget: nothing but chain-of-thought
+                # was produced. Never end the turn silently.
+                print("Warning: model produced reasoning but no answer "
+                      f"(finish_reason=length: {hit_length}) — raise "
+                      "inference.max_tokens")
+                yield {"type": "token", "content": (
+                    "[The model spent its entire response budget on internal "
+                    "reasoning and produced no answer. Try again, or raise "
+                    "inference.max_tokens — reasoning models need thinking "
+                    "headroom beyond the answer length.]")}
             return  # final answer already streamed as token events
 
         if tool_calls:

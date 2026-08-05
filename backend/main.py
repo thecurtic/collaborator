@@ -276,7 +276,10 @@ def _maybe_update_title(db_path: str, leaf_turn_id: int, force: bool = False):
         stale = count - (generated_at or 0) >= tcfg.get("regenerate_after_turns", 6)
         if not force and current is not None and not stale:
             return root_id, None
-        chain = get_ancestor_chain(conn, leaf_turn_id, limit=12)
+        # Whole branch, not a recency window — the title should name the
+        # conversation's subject, and the opening turns usually define it
+        # (generate_title samples start + end when the chain is long).
+        chain = get_ancestor_chain(conn, leaf_turn_id, limit=None)
         title = generate_title(chain)
         if title:
             set_turn_title(conn, root_id, title, count)
