@@ -397,9 +397,12 @@ export function InboxView({
   const load = useCallback(async () => {
     setError(null);
     try {
-      setDrafts(
-        await api.listDrafts({ status: 'pending', runId: runId ?? undefined }),
-      );
+      const all = await api.listDrafts({
+        status: 'pending',
+        runId: runId ?? undefined,
+      });
+      // Scratch-born drafts render on their scratch card only (7444138).
+      setDrafts(all.filter((d) => !d.runId.startsWith('scratch-')));
     } catch (err) {
       setError(errMessage(err));
       setDrafts([]);

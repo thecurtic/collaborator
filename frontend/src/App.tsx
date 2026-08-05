@@ -654,7 +654,10 @@ function AppShell() {
             </div>
           )
         ) : tab === 'scratch' ? (
-          <ScratchView />
+          <ScratchView
+            onStartChat={startChatWithDraft}
+            onOpenTranscripts={() => setTranscriptsOpen(true)}
+          />
         ) : (
           <div className="relative flex h-full flex-col">
             <div className="border-b border-border px-4 py-3">

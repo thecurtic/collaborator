@@ -42,6 +42,33 @@ export interface ApiSessionsResponse {
   sessions: ApiSession[];
 }
 
+/** One scratch (notes-to-self) item (7444138). */
+export interface ApiScratchItem {
+  id: number;
+  created_at: string;
+  kind: string;
+  content?: string | null;
+  media_path?: string | null;
+  media_mime?: string | null;
+  media_size?: number | null;
+  media_hash?: string | null;
+  transcript?: string | null;
+  status?: string;
+  llm_readable?: boolean;
+  action_result?: {
+    kind?: string;
+    note?: string | null;
+    draft_title?: string | null;
+  } | null;
+  draft_id?: number | null;
+  transcript_id?: number | null;
+}
+
+/** GET /api/scratch */
+export interface ApiScratchList {
+  items: ApiScratchItem[];
+}
+
 /** GET /api/tts/voices */
 export interface ApiTtsVoices {
   voices: string[];

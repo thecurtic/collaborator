@@ -2,6 +2,7 @@ import type {
   ApiHealth,
   ApiModelsResponse,
   ApiNoteFields,
+  ApiScratchItem,
   ApiSession,
   ApiNoteDraft,
   ApiNoteMeta,
@@ -27,6 +28,7 @@ import type {
   NoteMeta,
   PromptInfo,
   RecallBlock,
+  ScratchItem,
   ToolActivity,
   Transcript,
   TreeNode,
@@ -199,6 +201,43 @@ export function toModelsInfo(api: ApiModelsResponse): ModelsInfo {
     // Absent ≠ false: non-LM-Studio endpoints report nothing — no claims.
     currentLoaded:
       typeof api.current_loaded === 'boolean' ? api.current_loaded : null,
+  };
+}
+
+const SCRATCH_KINDS = new Set(['text', 'url', 'image', 'audio', 'video', 'file']);
+const SCRATCH_STATUSES = new Set([
+  'inert',
+  'pending',
+  'committed',
+  'done',
+  'refused',
+]);
+
+export function toScratchItem(api: ApiScratchItem): ScratchItem {
+  return {
+    id: api.id,
+    createdAt: api.created_at,
+    kind: SCRATCH_KINDS.has(api.kind)
+      ? (api.kind as ScratchItem['kind'])
+      : 'text',
+    content: typeof api.content === 'string' ? api.content : '',
+    mediaMime: api.media_mime ?? null,
+    mediaHash: api.media_hash ?? null,
+    transcript: api.transcript ?? null,
+    status:
+      api.status && SCRATCH_STATUSES.has(api.status)
+        ? (api.status as ScratchItem['status'])
+        : 'inert',
+    llmReadable: Boolean(api.llm_readable),
+    actionResult: api.action_result?.kind
+      ? {
+          kind: api.action_result.kind,
+          note: api.action_result.note ?? null,
+          draftTitle: api.action_result.draft_title ?? null,
+        }
+      : null,
+    draftId: api.draft_id ?? null,
+    transcriptId: api.transcript_id ?? null,
   };
 }
 

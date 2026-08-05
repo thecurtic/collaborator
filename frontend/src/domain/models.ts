@@ -167,6 +167,30 @@ export interface TurnLocation {
   ts?: number;
 }
 
+/**
+ * A scratch (notes-to-self) item (7444138): inert capture by default — the
+ * model touches an item only via the explicit hold-send action.
+ */
+export interface ScratchItem {
+  id: number;
+  createdAt: string;
+  kind: 'text' | 'url' | 'image' | 'audio' | 'video' | 'file';
+  content: string;
+  mediaMime: string | null;
+  mediaHash: string | null;
+  transcript: string | null;
+  status: 'inert' | 'pending' | 'committed' | 'done' | 'refused';
+  /** Whether the LLM has ever seen this item (actions set it; toggleable). */
+  llmReadable: boolean;
+  actionResult: {
+    kind: string;
+    note: string | null;
+    draftTitle: string | null;
+  } | null;
+  draftId: number | null;
+  transcriptId: number | null;
+}
+
 /** A video-transcription job (b23d8ea): STT over the audio, never captions. */
 export interface Transcript {
   id: number;

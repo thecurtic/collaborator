@@ -8,6 +8,7 @@ import type {
   PromptInfo,
   ProposedDraft,
   RecallBlock,
+  ScratchItem,
   ReindexResult,
   SendMessageInput,
   SynthesisResult,
@@ -30,6 +31,7 @@ import {
   toNoteMeta,
   toPromptInfo,
   toRecallBlock,
+  toScratchItem,
   toTree,
   toTurnsPage,
 } from '@/domain/adapters';
@@ -45,6 +47,8 @@ import type {
   ApiNotesResponse,
   ApiPromptsResponse,
   ApiRecall,
+  ApiScratchItem,
+  ApiScratchList,
   ApiLoginResponse,
   ApiSessionsResponse,
   ApiSetModelResponse,
@@ -441,6 +445,21 @@ export interface CollaboratorApi {
    */
   getModels(): Promise<ModelsInfo>;
 
+  // --- Scratch (notes-to-self, 7444138): inert capture, opt-in actions ---
+  /** Capture text/URL. Inert forever — zero model contact. */
+  addScratch(content: string): Promise<ScratchItem>;
+  /** Newest first; `q` searches content + transcripts; `before` pages older. */
+  listScratch(params?: {
+    q?: string;
+    before?: number;
+    limit?: number;
+  }): Promise<ScratchItem[]>;
+  /** The hold-send gesture: one-shot agent action on this item. */
+  actScratch(id: number): Promise<ScratchItem>;
+  /** Toggle the has-the-LLM-seen-this flag. */
+  setScratchReadable(id: number, readable: boolean): Promise<ScratchItem>;
+  deleteScratch(id: number): Promise<void>;
+
   /** Background video-transcription jobs (b23d8ea), newest first. */
   listTranscripts(): Promise<Transcript[]>;
   /** One job including its full text. */
@@ -772,6 +791,51 @@ class HttpCollaboratorApi implements CollaboratorApi {
 
   async getModels(): Promise<ModelsInfo> {
     return toModelsInfo(await request<ApiModelsResponse>('/api/models'));
+  }
+
+  async addScratch(content: string): Promise<ScratchItem> {
+    const res = await request<{ item: ApiScratchItem }>('/api/scratch', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    });
+    return toScratchItem(res.item);
+  }
+
+  async listScratch(
+    params: { q?: string; before?: number; limit?: number } = {},
+  ): Promise<ScratchItem[]> {
+    const search = new URLSearchParams();
+    if (params.q) search.set('q', params.q);
+    if (params.before != null) search.set('before', String(params.before));
+    if (params.limit != null) search.set('limit', String(params.limit));
+    const qs = search.toString();
+    const res = await request<ApiScratchList>(
+      `/api/scratch${qs ? `?${qs}` : ''}`,
+    );
+    return (res.items ?? []).map(toScratchItem);
+  }
+
+  async actScratch(id: number): Promise<ScratchItem> {
+    const res = await request<{ item: ApiScratchItem }>(
+      `/api/scratch/${id}/act`,
+      { method: 'POST' },
+    );
+    return toScratchItem(res.item);
+  }
+
+  async setScratchReadable(
+    id: number,
+    readable: boolean,
+  ): Promise<ScratchItem> {
+    const res = await request<{ item: ApiScratchItem }>(`/api/scratch/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ llm_readable: readable }),
+    });
+    return toScratchItem(res.item);
+  }
+
+  async deleteScratch(id: number): Promise<void> {
+    await request<unknown>(`/api/scratch/${id}`, { method: 'DELETE' });
   }
 
   async listTranscripts(): Promise<Transcript[]> {

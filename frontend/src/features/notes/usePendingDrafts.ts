@@ -10,7 +10,13 @@ export function usePendingDrafts(enabled: boolean) {
 
   const refresh = useCallback(async () => {
     try {
-      setCount((await api.listDrafts({ status: 'pending' })).length);
+      // Scratch-born drafts live on their scratch card, not in the inbox
+      // (7444138) — they must not count toward the Mind badge either.
+      setCount(
+        (await api.listDrafts({ status: 'pending' })).filter(
+          (d) => !d.runId.startsWith('scratch-'),
+        ).length,
+      );
     } catch {
       // Endpoint missing/unreachable (older backend, offline) — keep quiet;
       // the badge just stays at its last value.
