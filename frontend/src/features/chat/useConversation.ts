@@ -160,6 +160,7 @@ export function useConversation(reloadSignal: number) {
    * selectPathTo(new id) replaces this selection with the new conversation.
    */
   const startNewChat = useCallback(() => {
+    setError(null); // errors belong to the conversation they happened in
     setSelection(new Map([[VIRTUAL_ROOT, CONTINUE]]));
   }, []);
 
@@ -173,6 +174,7 @@ export function useConversation(reloadSignal: number) {
   // the ancestry to it, so everything below (and any prior off-path picks) reverts
   // to the default main line. Uses the nesting-derived parent map.
   const selectPathTo = useCallback((turnId: number) => {
+    setError(null); // errors belong to the conversation they happened in
     const { parentOf } = indexRef.current;
     const next = new Map<number, number>();
     let child = turnId;
@@ -535,6 +537,7 @@ export function useConversation(reloadSignal: number) {
     remove,
     renameTurn,
     reload: load,
+    clearError: useCallback(() => setError(null), []),
   };
 }
 

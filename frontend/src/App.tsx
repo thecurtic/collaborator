@@ -686,8 +686,18 @@ function AppShell() {
 
       {/* Errors on tab screens (the chat screen shows its own strip). */}
       {!chatOpen && !referencesOpen && !searchOpen && !transcriptsOpen && gate === 'open' && convo.error && (
-        <div className="border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-center text-sm text-destructive">
-          {convo.error}
+        <div className="flex items-start gap-2 border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+          <p className="max-h-24 min-w-0 flex-1 overflow-y-auto break-words">
+            {convo.error}
+          </p>
+          <button
+            type="button"
+            aria-label="Dismiss error"
+            onClick={convo.clearError}
+            className="shrink-0 rounded p-1 hover:bg-destructive/10 active:scale-90"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       )}
 

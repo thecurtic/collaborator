@@ -1,4 +1,4 @@
-import { Brain, Link as LinkIcon, Loader2, NotebookPen } from 'lucide-react';
+import { Brain, Link as LinkIcon, Loader2, NotebookPen, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/Markdown';
 import { useModalA11y } from '@/lib/useModalA11y';
@@ -109,6 +109,7 @@ export function ChatView({
     branch,
     editResend,
     stopGeneration,
+    clearError,
     cycleFork,
     remove,
   } = convo;
@@ -475,8 +476,21 @@ export function ChatView({
       </div>
 
       {error && (
-        <div className="border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-center text-sm text-destructive">
-          {error}
+        // Dismissible + height-capped: LM Studio surfaces raw template/
+        // engine errors now (7fd527b), which can run long — never let the
+        // strip swallow the screen or outlive its relevance.
+        <div className="flex items-start gap-2 border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+          <p className="max-h-24 min-w-0 flex-1 overflow-y-auto break-words">
+            {error}
+          </p>
+          <button
+            type="button"
+            aria-label="Dismiss error"
+            onClick={clearError}
+            className="shrink-0 rounded p-1 hover:bg-destructive/10 active:scale-90"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       )}
 
