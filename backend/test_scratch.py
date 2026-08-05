@@ -340,3 +340,44 @@ def test_transcript_search_tool_mode():
     assert out["count"] == 2
     assert out["transcripts"][0]["title"] == "Sourdough Basics"  # newest first
     print("✓ transcribe_video find-mode: keyword search + snippet, bare list")
+
+
+def test_delete_note_transcript_and_scratch_orphans():
+    c, cfg, dbp = _fresh()
+    # Vault note deletion: file + index gone, backlinks become unresolved.
+    vault = cfg["notes"]["vault_dir"]
+    os.makedirs(vault, exist_ok=True)
+    for title, body in [("Keeper", "Links to [[Goner]]."), ("Goner", "Bye.")]:
+        with open(os.path.join(vault, f"{title}.md"), "w", encoding="utf-8") as f:
+            f.write(f"---\ncreated: 2026-08-01\n---\n\n# {title}\n\n{body}\n")
+    conn = sqlite3.connect(dbp)
+    notes_index.reindex_vault(conn, vault, ensure_user=False)
+    conn.close()
+
+    r = c.delete("/api/notes/Goner")
+    assert r.status_code == 200
+    assert r.json()["links_now_unresolved_in"] == ["Keeper"]
+    assert not os.path.exists(os.path.join(vault, "Goner.md"))
+    assert c.get("/api/notes/Goner").status_code == 404
+    assert c.delete("/api/notes/Goner").status_code == 404
+
+    # Transcript deletion.
+    conn = sqlite3.connect(dbp)
+    t = db.create_transcript(conn, "https://youtu.be/x", "T", 60)
+    conn.close()
+    assert c.delete(f"/api/transcripts/{t['id']}").status_code == 200
+    assert c.get(f"/api/transcripts/{t['id']}").status_code == 404
+
+    # Deleting a scratch item rejects its hidden pending drafts (no orphans).
+    item = c.post("/api/scratch", json={"content": "call the dentist"}).json()["item"]
+    conn = sqlite3.connect(dbp)
+    d = db.create_note_draft(conn, "Call dentist", "Goal.", tags=["goal"],
+                             run_id=f"scratch-{item['id']}")
+    conn.close()
+    assert c.delete(f"/api/scratch/{item['id']}").status_code == 200
+    conn = sqlite3.connect(dbp)
+    status = conn.cursor().execute(
+        "SELECT status FROM note_drafts WHERE id = ?", (d["id"],)).fetchone()[0]
+    conn.close()
+    assert status == "rejected"
+    print("✓ delete: notes (backlinks->unresolved), transcripts, scratch orphan drafts")

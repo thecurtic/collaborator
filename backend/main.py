@@ -2622,6 +2622,43 @@ async def get_vault_note(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/api/notes/{title}")
+async def delete_vault_note(
+    title: str,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Delete an approved note from the vault (file + index row).
+
+    Inbound [[wikilinks]] become unresolved links — Obsidian semantics:
+    potential notes, not errors. Deleting USER.md resets the profile hub (it
+    re-scaffolds empty on the next reindex)."""
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        vault = _resolve_vault_dir(db_path)
+        conn = sqlite3.connect(db_path)
+        try:
+            note = notes_index.get_note_by_title(conn, title)
+            if note is None:
+                raise HTTPException(status_code=404, detail=f"Note \"{title}\" not found")
+            linkers = [b["title"] for b in
+                       notes_index.get_backlinks(conn, note["title"])]
+            path = os.path.join(vault, note["filename"])
+            if os.path.exists(path):
+                os.remove(path)
+            conn.cursor().execute("DELETE FROM notes_index WHERE filename = ?",
+                                  (note["filename"],))
+            conn.commit()
+        finally:
+            conn.close()
+        return {"deleted": note["title"],
+                "links_now_unresolved_in": linkers}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _apply_note_edit(conn, vault: str, title: str,
                      new_title: Optional[str] = None,
                      body: Optional[str] = None,
@@ -2935,6 +2972,18 @@ async def remove_scratch(
     if row is None:
         raise HTTPException(status_code=404, detail=f"No scratch item {scratch_id}")
     scratch.delete_media_if_unshared(db_path, row)
+    # Its pending proposals are hidden from the inbox (run_id scratch-N), so
+    # they'd become invisible orphans — reject them alongside the card.
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.cursor().execute(
+            "UPDATE note_drafts SET status = 'rejected', "
+            "decided_at = datetime('now') "
+            "WHERE run_id = ? AND status = 'pending'",
+            (f"scratch-{scratch_id}",))
+        conn.commit()
+    finally:
+        conn.close()
     return {"deleted": scratch_id}
 
 
@@ -3100,6 +3149,27 @@ async def get_video_transcript(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/transcripts/{transcript_id}")
+async def delete_video_transcript(
+    transcript_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Delete a stored transcript (row only; source video is remote)."""
+    _require_auth(passkey)
+    conn = sqlite3.connect(_resolve_db_path(passkey))
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM transcripts WHERE id = ?", (transcript_id,))
+        conn.commit()
+        found = cursor.rowcount > 0
+    finally:
+        conn.close()
+    if not found:
+        raise HTTPException(status_code=404,
+                            detail=f"Transcript {transcript_id} not found")
+    return {"deleted": transcript_id}
 
 
 @app.get("/api/models")
