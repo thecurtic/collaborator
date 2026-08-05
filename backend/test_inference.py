@@ -329,3 +329,46 @@ def test_title_excerpt_spans_whole_conversation():
     assert "RECENT: paint color tangent" in excerpt
     assert "turns omitted" in excerpt
     print("✓ title excerpt includes the opening AND the tail of long threads")
+
+
+def test_stream_error_payloads_surface():
+    """LM Studio streams errors as JSON lines (e.g. jinja template failures) —
+    they must raise, never be silently skipped into an empty response."""
+    from unittest.mock import patch, MagicMock
+    import pytest, inference
+    lines = [b'data: {"error":{"message":"No user query found in messages."}}']
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.iter_lines = lambda: iter(lines)
+    with patch("requests.post", return_value=resp):
+        with pytest.raises(Exception) as e:
+            list(inference.stream_llm_tokens("hi"))
+    assert "No user query found" in str(e.value)
+    print("✓ in-stream error payloads raise with the real message")
+
+
+def test_empty_history_turns_skipped():
+    """Poisoned histories (empty assistant turns from past failures) heal on
+    read: empty-content turns never reach the model."""
+    import inference
+    ctx = [
+        {"role": "user", "content": "real question"},
+        {"role": "assistant", "content": ""},          # the poison
+        {"role": "assistant", "content": "   "},
+        {"role": "user", "content": "follow-up"},
+    ]
+    msgs = inference._build_messages("now", ctx)
+    contents = [m["content"] for m in msgs if m["role"] in ("user", "assistant")]
+    assert "real question" in contents and "follow-up" in contents
+    assert "" not in contents and "   " not in contents
+    print("✓ empty history turns filtered out of context assembly")
+
+
+def test_model_ids_match_loose():
+    from inference import model_ids_match
+    assert model_ids_match("MiniMax-M2.5-REAP-29-MLX", "minimax-m2.5-reap-29-mlx")
+    assert model_ids_match("qwen/qwen3-4b-2507", "qwen3-4b-2507")
+    assert model_ids_match("qwen3-4b-2507:2", "qwen/qwen3-4b-2507")
+    assert not model_ids_match("qwen3-4b-2507", "qwen3-32b")
+    assert not model_ids_match(None, "x") and not model_ids_match("x", "")
+    print("✓ loose id matching: case, publisher prefix, instance suffix")

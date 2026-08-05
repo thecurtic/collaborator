@@ -119,3 +119,19 @@ if __name__ == "__main__":
     test_delete_reparents_children(); print("✓ delete reparents children")
     test_delete_subtree(); print("✓ delete subtree")
     print("\n✓ All API tests passed!")
+
+
+def test_empty_generation_never_persists_empty_turn():
+    """Zero-token generations persist an honest placeholder, not "" — an empty
+    assistant turn poisons some chat templates for the whole conversation."""
+    def silent_stream(message, context_turns=None, mode=None, recall=None, **kw):
+        return iter(())
+    main.stream_llm_tokens = silent_stream
+    client = TestClient(app)
+    r = client.post("/api/messages", json={"message": "hello?", "commit": True})
+    assert r.status_code == 200
+    assert "empty response" in r.text            # honest token streamed
+    hist = client.get("/api/messages").json()["turns"]
+    newest_assistant = next(t for t in hist if t["role"] == "assistant")
+    assert newest_assistant["content"].strip() != ""
+    print("✓ empty generation -> placeholder persisted, history stays clean")

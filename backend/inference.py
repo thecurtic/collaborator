@@ -209,9 +209,14 @@ def _build_messages(
             "content": "Relevant memory from earlier conversations (your recall):\n\n" + recall.strip(),
         })
 
-    # Add context from previous turns
+    # Add context from previous turns. EMPTY turns are skipped: a failed
+    # generation once persisted "" assistant messages, and some chat templates
+    # (qwen3.6) choke on empty-content messages — poisoning the conversation
+    # forever. Filtering on read heals existing histories with no migration.
     if context_turns and len(context_turns) > 0:
         for turn in context_turns:
+            if not (turn.get("content") or "").strip():
+                continue
             if turn.get("role") == "user":
                 messages.append({"role": "user", "content": turn["content"]})
             elif turn.get("role") == "assistant":
@@ -309,6 +314,10 @@ def stream_llm_tokens(
                 except Exception:
                     # Skip malformed SSE lines
                     continue
+                if isinstance(data, dict) and data.get("error"):
+                    err = data["error"]
+                    msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                    raise RuntimeError(f"LM Studio error: {msg}")
                 if "choices" in data and len(data["choices"]) > 0:
                     choice = data["choices"][0]
                     delta = choice.get("delta", {})
@@ -529,6 +538,19 @@ def chat_with_retry(
 # --- Model context length (LM Studio /api/v0/models) ---------------------------
 
 _ctx_cache: Dict[str, tuple] = {}   # model_id -> (monotonic_ts, tokens|None)
+
+
+def model_ids_match(a: Optional[str], b: Optional[str]) -> bool:
+    """Loose id equality for load-state display: case-insensitive, and
+    tolerant of publisher prefixes ('qwen/x' vs 'x') and instance suffixes
+    LM Studio sometimes appends ('x:2'). Display logic only — requests always
+    use the exact configured id."""
+    if not a or not b:
+        return False
+    def norm(s):
+        s = s.lower().split(":")[0]
+        return s.rsplit("/", 1)[-1]
+    return a.lower() == b.lower() or norm(a) == norm(b)
 
 
 def get_models_detail() -> List[Dict]:
@@ -1662,6 +1684,10 @@ def _iter_stream_events(payload: Dict):
             obj = json.loads(data_bytes)
         except Exception:
             continue
+        if isinstance(obj, dict) and obj.get("error"):
+            err = obj["error"]
+            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            raise RuntimeError(f"LM Studio error: {msg}")
         if obj.get("choices"):
             choice = obj["choices"][0]
             yield choice, (choice.get("delta") or {})

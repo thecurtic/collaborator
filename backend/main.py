@@ -1844,6 +1844,16 @@ def _stream_turn_response(
                 yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
                 return
 
+        if not full_response.strip():
+            # A silently-empty generation must never persist an empty assistant
+            # turn: some chat templates then fail on EVERY later request in the
+            # conversation — the poisoned-history death spiral of issue #2.
+            fallback = ("[The model returned an empty response — the server "
+                        "logs may show why. This placeholder keeps the "
+                        "conversation usable.]")
+            yield f"data: {json.dumps({'type': 'token', 'content': fallback})}\n\n"
+            full_response = fallback
+
         try:
             conn = sqlite3.connect(db_path)
             try:
@@ -2806,8 +2816,11 @@ async def list_models(
     try:
         current = config.get("inference", {}).get("model_id")
         detail = get_models_detail()
+        # Vision-capable chat models report type "vlm" — they are loaded LLMs
+        # for our purposes (the false current_loaded warning bug).
         loaded = [m["id"] for m in detail
-                  if m.get("state") == "loaded" and m.get("type") in (None, "llm")]
+                  if m.get("state") == "loaded"
+                  and m.get("type") in (None, "llm", "vlm")]
         out = {
             "current": current,
             "available": get_available_models(),
@@ -2815,7 +2828,9 @@ async def list_models(
             "loaded": loaded,
         }
         if detail:
-            out["current_loaded"] = current in loaded
+            from inference import model_ids_match
+            out["current_loaded"] = any(model_ids_match(current, l)
+                                        for l in loaded)
         return out
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

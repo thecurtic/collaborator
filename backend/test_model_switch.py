@@ -102,3 +102,22 @@ if __name__ == "__main__":
     test_switch_applies_live_and_persists()
     test_validation_and_force()
     print("\n✓ All model-switch tests passed!")
+
+
+def test_current_loaded_vlm_and_id_variants():
+    """Vision chat models (type vlm) count as loaded; id comparison tolerates
+    case/prefix variants — the false 'not loaded' warning bug."""
+    c, _ = _setup()
+    orig = config.get_config._config["inference"]["model_id"]
+    config.get_config._config["inference"]["model_id"] = "qwen3-vl-30b"
+    try:
+        main.get_models_detail = lambda: [
+            {"id": "qwen/qwen3-vl-30b", "type": "vlm", "state": "loaded",
+             "quantization": "4bit", "max_context_length": 32768,
+             "loaded_context_length": 32768}]
+        out = c.get("/api/models").json()
+        assert out["loaded"] == ["qwen/qwen3-vl-30b"]     # vlm included
+        assert out["current_loaded"] is True              # prefix-variant match
+    finally:
+        config.get_config._config["inference"]["model_id"] = orig
+    print("✓ vlm models count as loaded; id variants don't false-warn")
