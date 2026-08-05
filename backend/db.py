@@ -1184,6 +1184,36 @@ def get_transcript_by_url(db, url: str) -> Optional[dict]:
     return dict(zip(TRANSCRIPT_COLUMNS, row)) if row else None
 
 
+def search_transcripts(db, query: Optional[str] = None,
+                       limit: int = 10) -> List[dict]:
+    """Find stored transcripts by keyword over title + text (or list recent
+    when query is empty). Returns metadata + a snippet around the first match —
+    never the full text (the model fetches that by URL via transcribe_video)."""
+    rows = db.cursor().execute(
+        f"SELECT {_TRANSCRIPT_COLS} FROM transcripts WHERE status != 'error' "
+        "ORDER BY id DESC").fetchall()
+    out = []
+    terms = [t for t in (query or "").lower().split() if len(t) >= 2]
+    for row in rows:
+        d = dict(zip(TRANSCRIPT_COLUMNS, row))
+        text = d.pop("text") or ""
+        haystack = f"{d.get('title') or ''}\n{text}".lower()
+        if terms and not all(t in haystack for t in terms):
+            continue
+        snippet = ""
+        if terms:
+            pos = text.lower().find(terms[0])
+            if pos >= 0:
+                snippet = text[max(0, pos - 120):pos + 200].strip()
+        d.pop("error", None)
+        d["snippet"] = snippet
+        d["chars"] = len(text)
+        out.append(d)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def list_transcripts(db) -> List[dict]:
     rows = db.cursor().execute(
         f"SELECT {_TRANSCRIPT_COLS} FROM transcripts ORDER BY id DESC").fetchall()

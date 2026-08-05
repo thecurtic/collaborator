@@ -688,8 +688,13 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             "description": descs["transcribe_video"],
             "parameters": {"type": "object", "properties": {
                 "url": {"type": "string",
-                        "description": "video/audio URL (YouTube etc.)"}},
-                "required": ["url"]}}})
+                        "description": "video/audio URL to transcribe or read "
+                                       "(omit to search stored transcripts)"},
+                "query": {"type": "string",
+                          "description": "with no url: keyword search over "
+                                         "stored transcripts (titles + full "
+                                         "text); empty = list recent"}},
+                "required": []}}})
     # web_search is self-gating: present only when a SearXNG URL is configured.
     if avail.get("web_search", True) and (tcfg.get("web_search") or {}).get("url"):
         schemas.append(_search_schema("web_search", descs["web_search"]))
@@ -1175,8 +1180,19 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 labels=args.get("labels"),
                 issue_number=args.get("issue_number")))
         if name == "transcribe_video":
-            return json.dumps(agent_tools.transcribe_video(
-                db_path, args.get("url") or ""))
+            url = (args.get("url") or "").strip()
+            if not url:
+                from db import search_transcripts
+                conn = sqlite3.connect(db_path)
+                try:
+                    found = search_transcripts(conn, args.get("query"), limit=10)
+                finally:
+                    conn.close()
+                return json.dumps({
+                    "transcripts": found, "count": len(found),
+                    "note": "call transcribe_video again with url=<one of "
+                            "these> to read its full transcript"})
+            return json.dumps(agent_tools.transcribe_video(db_path, url))
         if name == "read_logs":
             lines = logbuffer.get_lines(args.get("lines") or 100,
                                         (args.get("grep") or "").strip() or None)

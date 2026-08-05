@@ -1449,7 +1449,10 @@ def _tool_status_label(name: str, args: Dict) -> str:
         return f"{verb}{f' in {repo[:40]}' if repo else ''}…"
     if name == "transcribe_video":
         u = (args.get("url") or "").strip()
-        return f"Transcribing video {u[:50]}…" if u else "Transcribing video…"
+        if not u:
+            q = (args.get("query") or "").strip()
+            return f"Searching saved transcripts{f' for “{q[:40]}”' if q else ''}…"
+        return f"Transcribing video {u[:50]}…"
     if name == "read_logs":
         g = (args.get("grep") or "").strip()
         return f"Checking my logs{f' for “{g[:40]}”' if g else ''}…"

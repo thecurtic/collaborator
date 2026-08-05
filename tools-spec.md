@@ -96,12 +96,16 @@ report that plainly.
 
 ## transcribe_video
 Transcribe a video or audio URL (YouTube etc.) from its ACTUAL AUDIO via
-speech-to-text — never captions. Short videos (roughly up to 10 minutes) return
-the transcript in this turn. Longer ones start a BACKGROUND job: you get
-status=processing — tell the user transcription is underway, and call this tool
-again with the same URL on a later turn to fetch the finished transcript (the
-user can also see jobs in their transcripts list). Quote the transcript honestly;
-STT of noisy audio has errors.
+speech-to-text — never captions — or find transcripts the user already has.
+With a url: short videos (roughly up to 10 minutes) return the transcript in
+this turn; longer ones start a BACKGROUND job — you get status=processing, tell
+the user, and call again with the same URL later. Results are cached per URL.
+With NO url: searches the user's stored transcripts — `query` keyword-matches
+titles and full text (returns matches with URLs and a snippet; then call again
+with the url to read one); empty query lists recent. Search stored transcripts
+ONLY when the user refers to a video they transcribed ("that video about X") —
+never trawl them proactively. Quote transcripts honestly; STT of noisy audio
+has errors.
 
 ## get_note
 Fetch one note by its exact title: the full body, tags, outgoing [[wikilinks]], and

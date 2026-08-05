@@ -314,3 +314,29 @@ def test_startless_event_cannot_pass_approval():
     conn.close()
     assert note["event_start"].startswith("2026-11-23T19:00")
     print("✓ start-less event: blocked at REST create AND at approval; repairable")
+
+
+def test_transcript_search_tool_mode():
+    """No url = find: query searches stored transcripts (title + text) and
+    returns snippets + urls; the model then fetches by url as usual."""
+    c, cfg, dbp = _fresh()
+    conn = sqlite3.connect(dbp)
+    r1 = db.create_transcript(conn, "https://youtu.be/pumps", "Home Heating Deep Dive", 900)
+    db.set_transcript_result(conn, r1["id"],
+                             text="Today we compare heat pumps against furnaces in cold climates.")
+    r2 = db.create_transcript(conn, "https://youtu.be/other", "Sourdough Basics", 600)
+    db.set_transcript_result(conn, r2["id"], text="Flour, water, salt, patience.")
+    conn.close()
+
+    _, execute, _ = main._build_tools(dbp)
+    out = json.loads(execute("transcribe_video", {"query": "heat pumps"}))
+    assert out["count"] == 1
+    hit = out["transcripts"][0]
+    assert hit["url"] == "https://youtu.be/pumps"
+    assert "heat pumps" in hit["snippet"]
+    assert "text" not in hit                       # snippet only, never full text
+
+    out = json.loads(execute("transcribe_video", {}))          # bare = list recent
+    assert out["count"] == 2
+    assert out["transcripts"][0]["title"] == "Sourdough Basics"  # newest first
+    print("✓ transcribe_video find-mode: keyword search + snippet, bare list")
