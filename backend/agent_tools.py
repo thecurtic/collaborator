@@ -321,12 +321,35 @@ def _download_and_transcribe(url: str) -> str:
         return voice.transcribe_batch(wav)
 
 
-def transcribe_video(db_path: str, url: str) -> dict:
+def _transcript_chunk(url: str, title, duration_s, text: str,
+                      return_chars: int, chunk: int) -> dict:
+    """One pageable chunk of a transcript. The old flat [:return_chars] slice
+    made long transcripts unreadable past the cut — every fetch returned the
+    identical first chunk with no way to continue."""
+    total = max(1, -(-len(text) // return_chars))          # ceil division
+    chunk = max(1, min(int(chunk or 1), total))
+    seg = text[(chunk - 1) * return_chars: chunk * return_chars]
+    out = {"url": url, "title": title, "duration_s": duration_s,
+           "status": "done", "transcript": seg,
+           "chunk": chunk, "total_chunks": total,
+           "truncated": chunk < total}
+    if total > 1:
+        if chunk < total:
+            out["note"] = (f"Part {chunk} of {total}. Call transcribe_video "
+                           f"again with the same url and chunk={chunk + 1} "
+                           "for the next part.")
+        else:
+            out["note"] = f"Part {chunk} of {total} — this is the final part."
+    return out
+
+
+def transcribe_video(db_path: str, url: str, chunk: int = 1) -> dict:
     """Transcribe a video/audio URL from its actual audio (never captions).
 
     Short videos (<= sync_max_minutes) return the transcript in-turn. Longer
     ones start a background job: this returns status=processing, and a later
     call with the same URL (or GET /api/transcripts) returns the result.
+    Long transcripts are paged: pass chunk=2, 3, … to read past the first part.
     """
     import sqlite3
     import db as _db
@@ -341,11 +364,10 @@ def transcribe_video(db_path: str, url: str) -> dict:
     try:
         existing = _db.get_transcript_by_url(conn, url)
         if existing and existing["status"] == "done":
-            text = existing["text"] or ""
-            return {"url": url, "title": existing["title"],
-                    "duration_s": existing["duration_s"], "status": "done",
-                    "transcript": text[:return_chars],
-                    "truncated": len(text) > return_chars}
+            return _transcript_chunk(url, existing["title"],
+                                     existing["duration_s"],
+                                     existing["text"] or "",
+                                     return_chars, chunk)
         if existing and existing["status"] == "processing":
             return {"url": url, "title": existing["title"], "status": "processing",
                     "note": "Still transcribing in the background — tell the user "
@@ -379,12 +401,11 @@ def transcribe_video(db_path: str, url: str) -> dict:
             _db.set_transcript_result(conn, row["id"], text=text)
         finally:
             conn.close()
-        out = {"url": url, "title": meta["title"],
-               "duration_s": meta["duration_s"], "status": "done",
-               "transcript": text[:return_chars],
-               "truncated": len(text) > return_chars}
+        out = _transcript_chunk(url, meta["title"], meta["duration_s"],
+                                text, return_chars, chunk)
         if previous_error:
-            out["note"] = f"an earlier attempt failed ({previous_error}); this retry succeeded"
+            out["note"] = (out.get("note", "") + " " if out.get("note") else "") + \
+                f"(an earlier attempt failed: {previous_error}; this retry succeeded)"
         return out
 
     # Long video: background job, surfaced via the transcripts table.

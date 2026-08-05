@@ -102,7 +102,9 @@ this turn; longer ones start a BACKGROUND job — you get status=processing, tel
 the user, and call again with the same URL later. Results are cached per URL.
 With NO url: searches the user's stored transcripts — `query` keyword-matches
 titles and full text (returns matches with URLs and a snippet; then call again
-with the url to read one); empty query lists recent. Search stored transcripts
+with the url to read one); empty query lists recent. Long transcripts are PAGED:
+responses say "Part N of M" — call again with the same url and chunk=N+1 to keep
+reading; never assume a truncated part is the whole video. Search stored transcripts
 ONLY when the user refers to a video they transcribed ("that video about X") —
 never trawl them proactively. Quote transcripts honestly; STT of noisy audio
 has errors.

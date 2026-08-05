@@ -693,7 +693,11 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "query": {"type": "string",
                           "description": "with no url: keyword search over "
                                          "stored transcripts (titles + full "
-                                         "text); empty = list recent"}},
+                                         "text); empty = list recent"},
+                "chunk": {"type": "integer",
+                          "description": "long transcripts are paged — pass "
+                                         "2, 3, … to read past part 1 "
+                                         "(responses say chunk N of M)"}},
                 "required": []}}})
     # web_search is self-gating: present only when a SearXNG URL is configured.
     if avail.get("web_search", True) and (tcfg.get("web_search") or {}).get("url"):
@@ -1192,7 +1196,12 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                     "transcripts": found, "count": len(found),
                     "note": "call transcribe_video again with url=<one of "
                             "these> to read its full transcript"})
-            return json.dumps(agent_tools.transcribe_video(db_path, url))
+            try:
+                chunk = max(1, int(args.get("chunk") or 1))
+            except (TypeError, ValueError):
+                chunk = 1
+            return json.dumps(agent_tools.transcribe_video(db_path, url,
+                                                           chunk=chunk))
         if name == "read_logs":
             lines = logbuffer.get_lines(args.get("lines") or 100,
                                         (args.get("grep") or "").strip() or None)

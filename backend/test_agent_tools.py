@@ -322,7 +322,36 @@ def test_executor_wiring(monkeypatch):
     assert result["result"] == 42
 
     monkeypatch.setattr(agent_tools, "transcribe_video",
-                        lambda dbp, url: {"status": "done", "transcript": "t"})
+                        lambda dbp, url, chunk=1: {"status": "done",
+                                                   "transcript": "t"})
     out = json.loads(execute("transcribe_video", {"url": "https://x"}))
     assert out["status"] == "done"
     print("✓ executor wiring: calculate/get_notes/transcribe_video registered")
+
+
+def test_transcript_chunking(monkeypatch):
+    """Long transcripts page: chunk=2 returns DIFFERENT text, not the same
+    first slice forever (the truncate-in-the-same-spot bug)."""
+    dbp = os.environ["DB_PATH"]
+    cfg = config.get_config()["tools"]["transcribe_video"]
+    monkeypatch.setitem(cfg, "return_chars", 100)
+    long_text = "".join(f"<{i:04d}>" for i in range(60))     # 360 chars
+    monkeypatch.setattr(agent_tools, "_probe_video",
+                        lambda url: {"title": "Long Talk", "duration_s": 120})
+    monkeypatch.setattr(agent_tools, "_download_and_transcribe",
+                        lambda url: long_text)
+
+    first = agent_tools.transcribe_video(dbp, "https://youtu.be/longtalk")
+    assert first["chunk"] == 1 and first["total_chunks"] == 4
+    assert first["truncated"] is True and "chunk=2" in first["note"]
+
+    second = agent_tools.transcribe_video(dbp, "https://youtu.be/longtalk", chunk=2)
+    assert second["transcript"] != first["transcript"]        # THE fix
+    assert first["transcript"] + second["transcript"] == long_text[:200]
+
+    last = agent_tools.transcribe_video(dbp, "https://youtu.be/longtalk", chunk=4)
+    assert last["truncated"] is False and "final part" in last["note"]
+    # Beyond-range clamps to the last part instead of erroring.
+    clamped = agent_tools.transcribe_video(dbp, "https://youtu.be/longtalk", chunk=99)
+    assert clamped["chunk"] == 4
+    print("✓ transcript paging: distinct chunks, guidance notes, clamped range")
