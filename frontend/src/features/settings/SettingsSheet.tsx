@@ -99,7 +99,10 @@ function ModelPicker() {
   const loadedSet = new Set(models?.loaded ?? []);
   const chatIds =
     models && models.models.length > 0
-      ? models.models.filter((m) => !m.type || m.type === 'llm').map((m) => m.id)
+      ? models.models
+          // vlm = vision-capable chat model — very much a chat option.
+          .filter((m) => !m.type || m.type === 'llm' || m.type === 'vlm')
+          .map((m) => m.id)
       : (models?.available ?? []);
   // Keep the current model selectable even if LM Studio doesn't list it.
   const options =
