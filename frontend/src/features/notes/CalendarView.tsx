@@ -168,9 +168,28 @@ function AgendaList({
   const [loading, setLoading] = useState(true);
   // Window: fixed 14 days back, extendable forward ("Load more" adds 60).
   const [aheadDays, setAheadDays] = useState(AGENDA_AHEAD_DAYS);
+  // Event-tagged notes WITHOUT a parseable start: invisible to the range
+  // query, so without this section they'd silently not exist anywhere on
+  // the calendar (seen in the wild via drafts approved without typed times).
+  const [undated, setUndated] = useState<NoteMeta[]>([]);
   const seq = useRef(0);
   const todayAnchor = useRef<HTMLDivElement | null>(null);
   const didScroll = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listNotes('event')
+      .then((all) => {
+        if (!cancelled) setUndated(all.filter((n) => !n.fields?.start));
+      })
+      .catch(() => {
+        /* purely advisory — the dated agenda is the main content */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const s = ++seq.current;
@@ -256,6 +275,31 @@ function AgendaList({
             </Button>
           </div>
         </>
+      )}
+      {undated.length > 0 && (
+        <div>
+          <p className="border-b border-t border-border bg-amber-500/10 px-4 py-1.5 text-xs font-medium uppercase tracking-wide text-amber-700">
+            Missing a date ({undated.length})
+          </p>
+          <ul className="divide-y divide-border border-b border-border">
+            {undated.map((n) => (
+              <li key={n.filename}>
+                <button
+                  type="button"
+                  onClick={() => onOpenNote(n.title)}
+                  className="flex w-full flex-col gap-0.5 px-4 py-3 text-left hover:bg-muted/60 active:bg-muted"
+                >
+                  <span className="truncate text-sm font-medium text-foreground">
+                    {n.title}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Tagged event but has no start time — open to add one.
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
