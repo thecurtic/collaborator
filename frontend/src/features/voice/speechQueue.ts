@@ -41,6 +41,11 @@ export class SpeechQueue implements SpeechSession {
   private spokenChars = 0;
   private audio: HTMLAudioElement | null = null;
   private url: string | null = null;
+  // Fast first chunk: until something has been flushed, an early clause
+  // break (or a short timeout) gets voice out without waiting for the
+  // model's first full sentence — the biggest lever on time-to-first-audio.
+  private flushedAny = false;
+  private firstTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private onIdle?: () => void,
@@ -53,14 +58,20 @@ export class SpeechQueue implements SpeechSession {
     if (this.stopped) return;
     this.buffer += chunk;
     const { sentences, rest } = extractSentences(this.buffer);
-    this.queue.push(...sentences);
-    this.buffer = rest;
-    void this.pump();
+    if (sentences.length > 0) {
+      this.markFlushed();
+      this.queue.push(...sentences);
+      this.buffer = rest;
+      void this.pump();
+      return;
+    }
+    if (!this.flushedAny) this.tryEarlyFirstFlush();
   }
 
   finish(): void {
     if (this.stopped) return;
     this.finished = true;
+    this.clearFirstTimer();
     // Push the raw (untrimmed) tail so read-along char counts stay exact.
     if (this.buffer.trim()) this.queue.push(this.buffer);
     this.buffer = '';
@@ -69,11 +80,57 @@ export class SpeechQueue implements SpeechSession {
 
   stop(): void {
     this.stopped = true;
+    this.clearFirstTimer();
     this.queue = [];
     this.buffer = '';
     this.synthAhead = null;
     this.audio?.pause();
     this.cleanup();
+  }
+
+  private markFlushed(): void {
+    this.flushedAny = true;
+    this.clearFirstTimer();
+  }
+
+  private clearFirstTimer(): void {
+    if (this.firstTimer) {
+      clearTimeout(this.firstTimer);
+      this.firstTimer = null;
+    }
+  }
+
+  /**
+   * First chunk only: flush at a clause break (comma/semicolon/colon/dash)
+   * once ~8 words are in, or flush whatever is buffered after ~1.2s without
+   * any boundary. Chunks stay VERBATIM contiguous slices, so read-along
+   * offsets remain exact; later chunks use real sentence boundaries.
+   */
+  private tryEarlyFirstFlush(): void {
+    const clause = /[,;:—–]["')\]]*\s+/g;
+    while (clause.exec(this.buffer) !== null) {
+      const cut = clause.lastIndex;
+      const words = this.buffer.slice(0, cut).trim().split(/\s+/).length;
+      if (words >= 8) {
+        this.markFlushed();
+        this.queue.push(this.buffer.slice(0, cut));
+        this.buffer = this.buffer.slice(cut);
+        void this.pump();
+        return;
+      }
+    }
+    if (!this.firstTimer) {
+      this.firstTimer = setTimeout(() => {
+        this.firstTimer = null;
+        if (this.stopped || this.flushedAny) return;
+        // Too short to speak naturally — wait for more text instead.
+        if (this.buffer.trim().length < 15) return;
+        this.markFlushed();
+        this.queue.push(this.buffer);
+        this.buffer = '';
+        void this.pump();
+      }, 1200);
+    }
   }
 
   private synth(text: string): Promise<SynthResult> {
