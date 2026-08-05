@@ -22,6 +22,16 @@ def _setup():
     return TestClient(main.app), dot
 
 
+def test_models_detail_actually_imported():
+    """Regression: get_models_detail must be a real import in main, not an
+    attribute conjured by test monkeypatching — a missing import here reached
+    prod as a NameError on GET /api/models while every mocked test passed."""
+    import importlib
+    importlib.reload(main)
+    assert getattr(main, "get_models_detail", None) is inference.get_models_detail
+    print("✓ get_models_detail imported for real (not a test-double leftover)")
+
+
 def test_list_models():
     c, _ = _setup()
     out = c.get("/api/models").json()

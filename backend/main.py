@@ -30,7 +30,7 @@ from inference import (
     get_embedding, embed_texts, synthesize_recall, get_available_models,
     generate_with_tools, synthesize, synthesize_notes, web_search_searxng, fetch_url,
     screenshot_page, generate_title,
-    get_model_context_tokens, estimate_tokens,
+    get_model_context_tokens, estimate_tokens, get_models_detail,
     resolve_prompt_layer, DEFAULT_PARAGRAPH_STYLE, DEFAULT_VOICE_STYLE,
     DEFAULT_TOOLS_GUIDANCE, DEFAULT_RECALL_SYNTHESIS_PROMPT,
     DEFAULT_NOTES_SYNTHESIS_PROMPT, DEFAULT_DATETIME_TEXT,
