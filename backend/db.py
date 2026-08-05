@@ -191,6 +191,31 @@ def ensure_conversation_schema(conn) -> None:
     # approval (NOTES-FORMAT.md boundary).
     if "fields" not in draft_cols:
         cursor.execute("ALTER TABLE note_drafts ADD COLUMN fields TEXT")
+    # Scratch (notes-to-self): a SEPARATE table by design — the conversation
+    # agent's queries physically cannot touch it (isolation by construction,
+    # not by WHERE-clause discipline). Media lives on disk, content-addressed
+    # (media_hash = sha256) for future sync integrations. Pending graph
+    # proposals are note_drafts rows (run_id 'scratch-…') linked by draft_id;
+    # committed/rejected state is derived by joining the draft, never copied.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS scratch (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            kind TEXT NOT NULL DEFAULT 'text',
+            content TEXT,
+            media_path TEXT,
+            media_mime TEXT,
+            media_size INTEGER,
+            media_hash TEXT,
+            transcript TEXT,
+            status TEXT NOT NULL DEFAULT 'inert',
+            llm_readable INTEGER NOT NULL DEFAULT 0,
+            action_result TEXT,
+            draft_id INTEGER,
+            transcript_id INTEGER
+        )
+    """)
+
     # Video transcripts (STT on video audio). Short videos transcribe in-turn;
     # long ones populate this table from a background thread and are surfaced
     # via GET /api/transcripts (and re-asking the transcribe_video tool).
@@ -1007,6 +1032,114 @@ def update_note_draft(db, draft_id: int, *, title: Optional[str] = None,
         db.cursor().execute(f"UPDATE note_drafts SET {', '.join(sets)} WHERE id = ?", params)
         db.commit()
     return get_note_draft(db, draft_id)
+
+
+# --- Scratch (notes-to-self) ----------------------------------------------------
+
+SCRATCH_COLUMNS = ["id", "created_at", "kind", "content", "media_path",
+                   "media_mime", "media_size", "media_hash", "transcript",
+                   "status", "llm_readable", "action_result", "draft_id",
+                   "transcript_id"]
+_SCRATCH_COLS = ", ".join("s." + c for c in SCRATCH_COLUMNS)
+
+
+def _row_to_scratch(row) -> Dict:
+    d = dict(zip(SCRATCH_COLUMNS + ["draft_status"], row))
+    d["llm_readable"] = bool(d["llm_readable"])
+    try:
+        d["action_result"] = _json.loads(d["action_result"]) if d["action_result"] else None
+    except Exception:
+        d["action_result"] = None
+    # Effective status folds in the linked draft's fate (approve/reject happen
+    # through the normal drafts endpoints; we derive, never duplicate).
+    if d["status"] == "pending" and d.get("draft_status") in ("approved", "rejected"):
+        d["status"] = "committed" if d["draft_status"] == "approved" else "inert"
+    return d
+
+
+def create_scratch(db, kind: str, content: Optional[str] = None,
+                   media_path: Optional[str] = None,
+                   media_mime: Optional[str] = None,
+                   media_size: Optional[int] = None,
+                   media_hash: Optional[str] = None) -> dict:
+    cursor = db.cursor()
+    cursor.execute(
+        "INSERT INTO scratch (kind, content, media_path, media_mime, "
+        "media_size, media_hash) VALUES (?, ?, ?, ?, ?, ?)",
+        (kind, content, media_path, media_mime, media_size, media_hash))
+    db.commit()
+    return get_scratch(db, cursor.lastrowid)
+
+
+def get_scratch(db, scratch_id: int) -> Optional[dict]:
+    row = db.cursor().execute(
+        f"SELECT {_SCRATCH_COLS}, d.status FROM scratch s "
+        "LEFT JOIN note_drafts d ON d.id = s.draft_id WHERE s.id = ?",
+        (scratch_id,)).fetchone()
+    return _row_to_scratch(row) if row else None
+
+
+def list_scratch(db, limit: int = 50, before_id: Optional[int] = None,
+                 q: Optional[str] = None) -> List[dict]:
+    where, params = [], []
+    if before_id:
+        where.append("s.id < ?"); params.append(before_id)
+    if q and q.strip():
+        where.append("(s.content LIKE ? OR s.transcript LIKE ?)")
+        like = f"%{q.strip()}%"
+        params += [like, like]
+    clause = f"WHERE {' AND '.join(where)}" if where else ""
+    rows = db.cursor().execute(
+        f"SELECT {_SCRATCH_COLS}, d.status FROM scratch s "
+        f"LEFT JOIN note_drafts d ON d.id = s.draft_id {clause} "
+        "ORDER BY s.id DESC LIMIT ?", params + [limit]).fetchall()
+    return [_row_to_scratch(r) for r in rows]
+
+
+def set_scratch_action(db, scratch_id: int, status: str,
+                       action_result: Optional[dict] = None,
+                       draft_id: Optional[int] = None,
+                       transcript_id: Optional[int] = None,
+                       transcript: Optional[str] = None,
+                       llm_readable: Optional[bool] = None) -> Optional[dict]:
+    sets, params = ["status = ?"], [status]
+    if action_result is not None:
+        sets.append("action_result = ?"); params.append(_json.dumps(action_result))
+    if draft_id is not None:
+        sets.append("draft_id = ?"); params.append(draft_id)
+    if transcript_id is not None:
+        sets.append("transcript_id = ?"); params.append(transcript_id)
+    if transcript is not None:
+        sets.append("transcript = ?"); params.append(transcript)
+    if llm_readable is not None:
+        sets.append("llm_readable = ?"); params.append(1 if llm_readable else 0)
+    params.append(scratch_id)
+    db.cursor().execute(f"UPDATE scratch SET {', '.join(sets)} WHERE id = ?", params)
+    db.commit()
+    return get_scratch(db, scratch_id)
+
+
+def set_scratch_readable(db, scratch_id: int, readable: bool) -> Optional[dict]:
+    db.cursor().execute("UPDATE scratch SET llm_readable = ? WHERE id = ?",
+                        (1 if readable else 0, scratch_id))
+    db.commit()
+    return get_scratch(db, scratch_id)
+
+
+def delete_scratch(db, scratch_id: int) -> Optional[dict]:
+    """Delete a row; returns it (with media info intact) so the caller can
+    remove the file when no other row shares the hash."""
+    row = get_scratch(db, scratch_id)
+    if row is None:
+        return None
+    db.cursor().execute("DELETE FROM scratch WHERE id = ?", (scratch_id,))
+    db.commit()
+    if row.get("media_hash"):
+        remaining = db.cursor().execute(
+            "SELECT COUNT(*) FROM scratch WHERE media_hash = ?",
+            (row["media_hash"],)).fetchone()[0]
+        row["media_shared"] = remaining > 0
+    return row
 
 
 # --- Video transcripts (STT jobs) ----------------------------------------------

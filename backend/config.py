@@ -217,6 +217,13 @@ def load_config() -> dict:
                 "preload": False,      # local backend: warm-load the default voice at startup
             },
         },
+        "scratch": {
+            # Notes-to-self capture pipe. Inert by default; the LLM touches an
+            # item only via POST /api/scratch/{id}/act (the hold-send gesture).
+            "max_media_mb": 50,
+            "max_rounds": 4,             # tool rounds for the one-shot action
+            "action_prompt_file": "scratch-action-prompt.md",  # editable layer
+        },
         "location": {
             # Per-turn location context (frontend sends {lat, lon, accuracy, ts}
             # on /api/messages when granted). Raw coordinates only — no
