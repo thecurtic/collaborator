@@ -185,6 +185,9 @@ class NoteDraftCreate(BaseModel):
     source_turns: List[int] = []
     tree_root_id: Optional[int] = None
     run_id: Optional[str] = None
+    # Whitelisted per-type fields (event start/…) — validated like every other
+    # entry path; the frontmatter boundary has no unguarded doors.
+    fields: Optional[dict] = None
 
 
 class NoteDraftUpdate(BaseModel):
@@ -2220,6 +2223,14 @@ async def create_draft(
     _require_auth(passkey)
     if not request.title.strip() or not request.body.strip():
         raise HTTPException(status_code=422, detail="Draft needs a title and a body")
+    fields, ferr = _normalize_note_fields(request.fields or {},
+                                          tags=request.tags,
+                                          title=request.title)
+    if ferr:
+        raise HTTPException(status_code=422, detail=ferr)
+    if _note_category(request.tags) == "event" and not fields.get("start"):
+        raise HTTPException(status_code=422,
+                            detail="event drafts need fields.start (ISO 8601)")
     try:
         conn = sqlite3.connect(_resolve_db_path(passkey))
         try:
@@ -2228,6 +2239,7 @@ async def create_draft(
                 tags=request.tags, links=request.links,
                 source_turns=request.source_turns,
                 tree_root_id=request.tree_root_id, run_id=request.run_id,
+                fields=fields or None,
             )
         finally:
             conn.close()
@@ -2338,6 +2350,17 @@ async def approve_draft(
                         "filename": filename, "renamed": applied["renamed"],
                         "links_rewritten": applied["links_rewritten"]}
 
+            # Approval gate for events: a start-less event note is invisible to
+            # the calendar — a silent data black hole. Whatever entry path let
+            # it in, it does not get PAST approval without a start (add one
+            # during review via PATCH fields, or drop the event tag).
+            if (_note_category(draft["tags"]) == "event"
+                    and not (draft.get("fields") or {}).get("start")):
+                raise HTTPException(
+                    status_code=422,
+                    detail="This event draft has no start time — add one in "
+                           "review (PATCH the draft's fields) or remove the "
+                           "event tag before approving")
             title = _validate_note_title(draft["title"])
             path = _write_note_file(vault, title, draft["body"],
                                     draft["tags"], draft["source_turns"],
@@ -3000,13 +3023,15 @@ async def act_on_scratch(
         scratch.run_text_action, db_path, text, _build_tools, generate_with_tools)
 
     if result["kind"] == "proposed":
-        # Mark the draft as scratch-born so the inbox can hide it (it renders
-        # on the card instead) and the linkage survives.
+        # Mark EVERY draft from this action as scratch-born so the inbox can
+        # hide them all (they render on the card instead — a multi-proposal
+        # action must not leak siblings into the inbox).
+        draft_ids = result.get("draft_ids") or [result["draft_id"]]
         conn = sqlite3.connect(db_path)
         try:
-            conn.cursor().execute(
+            conn.cursor().executemany(
                 "UPDATE note_drafts SET run_id = ? WHERE id = ?",
-                (f"scratch-{scratch_id}", result["draft_id"]))
+                [(f"scratch-{scratch_id}", d) for d in draft_ids])
             conn.commit()
         finally:
             conn.close()

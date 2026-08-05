@@ -196,11 +196,18 @@ def run_text_action(db_path: str, text: str, build_tools, generate) -> dict:
     drafts = state.get("proposed_drafts") or []
     reply = _parse_action_reply(final_text)
     if drafts:
+        titles = [d["title"] for d in drafts]
         return {"kind": "proposed",
-                "note": (reply or {}).get("note") or f"Proposed: {drafts[0]['title']}",
+                "note": (reply or {}).get("note") or f"Proposed: {', '.join(titles)}",
                 "draft_id": drafts[0]["id"],
+                # ALL drafts from this action — the caller re-tags every one of
+                # them (a multi-proposal action must not leak siblings into the
+                # drafts inbox), and the card renders the full set.
+                "draft_ids": [d["id"] for d in drafts],
+                "draft_count": len(drafts),
                 "draft_kind": drafts[0].get("kind", "new"),
-                "draft_title": drafts[0]["title"]}
+                "draft_title": drafts[0]["title"],
+                "draft_titles": titles}
     if reply and reply["action"] == "suggest_chat":
         return {"kind": "chat_suggestion",
                 "note": reply.get("note") or "This looks like a conversation starter."}

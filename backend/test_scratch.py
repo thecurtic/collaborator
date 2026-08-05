@@ -244,3 +244,73 @@ def test_unsupported_media_action():
     assert out["action_result"]["kind"] == "unsupported"
     assert out["status"] == "done"
     print("✓ image hold-send: honest unsupported (vision pipeline is future work)")
+
+
+def test_multi_proposal_retags_all_drafts():
+    """One hold-send proposing MULTIPLE notes: every sibling gets the
+    scratch-{id} run_id (none leak into the drafts inbox)."""
+    c, cfg, dbp = _fresh()
+    main.get_embedding = lambda text: None
+    item = c.post("/api/scratch", json={
+        "content": "dinner with Leo on Nov 23 at 7pm"}).json()["item"]
+
+    def call(name, arguments):
+        return [{"tool_calls": [{"index": 0, "id": "x", "type": "function",
+                                 "function": {"name": name,
+                                              "arguments": json.dumps(arguments)}}]}]
+    rounds = [
+        call("propose_note", {"title": "Leo", "tags": ["social-graph"],
+                              "body": "Dinner companion."}),
+        call("propose_note", {"title": "Dinner with Leo", "tags": ["event"],
+                              "start": "2026-11-23T19:00",
+                              "people": ["Leo"], "body": "Dinner."}),
+        [{"content": '{"action": "proposed", "note": "Person + event."}'}],
+    ]
+    orig = inference._iter_stream_events
+    inference._iter_stream_events = _scripted_generate(rounds)
+    try:
+        out = c.post(f"/api/scratch/{item['id']}/act").json()["item"]
+    finally:
+        inference._iter_stream_events = orig
+
+    assert out["action_result"]["draft_count"] == 2
+    conn = sqlite3.connect(dbp)
+    run_ids = [r[0] for r in conn.cursor().execute(
+        "SELECT run_id FROM note_drafts").fetchall()]
+    conn.close()
+    assert run_ids == [f"scratch-{item['id']}"] * 2      # NO leaked siblings
+    # The card fetch (by run_id) returns the full set.
+    drafts = c.get("/api/notes/drafts",
+                   params={"run_id": f"scratch-{item['id']}"}).json()["drafts"]
+    assert {d["title"] for d in drafts} == {"Leo", "Dinner with Leo"}
+    print("✓ multi-proposal action: all siblings scratch-tagged, none leak")
+
+
+def test_startless_event_cannot_pass_approval():
+    """Defense in depth: whatever entry path produced an event draft without a
+    start, approval refuses it (a start-less event is calendar-invisible)."""
+    c, cfg, dbp = _fresh()
+    # REST creation now validates too:
+    r = c.post("/api/notes/drafts", json={
+        "title": "Mystery meetup", "body": "Sometime soon.", "tags": ["event"]})
+    assert r.status_code == 422 and "start" in r.json()["detail"]
+
+    # Simulate a draft that slipped in through an older/unknown path.
+    conn = sqlite3.connect(dbp)
+    import db as _db
+    draft = _db.create_note_draft(conn, "Mystery meetup", "Sometime soon.",
+                                  tags=["event"])
+    conn.close()
+    r = c.post(f"/api/notes/drafts/{draft['id']}/approve")
+    assert r.status_code == 422 and "start" in r.json()["detail"]
+
+    # Repair in review (the frontend's flow), then approval works.
+    r = c.patch(f"/api/notes/drafts/{draft['id']}",
+                json={"fields": {"start": "2026-11-23T19:00"}})
+    assert r.status_code == 200
+    assert c.post(f"/api/notes/drafts/{draft['id']}/approve").status_code == 200
+    conn = sqlite3.connect(dbp)
+    note = notes_index.get_note_by_title(conn, "Mystery meetup")
+    conn.close()
+    assert note["event_start"].startswith("2026-11-23T19:00")
+    print("✓ start-less event: blocked at REST create AND at approval; repairable")

@@ -1807,7 +1807,9 @@ def generate_with_tools(
             yield {"type": "error", "detail": f"LLM request failed: {e}"}
             return
         except Exception as e:
+            import traceback
             print(f"LLM round error: {e} — message shape: {_message_shape(messages)}")
+            traceback.print_exc()
             yield {"type": "error", "detail": f"Error during generation: {e}"}
             return
 
