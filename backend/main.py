@@ -1867,10 +1867,16 @@ def _stream_turn_response(
                 yield f"data: {json.dumps({'type': 'unfollowed_links', 'links': denied})}\n\n"
         else:
             try:
-                for content in stream_llm_tokens(message, context_list, mode=mode,
-                                                 extra_system=dynamic_context):
-                    full_response += content
-                    yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+                for ev in stream_llm_tokens(message, context_list, mode=mode,
+                                            extra_system=dynamic_context,
+                                            include_reasoning=True):
+                    if isinstance(ev, str):          # legacy/simple producers
+                        ev = {"type": "token", "content": ev}
+                    if ev["type"] == "token":
+                        full_response += ev["content"]
+                    # 'reasoning' events stream to the UI but are NEVER part of
+                    # the saved response.
+                    yield f"data: {json.dumps(ev)}\n\n"
             except Exception as e:
                 yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
                 return

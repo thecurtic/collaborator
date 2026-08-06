@@ -274,3 +274,44 @@ if __name__ == "__main__":
     test_embed_texts_backend_dispatch()
     test_synthesis_prompt_loads_from_file()
     print("\n✓ All recall tests passed!")
+
+
+def test_reasoning_streams_but_never_persists():
+    """Chain-of-thought flows to the UI as 'reasoning' events and is NEVER part
+    of the saved assistant turn (display-only; solves proxy 524s too)."""
+    import inference, json as _json
+    rounds = [[
+        {"reasoning_content": "Let me think about this carefully..."},
+        {"reasoning_content": " The answer is clearly Paris."},
+        {"content": "Paris."},
+    ]]
+    orig = inference._iter_stream_events
+    inference._iter_stream_events = _scripted_stream(rounds)
+    try:
+        c = TestClient(main.app)
+        r = c.post("/api/messages", json={"message": "capital of France?",
+                                          "tools": True})
+        events = [_json.loads(l[6:]) for l in r.text.splitlines()
+                  if l.startswith("data: ")]
+        reasoning = "".join(e["content"] for e in events if e["type"] == "reasoning")
+        assert "think about this carefully" in reasoning
+        tokens = "".join(e["content"] for e in events if e["type"] == "token")
+        assert tokens == "Paris."
+
+        done = next(e for e in events if e["type"] == "done")
+        conn = __import__("sqlite3").connect(os.environ["DB_PATH"])
+        saved = db.get_turn_by_id(conn, done["id"])["content"]
+        conn.close()
+        assert saved == "Paris."                      # CoT never persisted
+        assert "carefully" not in saved
+
+        # Config off -> no reasoning events (heartbeat path covers keepalive).
+        cfg = config.get_config()["inference"]
+        cfg["stream_reasoning"] = False
+        inference._iter_stream_events = _scripted_stream(rounds)
+        r2 = c.post("/api/messages", json={"message": "again?", "tools": True})
+        assert '"type": "reasoning"' not in r2.text
+        cfg["stream_reasoning"] = True
+    finally:
+        inference._iter_stream_events = orig
+    print("✓ reasoning: streamed live, config-gated, never in the saved turn")

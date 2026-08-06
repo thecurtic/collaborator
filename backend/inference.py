@@ -281,6 +281,7 @@ def stream_llm_tokens(
     mode: Optional[str] = None,
     recall: Optional[str] = None,
     extra_system: Optional[str] = None,
+    include_reasoning: bool = False,
 ):
     """Yield tokens from the local LLM endpoint as they arrive (true streaming).
 
@@ -342,12 +343,16 @@ def stream_llm_tokens(
                     delta = choice.get("delta", {})
                     if delta.get("reasoning_content"):
                         saw_reasoning = True
+                        if include_reasoning and _stream_reasoning_enabled():
+                            yield {"type": "reasoning",
+                                   "content": delta["reasoning_content"]}
                     if choice.get("finish_reason") == "length":
                         hit_length = True
                     content = delta.get("content", "")
                     if content:
                         emitted_any = True
-                        yield content
+                        yield ({"type": "token", "content": content}
+                               if include_reasoning else content)
 
         # Reasoning models can burn the entire max_tokens budget on thinking
         # and emit no answer at all — the model "works hard" and the app shows
@@ -356,10 +361,12 @@ def stream_llm_tokens(
             print("Warning: model produced reasoning but no answer "
                   f"(finish_reason=length: {hit_length}) — raise "
                   "inference.max_tokens (thinking spends the same budget)")
-            yield ("[The model spent its entire response budget on internal "
-                   "reasoning and produced no answer. Try again, or raise "
-                   "inference.max_tokens — reasoning models need thinking "
-                   "headroom beyond the answer length.]")
+            fallback = ("[The model spent its entire response budget on internal "
+                        "reasoning and produced no answer. Try again, or raise "
+                        "inference.max_tokens — reasoning models need thinking "
+                        "headroom beyond the answer length.]")
+            yield ({"type": "token", "content": fallback}
+                   if include_reasoning else fallback)
 
     except requests.exceptions.Timeout:
         raise ConnectionError("LLM endpoint timeout after 60 seconds")
@@ -1718,6 +1725,19 @@ def _iter_stream_events(payload: Dict):
             yield choice, (choice.get("delta") or {})
 
 
+# Reasoning streaming: forwarded as its own event type so the UI can show a
+# live "thinking" pane. NEVER accumulated into saved content and never fed
+# back into any prompt — display-only. Also keeps bytes flowing during long
+# thinks (Cloudflare kills byte-silent connections at ~100s -> 524); when
+# disabled, a periodic heartbeat status covers that instead.
+_REASONING_FLUSH_CHARS = 80
+_HEARTBEAT_SECONDS = 15
+
+
+def _stream_reasoning_enabled() -> bool:
+    return bool(_get_config().get("inference", {}).get("stream_reasoning", True))
+
+
 def generate_with_tools(
     message: str,
     context_turns: Optional[List[Dict]],
@@ -1778,6 +1798,9 @@ def generate_with_tools(
         first_delta_at = None
         saw_reasoning = False
         hit_length = False
+        stream_reasoning = _stream_reasoning_enabled()
+        reasoning_buf = ""
+        last_heartbeat = time.monotonic()
         try:
             for choice, delta in _iter_stream_events(payload):
                 if first_delta_at is None:
@@ -1787,6 +1810,17 @@ def generate_with_tools(
                           f"(round {round_index}, ~{sum(len(str(m.get('content') or '')) for m in messages) // 4} prompt tokens est)")
                 if delta.get("reasoning_content"):
                     saw_reasoning = True
+                    if stream_reasoning:
+                        reasoning_buf += delta["reasoning_content"]
+                        if len(reasoning_buf) >= _REASONING_FLUSH_CHARS:
+                            yield {"type": "reasoning", "content": reasoning_buf}
+                            reasoning_buf = ""
+                    else:
+                        now = time.monotonic()
+                        if emit_status and now - last_heartbeat > _HEARTBEAT_SECONDS:
+                            last_heartbeat = now
+                            yield {"type": "status", "label": "Thinking…",
+                                   "heartbeat": True}
                 if choice.get("finish_reason") == "length":
                     hit_length = True
                 content = delta.get("content")
@@ -1816,6 +1850,8 @@ def generate_with_tools(
             yield {"type": "error", "detail": f"Error during generation: {e}"}
             return
 
+        if reasoning_buf:
+            yield {"type": "reasoning", "content": reasoning_buf}
         # Withheld ordinary prose (pre-marker text, or a short whole message) is
         # always delivered.
         tail = guard.flush_pending()

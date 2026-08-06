@@ -67,6 +67,11 @@ def load_config() -> dict:
             # proposals, notes synthesis) uses the chat model; utility covers
             # ephemeral labels/summaries only.
             "utility_model": None,
+            # Stream the model's chain-of-thought to the UI as 'reasoning' SSE
+            # events (display-only — never saved, never re-prompted). Also
+            # keeps proxies from timing out during long thinks; when off, a
+            # periodic heartbeat status covers that instead.
+            "stream_reasoning": True,
             "temperature": 0.7,
             # Reasoning models (MiniMax) spend this same budget on thinking
             # BEFORE the answer — 2048 starves them into empty responses.
