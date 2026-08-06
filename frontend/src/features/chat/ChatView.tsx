@@ -1,4 +1,12 @@
-import { Brain, Link as LinkIcon, Loader2, NotebookPen, X } from 'lucide-react';
+import {
+  Brain,
+  ChevronDown,
+  ChevronRight as ChevronRightIcon,
+  Link as LinkIcon,
+  Loader2,
+  NotebookPen,
+  X,
+} from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/Markdown';
 import { useModalA11y } from '@/lib/useModalA11y';
@@ -29,6 +37,49 @@ interface ChatViewProps {
   /** MUST clear draftSeed — ChatView remounts per chat, so an unconsumed
       seed would prefill every subsequent chat. */
   onDraftSeedConsumed?: () => void;
+}
+
+/**
+ * Live chain-of-thought pane (545e1a5) — display-only, never part of the
+ * transcript; the hook discards it when the stream settles. Collapsed by
+ * default; expanded it tails the newest thinking.
+ */
+function ThinkingPane({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [open, text]);
+
+  return (
+    <div className="mb-2 rounded-md border border-border/60 bg-muted/30">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground"
+      >
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <ChevronRightIcon className="h-3.5 w-3.5 shrink-0" />
+        )}
+        <Brain className="h-3.5 w-3.5 shrink-0" />
+        Thinking…
+      </button>
+      {open && (
+        <div
+          ref={scrollRef}
+          className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words border-t border-border/60 px-2.5 py-2 text-xs italic leading-relaxed text-muted-foreground"
+        >
+          {text}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Plain-text export of a run of turns (for sharing the context window). */
@@ -101,6 +152,7 @@ export function ChatView({
     contextWindow,
     streaming,
     recall,
+    reasoning,
     activity,
     proposedDrafts,
     clearProposedDrafts,
@@ -447,6 +499,8 @@ export function ChatView({
               {recall && debug && <RecallCard recall={recall} />}
               <div className="flex w-full justify-start">
                 <div className="w-full rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:text-sm">
+                  {/* Chain-of-thought (display-only; discarded on done). */}
+                  {reasoning && <ThinkingPane text={reasoning} />}
                   {/* Live tool activity: one row per call, resolved in place
                       (✓ n results / ∅ / ✕ reason). Persists while the answer
                       streams below it. */}

@@ -139,6 +139,12 @@ export interface StreamHandlers {
   onToken: (chunk: string) => void;
   /** Synthesized recall block injected into context. */
   onRecall?: (block: RecallBlock) => void;
+  /**
+   * Chain-of-thought deltas (545e1a5) — display-only. Never persisted
+   * server-side and never part of the transcript; discard when the reply
+   * completes.
+   */
+  onReasoning?: (chunk: string) => void;
   /** Tool activity: starts and outcomes ("Searching…" → "✓ 5 results"). */
   onStatus?: (evt: ToolStatusEvent) => void;
   /** Drafts the model proposed via propose_note (pending in the inbox). */
@@ -171,7 +177,8 @@ async function consumeStream(
   res: Response,
   handlers: StreamHandlers,
 ): Promise<{ text: string; done: Record<string, unknown> }> {
-  const { onToken, onRecall, onStatus, onDrafts, onUnfollowedLinks } = handlers;
+  const { onToken, onRecall, onReasoning, onStatus, onDrafts, onUnfollowedLinks } =
+    handlers;
   const contentType = res.headers.get('content-type') ?? '';
   if (!contentType.includes('text/event-stream')) {
     const data = (await res.json()) as ApiSendMessageResponse;
@@ -194,7 +201,13 @@ async function consumeStream(
       // 9aee10b event (old `recall` kept for pre-tool-loop backends).
       // toRecallBlock guards every field — SSE payloads are unvalidated.
       onRecall?.(toRecallBlock(evt as unknown as ApiRecall));
+    } else if (evt.type === 'reasoning') {
+      // Display-only chain-of-thought (545e1a5); also the stream keepalive.
+      if (typeof evt.content === 'string') onReasoning?.(evt.content);
     } else if (evt.type === 'status') {
+      // Keepalive heartbeats (stream_reasoning=false mode) are not tool
+      // activity — rendering them would add a junk row every 15s.
+      if (evt.heartbeat === true) return;
       // Tool activity: start events (what it's doing) and outcome events
       // (how it went) — discriminated by the presence of `outcome`.
       const str = (k: string) =>

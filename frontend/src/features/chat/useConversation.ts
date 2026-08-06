@@ -71,6 +71,9 @@ export function useConversation(reloadSignal: number) {
   // The LIVE recall block during a send (shown in the streaming overlay). Once the
   // turn commits, the persisted block comes back from the tree (node.recall).
   const [recall, setRecall] = useState<RecallBlock | null>(null);
+  // Display-only chain-of-thought for the in-flight reply (545e1a5). Never
+  // part of the transcript — discarded when the stream settles.
+  const [reasoning, setReasoning] = useState('');
   // Live tool activity feed for the in-flight turn: a row per tool call,
   // resolved in place by its outcome event. Cleared each turn.
   const [activity, setActivity] = useState<ToolActivity[]>([]);
@@ -210,6 +213,7 @@ export function useConversation(reloadSignal: number) {
       setSending(true);
       setError(null);
       setRecall(null);
+      setReasoning('');
       setActivity([]);
       activityRef.current = [];
       setProposedDrafts([]);
@@ -221,6 +225,7 @@ export function useConversation(reloadSignal: number) {
             onToken: (c) =>
               setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
             onRecall: (block) => setRecall(block),
+            onReasoning: (c) => setReasoning((prev) => prev + c),
             onStatus: applyToolEvent,
             onDrafts: (drafts) =>
               setProposedDrafts((prev) => [...prev, ...drafts]),
@@ -260,6 +265,7 @@ export function useConversation(reloadSignal: number) {
         setActivity([]);
         // Persisted recall now comes from the tree (node.recall) on reload.
         setRecall(null);
+        setReasoning(''); // display-only — never survives the stream
       }
     },
     [applyTree, selectPathTo, applyToolEvent],
@@ -521,6 +527,7 @@ export function useConversation(reloadSignal: number) {
     contextWindow,
     streaming,
     recall,
+    reasoning,
     activity,
     proposedDrafts,
     clearProposedDrafts,
