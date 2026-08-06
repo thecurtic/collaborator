@@ -1658,12 +1658,37 @@ def _parse_textual_tool_calls(text: str, known_names) -> List[Dict]:
             return []
         args = fn.get("arguments") or fn.get("parameters") or fn.get("args") or {}
         if isinstance(args, str):
-            try:
-                args = _json.loads(args)
-            except Exception:
-                args = {}
+            args = _parse_tool_args(args)[0] or {}
         calls.append({"name": name, "args": args if isinstance(args, dict) else {}})
     return calls
+
+
+def _parse_tool_args(raw):
+    """Parse a tool-call arguments string. Returns (args_dict_or_None, error).
+
+    Streamed argument JSON sometimes arrives malformed — most commonly the
+    same object duplicated back-to-back ('{"url":...}{"url":...}') when a
+    provider re-sends its final delta. Executing with {} on parse failure is
+    worse than failing: for tools whose no-args mode is valid (transcribe_video
+    lists transcripts), the model gets a healthy-looking wrong result with no
+    error to react to, and retries forever. Salvage the first complete object
+    when possible; otherwise return the error for the tool result."""
+    import json
+    s = (raw or "").strip()
+    if not s:
+        return {}, None
+    try:
+        obj = json.loads(s)
+        return (obj, None) if isinstance(obj, dict) else (None, f"tool arguments must be a JSON object, got: {s[:200]}")
+    except Exception:
+        pass
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(s)
+        if isinstance(obj, dict):
+            return obj, None
+    except Exception:
+        pass
+    return None, f"tool arguments were not valid JSON: {s[:200]}"
 
 
 class _StreamGuard:
@@ -1952,16 +1977,22 @@ def generate_with_tools(
             } for i, s in enumerate(ordered)],
         })
         for i, s in enumerate(ordered):
-            try:
-                args = json.loads(s["args"]) if s["args"].strip() else {}
-            except Exception:
+            args, args_error = _parse_tool_args(s["args"])
+            if args is None:
                 args = {}
+                print(f"tool-args parse failure for {s['name']}: "
+                      f"len={len(s['args'])}")
             if emit_status:
                 yield {"type": "status", "tool": s["name"],
                        "label": _tool_status_label(s["name"], args),
                        **_tool_status_fields(s["name"], args)}
             try:
-                result = execute_tool(s["name"], args)
+                if args_error:
+                    result = json.dumps({"error": args_error +
+                                         " — re-send the call with valid "
+                                         "JSON arguments."})
+                else:
+                    result = execute_tool(s["name"], args)
             except Exception as e:
                 result = json.dumps({"error": str(e)})
             if not isinstance(result, str):
