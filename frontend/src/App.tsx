@@ -247,20 +247,26 @@ function AppShell() {
   // call's conversation (a call started from "New chat" would otherwise dump
   // the user back on an empty chat instead of what they just talked about).
   const closeCall = useCallback(() => {
-    setCallOpen(false);
-    setCallIntro(null);
-    if (introBranchRef.current) {
-      introBranchRef.current = false;
-      setBranchTarget(null); // never-spoken call-button fork must not linger
-    }
     const leaf = callLeafRef.current;
     callLeafRef.current = null;
     // Catch-all: drafts proposed in aborted voice turns never emit an event
     // the client sees — recount on hang-up so the badge can't go stale.
     void refreshDrafts();
-    void reload().then(() => {
-      if (leaf != null) selectPathTo(leaf);
-    });
+    // Land the chat BEFORE lifting the call screen: reload + select while
+    // still covered, so the transcript is already sitting at the bottom the
+    // moment the call closes (no visible jump-then-scroll).
+    void reload()
+      .then(() => {
+        if (leaf != null) selectPathTo(leaf);
+      })
+      .finally(() => {
+        setCallOpen(false);
+        setCallIntro(null);
+        if (introBranchRef.current) {
+          introBranchRef.current = false;
+          setBranchTarget(null); // never-spoken call-button fork must not linger
+        }
+      });
   }, [reload, selectPathTo, refreshDrafts]);
 
   // Branching in a call is a graduation signal too (same as typed branches).
@@ -613,6 +619,7 @@ function AppShell() {
             }}
             draftSeed={chatDraft}
             onDraftSeedConsumed={() => setChatDraft(null)}
+            onConversationGone={() => setChatOpen(false)}
           />
         ) : tab === 'mind' ? (
           <NotesView

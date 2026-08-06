@@ -37,6 +37,8 @@ interface ChatViewProps {
   /** MUST clear draftSeed — ChatView remounts per chat, so an unconsumed
       seed would prefill every subsequent chat. */
   onDraftSeedConsumed?: () => void;
+  /** The whole conversation was just deleted — return to the list. */
+  onConversationGone: () => void;
 }
 
 /**
@@ -143,6 +145,7 @@ export function ChatView({
   onStartCallFromTurn,
   draftSeed = null,
   onDraftSeedConsumed,
+  onConversationGone,
 }: ChatViewProps) {
   const {
     path,
@@ -203,6 +206,13 @@ export function ChatView({
   const programmaticRef = useRef(false);
 
   const scrollToBottom = (smooth: boolean) => {
+    // Long jumps (e.g. a call's worth of turns landing at once) animate as a
+    // sickening fly-through — go instant beyond ~1.5 screens of distance.
+    const c = scrollRef.current;
+    if (smooth && c) {
+      const distance = c.scrollHeight - c.scrollTop - c.clientHeight;
+      if (distance > c.clientHeight * 1.5) smooth = false;
+    }
     programmaticRef.current = true;
     bottomRef.current?.scrollIntoView({
       behavior: smooth ? 'smooth' : 'auto',
@@ -329,8 +339,17 @@ export function ChatView({
 
   // No confirm by design. subtree=true (delete-button hold + swipe down)
   // removes the turn and everything downstream; false reparents children up.
+  // Deleting the WHOLE conversation returns to the list — otherwise the
+  // empty selection silently falls back to the newest chat, which reads as
+  // "my delete revealed someone else's conversation".
   const handleDelete = (turnId: number, subtree: boolean) => {
+    const root = path[0]?.node;
+    const wipesConversation =
+      root != null &&
+      turnId === root.id &&
+      (subtree || root.children.length === 0);
     void remove(turnId, subtree);
+    if (wipesConversation) onConversationGone();
   };
 
   // A without-context branch is a fresh chat: show only from its start (the most
