@@ -176,6 +176,34 @@ export function WebSearchView({
 
           {result && (
             <>
+              {/* Engine health (41f2a61): silent when everything answered; a
+                  degraded search must be visible — the instance once ran
+                  weeks on Brave alone and nothing showed it. */}
+              {result.enginesFailed.length > 0 && (
+                <details className="mx-4 mt-3 rounded-md bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-700">
+                  <summary className="cursor-pointer select-none font-medium">
+                    Partial coverage — {result.enginesFailed.length}{' '}
+                    {result.enginesFailed.length === 1 ? 'engine' : 'engines'}{' '}
+                    down
+                  </summary>
+                  <ul className="mt-1 space-y-0.5">
+                    {result.enginesFailed.map((f) => (
+                      <li key={f.engine}>
+                        {f.engine}
+                        {f.reason ? ` — ${f.reason}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                  {Object.keys(result.enginesResponded).length > 0 && (
+                    <p className="mt-1 opacity-80">
+                      Answered:{' '}
+                      {Object.entries(result.enginesResponded)
+                        .map(([e, n]) => `${e} (${n})`)
+                        .join(', ')}
+                    </p>
+                  )}
+                </details>
+              )}
               {/* Direct answers / infoboxes, when SearXNG has them. */}
               {result.answers.map((a, i) => (
                 <div

@@ -363,6 +363,11 @@ export interface ApiWebSearchResponse {
   results: ApiWebSearchResult[];
   answers?: string[];
   infoboxes?: { title?: string; content?: string }[];
+  /** 41f2a61: per-engine coverage — degraded search should be visible. */
+  engines?: {
+    responded?: Record<string, number>;
+    failed?: { engine?: string; reason?: string }[];
+  };
 }
 
 /** Per-model detail (f7e235b) — only from LM Studio endpoints. */

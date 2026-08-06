@@ -825,6 +825,10 @@ class HttpCollaboratorApi implements CollaboratorApi {
         title: b.title ?? '',
         content: b.content ?? '',
       })),
+      enginesResponded: res.engines?.responded ?? {},
+      enginesFailed: (res.engines?.failed ?? [])
+        .filter((f) => typeof f.engine === 'string' && f.engine)
+        .map((f) => ({ engine: f.engine as string, reason: f.reason ?? null })),
     };
   }
 

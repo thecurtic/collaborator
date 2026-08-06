@@ -391,6 +391,13 @@ export interface WebSearch {
   /** SearXNG direct answers (sometimes present). */
   answers: string[];
   infoboxes: { title: string; content: string }[];
+  /**
+   * Engine health (41f2a61): who answered (name → result count) and who
+   * failed with why — a search silently reduced to one engine is a degraded
+   * worldview the UI must surface.
+   */
+  enginesResponded: Record<string, number>;
+  enginesFailed: { engine: string; reason: string | null }[];
 }
 
 /**
