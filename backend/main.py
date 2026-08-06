@@ -2842,7 +2842,8 @@ async def manual_web_search(
     - **limit**: max results, 1-20 (default: tools.web_search.results)
 
     Returns {"query", "results": [{title,url,snippet,engine}], "answers"?,
-    "infoboxes"?}. 503 when search is unconfigured; 502 when the search backend
+    "infoboxes"?, "engines": {responded: {name: count}, failed: [{engine,
+    reason}]}}. 503 when search is unconfigured; 502 when the search backend
     fails (e.g. all engines rate-limited) with the reason in detail.
     """
     _require_auth(passkey)
