@@ -15,7 +15,12 @@ import { getToolsEnabled } from '@/features/settings/uiPrefs';
 import { currentLocation } from '@/lib/location';
 import { saveTurnSources } from './sourcesStore';
 import { foldToolEvent } from './toolActivity';
-import { removeNode, renameNode, setSubtreeState } from './treeEdits';
+import {
+  removeNode,
+  renameNode,
+  setNodeTitle,
+  setSubtreeState,
+} from './treeEdits';
 import {
   CONTINUE,
   VIRTUAL_ROOT,
@@ -545,6 +550,12 @@ export function useConversation(reloadSignal: number) {
     renameTurn,
     reload: load,
     clearError: useCallback(() => setError(null), []),
+    /** Apply a regenerated LLM title locally (response = source of truth). */
+    setTitleLocal: useCallback(
+      (rootId: number, title: string) =>
+        applyTree(setNodeTitle(treeRef.current, rootId, title)),
+      [applyTree],
+    ),
   };
 }
 

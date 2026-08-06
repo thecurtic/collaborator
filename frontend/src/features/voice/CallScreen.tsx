@@ -3,6 +3,7 @@ import {
   Check,
   Loader2,
   Mic,
+  NotebookPen,
   PhoneOff,
   RotateCcw,
   Settings as SettingsIcon,
@@ -37,6 +38,8 @@ interface CallScreenProps {
   onLeafChanged?: (leafId: number) => void;
   /** Something to do before the first listen (typed draft / read a reply). */
   intro?: CallIntro | null;
+  /** A note draft landed during this call — the app refreshes the badge. */
+  onDraftsProposed?: () => void;
   /** Open the settings sheet on top of the call (engine/voice/debug toggles). */
   onOpenSettings?: () => void;
 }
@@ -177,11 +180,13 @@ export function CallScreen({
   onBranchCreated,
   onLeafChanged,
   intro = null,
+  onDraftsProposed,
   onOpenSettings,
 }: CallScreenProps) {
   const {
     phase,
     reasoning,
+    draftCount,
     partial,
     transcript,
     speakingId,
@@ -205,6 +210,7 @@ export function CallScreen({
     onBranchCreated,
     onLeafChanged,
     intro,
+    onDraftsProposed,
   );
   useWakeLock(open); // keep the screen on for the whole call
   const showDebug = useDebugEnabled();
@@ -310,6 +316,17 @@ export function CallScreen({
               </div>
             </div>
           </div>
+        )}
+        {/* Notes proposed during this call — the spoken announcement is
+            lossy (barge-in eats it), so this chip is the durable signal. */}
+        {draftCount > 0 && (
+          <p className="flex items-center gap-1.5 pt-1 text-xs text-primary">
+            <NotebookPen className="h-3.5 w-3.5 shrink-0" />
+            {draftCount === 1
+              ? 'Note proposed'
+              : `${draftCount} notes proposed`}{' '}
+            — review in Mind after the call
+          </p>
         )}
         {/* Live tool activity for this spoken turn (searches, page reads) —
             so you can SEE it working instead of sitting in silence. */}

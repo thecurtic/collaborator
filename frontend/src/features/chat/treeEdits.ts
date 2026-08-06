@@ -87,6 +87,19 @@ function mapNode(
   return roots ? { ...tree, roots } : tree;
 }
 
+/**
+ * POST /api/turns/{id}/title — apply the returned LLM title locally. The
+ * response is the source of truth; an immediate refetch can race the
+ * backend's write and clobber the list with the stale title.
+ */
+export function setNodeTitle(
+  tree: ConversationTree,
+  id: number,
+  title: string,
+): ConversationTree {
+  return mapNode(tree, id, (n) => ({ ...n, title: title || null }));
+}
+
 /** PATCH /api/turns/{id}/name — empty string clears the name. */
 export function renameNode(
   tree: ConversationTree,

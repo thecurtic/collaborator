@@ -89,6 +89,8 @@ export function useCall(
   onBranchCreated?: (parentTurnId: number) => void,
   onLeafChanged?: (leafId: number) => void,
   intro?: CallIntro | null,
+  /** A note draft landed during this call — the app refreshes the badge. */
+  onDraftsProposed?: () => void,
 ) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
   // Live chain-of-thought for the in-flight reply (545e1a5) — display-only,
@@ -122,6 +124,11 @@ export function useCall(
   onLeafChangedRef.current = onLeafChanged;
   const introRef = useRef(intro);
   introRef.current = intro;
+  const onDraftsProposedRef = useRef(onDraftsProposed);
+  onDraftsProposedRef.current = onDraftsProposed;
+  // Notes proposed during this call — voice can't rely on the spoken
+  // announcement (barge-in cuts it off), so the UI shows a persistent chip.
+  const [draftCount, setDraftCount] = useState(0);
 
   useEffect(() => {
     if (!open) return;
@@ -148,6 +155,7 @@ export function useCall(
         prev.map((t) => (t.id === id ? { ...t, text } : t)),
       );
     setTranscript([]);
+    setDraftCount(0);
     setSpeakingId(null);
     setSpokenChars(0);
     setSpeakBase(0);
@@ -285,6 +293,15 @@ export function useCall(
     // Display-only chain-of-thought ticker (never spoken, never persisted).
     const onReasoning = (c: string) => {
       if (active) setReasoning((prev) => prev + c);
+    };
+
+    // Proposed drafts: count them for the call UI and poke the app badge —
+    // the spoken announcement alone is lossy (interrupts eat it), which left
+    // drafts invisible until an unrelated refresh hours later.
+    const onDrafts = (drafts: unknown[]) => {
+      if (!active || drafts.length === 0) return;
+      setDraftCount((n) => n + drafts.length);
+      onDraftsProposedRef.current?.();
     };
 
     const listen = async () => {
@@ -476,7 +493,7 @@ export function useCall(
               location: await currentLocation(),
               ...(pb.withContext ? {} : { contextTurns: 0 }),
             },
-            { onToken, onReasoning, onStatus: onToolEvent },
+            { onToken, onReasoning, onStatus: onToolEvent, onDrafts },
             streamAbort.signal,
           );
           if (res.id != null) {
@@ -499,7 +516,7 @@ export function useCall(
             },
             // Other voice event rendering is server-side (spoken citations,
             // drafts announced verbally); tool activity shows in the call UI.
-            { onToken, onReasoning, onStatus: onToolEvent },
+            { onToken, onReasoning, onStatus: onToolEvent, onDrafts },
             streamAbort.signal,
           );
           if (res.id != null) {
@@ -700,6 +717,7 @@ export function useCall(
   return {
     phase,
     reasoning,
+    draftCount,
     partial,
     transcript,
     speakingId,

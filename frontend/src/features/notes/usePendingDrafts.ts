@@ -27,5 +27,17 @@ export function usePendingDrafts(enabled: boolean) {
     if (enabled) void refresh();
   }, [enabled, refresh]);
 
+  // Recount whenever the app returns to the foreground: drafts can appear
+  // with no client-side event (aborted voice turns, other devices, backend
+  // work finishing after a disconnect).
+  useEffect(() => {
+    if (!enabled) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [enabled, refresh]);
+
   return { count, refresh };
 }

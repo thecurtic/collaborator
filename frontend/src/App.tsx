@@ -172,7 +172,7 @@ function AppShell() {
     gate === 'open',
   );
 
-  const { reload, rootOfTurn, promote, selectPathTo } = convo;
+  const { reload, rootOfTurn, promote, selectPathTo, setTitleLocal } = convo;
 
   // Model-proposed drafts land in the inbox server-side — keep the badge live.
   useEffect(() => {
@@ -255,10 +255,13 @@ function AppShell() {
     }
     const leaf = callLeafRef.current;
     callLeafRef.current = null;
+    // Catch-all: drafts proposed in aborted voice turns never emit an event
+    // the client sees — recount on hang-up so the badge can't go stale.
+    void refreshDrafts();
     void reload().then(() => {
       if (leaf != null) selectPathTo(leaf);
     });
-  }, [reload, selectPathTo]);
+  }, [reload, selectPathTo, refreshDrafts]);
 
   // Branching in a call is a graduation signal too (same as typed branches).
   const handleCallBranched = useCallback(
@@ -324,8 +327,10 @@ function AppShell() {
       showNotice('Regenerating title…', 0);
       void api
         .regenerateTitle(rootId)
-        .then(async (title) => {
-          await reload();
+        .then((title) => {
+          // Apply the RESPONSE locally — an immediate refetch races the
+          // backend's write and can clobber the list with the stale title.
+          setTitleLocal(rootId, title);
           // A manual name always outranks the title (name ?? title ?? preview)
           // — surface that instead of looking like a no-op.
           const named = rootOfTurn(rootId)?.name;
@@ -344,7 +349,7 @@ function AppShell() {
           );
         });
     },
-    [reload, rootOfTurn, showNotice],
+    [reload, rootOfTurn, setTitleLocal, showNotice],
   );
 
   // Hold the chat title for conversation actions (rename/promote/synthesize).
@@ -546,6 +551,7 @@ function AppShell() {
           callLeafRef.current = id;
         }}
         intro={callIntro}
+        onDraftsProposed={() => void refreshDrafts()}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       {/* After CallScreen so it stacks on top when opened mid-call. */}
