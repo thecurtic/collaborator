@@ -320,7 +320,8 @@ def test_searxng_engine_failures_are_errors():
             def json(self): return {"results": [], "answers": []}
         inference.requests.get = lambda *a, **k: EmptyOK()
         out = inference.web_search_searxng("gibberishquery")
-        assert out == {"results": []}
+        assert out["results"] == [] and "error" not in out
+        assert out["engines"] == {"responded": {}, "failed": []}
     finally:
         inference.requests.get = orig
         cfg["tools"]["web_search"]["url"] = None

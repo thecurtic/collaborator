@@ -707,7 +707,10 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             "name": "fetch_url",
             "description": descs["fetch_url"],
             "parameters": {"type": "object", "properties": {
-                "url": {"type": "string", "description": "the http(s) URL to read"}},
+                "url": {"type": "string", "description": "the http(s) URL to read"},
+                "chunk": {"type": "integer",
+                          "description": "long pages are paged — pass 2, 3, … "
+                                         "to read past part 1"}},
                 "required": ["url"]}}})
     if avail.get("propose_note", True):
         schemas.append({"type": "function", "function": {
@@ -1077,6 +1080,15 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
         if name == "fetch_url":
             fcfg = tcfg.get("fetch_url", {}) or {}
             budget = fcfg.get("max_per_turn", 3)
+            try:
+                page_chunk = max(1, int(args.get("chunk") or 1))
+            except (TypeError, ValueError):
+                page_chunk = 1
+            # Re-reading further parts of an ALREADY-fetched page doesn't burn
+            # fetch budget (it's the same page).
+            if page_chunk > 1 and (args.get("url") or "").strip():
+                result = fetch_url(args.get("url", ""), chunk=page_chunk)
+                return json.dumps(result)
             if state["fetch_count"] >= budget:
                 denied_url = (args.get("url") or "").strip()
                 if denied_url:
@@ -1095,7 +1107,7 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 return json.dumps({"error": "cross-domain fetches are disabled "
                                             "(tools.fetch_url.same_domain_only); stay on "
                                             f"{state['first_fetch_host']}"})
-            result = fetch_url(args.get("url", ""))
+            result = fetch_url(args.get("url", ""), chunk=page_chunk)
             if "error" not in result:
                 state["fetch_count"] += 1
                 if state["first_fetch_host"] is None:

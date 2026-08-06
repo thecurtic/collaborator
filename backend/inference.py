@@ -998,12 +998,22 @@ def web_search_searxng(query: str, limit: Optional[int] = None) -> Dict:
             "content": (i.get("content") or "")[:300],
         } for i in data["infoboxes"][:1]]
 
-    # SearXNG reports per-engine failures (rate limits, CAPTCHAs) in-band with a
-    # 200 and an empty results list. Zero results with every engine down is a
-    # FAILURE, not "no results" — say so, or the model tells the user the web has
-    # nothing on the topic.
+    # Engine health rides EVERY response, not just total failures: a search
+    # silently reduced to one engine is a degraded worldview the model (and
+    # the UI) should know about and can mention.
+    responded: Dict = {}
+    for r in (data.get("results") or []):
+        for e in (r.get("engines") or [r.get("engine")]):
+            if e:
+                responded[e] = responded.get(e, 0) + 1
     unresponsive = [e for e in (data.get("unresponsive_engines") or [])
                     if isinstance(e, (list, tuple)) and e]
+    out["engines"] = {
+        "responded": responded,
+        "failed": [{"engine": e[0],
+                    "reason": e[1] if len(e) > 1 else "failed"}
+                   for e in unresponsive[:8]],
+    }
     if unresponsive and not out["results"] and not data.get("answers"):
         detail = "; ".join(f"{e[0]}: {e[1] if len(e) > 1 else 'failed'}"
                            for e in unresponsive[:6])
@@ -1141,7 +1151,27 @@ def _host_is_private(host: str) -> bool:
     return False
 
 
-def _fetch_via_webtool(url: str, fcfg: Dict) -> Dict:
+def _page_chunk(url, title, body, links, max_chars, chunk, via=None):
+    """Pageable slice of fetched page text — same pattern as transcripts.
+    Links ride only on part 1 (they repeat otherwise)."""
+    total = max(1, -(-len(body) // max_chars))
+    chunk = max(1, min(int(chunk or 1), total))
+    out = {"url": url, "title": title,
+           "content": body[(chunk - 1) * max_chars: chunk * max_chars],
+           "chunk": chunk, "total_chunks": total,
+           "truncated": chunk < total,
+           "links": links if chunk == 1 else []}
+    if via:
+        out["via"] = via
+    if total > 1:
+        out["note"] = (f"Part {chunk} of {total}. Call fetch_url again with "
+                       f"the same url and chunk={chunk + 1} for the next part."
+                       if chunk < total else
+                       f"Part {chunk} of {total} — this is the final part.")
+    return out
+
+
+def _fetch_via_webtool(url: str, fcfg: Dict, chunk: int = 1) -> Dict:
     """Fetch through the search VM's Playwright service (headless Chromium that
     egresses via the VM's VPN — the page never sees this machine's IP, and
     JS-rendered pages actually render).
@@ -1182,15 +1212,8 @@ def _fetch_via_webtool(url: str, fcfg: Dict) -> Dict:
     except requests.exceptions.RequestException as e:
         return {"error": f"fetch failed (webtool at {base}): {e}"}
 
-    truncated = len(body) > max_chars
-    return {
-        "url": final_url,
-        "title": title,
-        "content": body[:max_chars],
-        "truncated": truncated,
-        "links": links,
-        "via": "webtool",
-    }
+    return _page_chunk(final_url, title, body, links, max_chars, chunk,
+                       via="webtool")
 
 
 def screenshot_page(url: str, question: Optional[str] = None) -> Dict:
@@ -1272,7 +1295,7 @@ def screenshot_page(url: str, question: Optional[str] = None) -> Dict:
     return out
 
 
-def fetch_url(url: str) -> Dict:
+def fetch_url(url: str, chunk: int = 1) -> Dict:
     """Fetch a URL and return readable text + hyperlinks for the model.
 
     Config: tools.fetch_url {max_chars, timeout, allow_private, max_links,
@@ -1297,7 +1320,7 @@ def fetch_url(url: str) -> Dict:
                          "(enable tools.fetch_url.allow_private for tailnet/LAN URLs)"}
 
     if fcfg.get("webtool_url"):
-        return _fetch_via_webtool(url, fcfg)
+        return _fetch_via_webtool(url, fcfg, chunk=chunk)
 
     proxy = fcfg.get("proxy")
     try:
@@ -1311,13 +1334,13 @@ def fetch_url(url: str) -> Dict:
         response.raise_for_status()
 
         max_bytes = fcfg.get("max_bytes", 2_000_000)
-        chunks, size = [], 0
-        for chunk in response.iter_content(65536):
-            chunks.append(chunk)
-            size += len(chunk)
+        pieces, size = [], 0
+        for piece in response.iter_content(65536):   # NB: never shadow `chunk`
+            pieces.append(piece)
+            size += len(piece)
             if size > max_bytes:
                 break
-        raw = b"".join(chunks)
+        raw = b"".join(pieces)
     except requests.exceptions.RequestException as e:
         return {"error": f"fetch failed: {e}"}
 
@@ -1336,15 +1359,8 @@ def fetch_url(url: str) -> Dict:
         except Exception:
             pass  # fall back to the raw text
 
-    max_chars = fcfg.get("max_chars", 8000)
-    truncated = len(body) > max_chars
-    return {
-        "url": response.url,
-        "title": title,
-        "content": body[:max_chars],
-        "truncated": truncated,
-        "links": links,
-    }
+    return _page_chunk(response.url, title, body, links,
+                       fcfg.get("max_chars", 8000), chunk)
 
 
 # --- Tool-calling loop -------------------------------------------------------

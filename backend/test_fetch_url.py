@@ -464,3 +464,53 @@ if __name__ == "__main__":
     test_unfollowed_links_sse_event()
     test_tools_work_in_voice_mode()
     print("\n✓ All fetch_url tests passed!")
+
+
+def test_fetch_paging_and_engine_report():
+    from unittest.mock import patch, MagicMock
+    import inference
+
+    long_body = "".join(f"w{i:05d} " for i in range(3000))   # ~21k chars
+    html = f"<html><head><title>Long</title></head><body><p>{long_body}</p><a href='https://x.com/a'>a</a></body></html>"
+    def mock_get(*a, **k):
+        r = MagicMock()
+        r.raise_for_status = MagicMock()
+        r.iter_content = lambda n: iter([html.encode()])
+        r.headers = {"content-type": "text/html"}
+        r.encoding = "utf-8"
+        r.url = "https://ex.com/long"
+        return r
+
+    cfg = __import__("config").get_config()["tools"]["fetch_url"]
+    orig_max = cfg.get("max_chars", 8000)
+    cfg["max_chars"] = 5000
+    try:
+        with patch("requests.get", side_effect=mock_get):
+            p1 = inference.fetch_url("https://ex.com/long")
+            p2 = inference.fetch_url("https://ex.com/long", chunk=2)
+        assert p1["chunk"] == 1 and p1["total_chunks"] >= 4
+        assert p1["truncated"] and "chunk=2" in p1["note"]
+        assert p2["content"] != p1["content"]                 # actually advances
+        assert p1["links"] and p2["links"] == []              # links on part 1 only
+    finally:
+        cfg["max_chars"] = orig_max
+
+    # Engine health present on SUCCESSFUL searches too.
+    def mock_searx(*a, **k):
+        r = MagicMock()
+        r.raise_for_status = MagicMock()
+        r.json = lambda: {"results": [{"title": "t", "url": "https://r", "content": "s",
+                                       "engine": "brave"}],
+                          "unresponsive_engines": [["duckduckgo", "CAPTCHA"]]}
+        return r
+    wcfg = __import__("config").get_config()["tools"]["web_search"]
+    orig_url = wcfg.get("url")
+    wcfg["url"] = "http://searx.test"
+    try:
+        with patch("requests.get", side_effect=mock_searx):
+            out = inference.web_search_searxng("q")
+        assert out["engines"]["responded"] == {"brave": 1}
+        assert out["engines"]["failed"] == [{"engine": "duckduckgo", "reason": "CAPTCHA"}]
+    finally:
+        wcfg["url"] = orig_url
+    print("✓ fetch paging (distinct parts, links once) + always-on engine report")
