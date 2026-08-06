@@ -91,6 +91,9 @@ export function useCall(
   intro?: CallIntro | null,
 ) {
   const [phase, setPhase] = useState<CallPhase>('connecting');
+  // Live chain-of-thought for the in-flight reply (545e1a5) — display-only,
+  // never spoken, cleared whenever a new listen/speak segment starts.
+  const [reasoning, setReasoning] = useState('');
   const [partial, setPartial] = useState('');
   const [transcript, setTranscript] = useState<CallTurn[]>([]);
   // Read-along: which transcript turn is being spoken, and how far.
@@ -279,10 +282,16 @@ export function useCall(
       });
     };
 
+    // Display-only chain-of-thought ticker (never spoken, never persisted).
+    const onReasoning = (c: string) => {
+      if (active) setReasoning((prev) => prev + c);
+    };
+
     const listen = async () => {
       if (!active || !stream) return;
       finalizing = false;
       setPartial('');
+      setReasoning('');
       setActivity([]); // the next spoken turn gets a fresh feed
       activityRef.current = [];
       // Show a brief connecting state — don't signal "listening" until the socket
@@ -418,6 +427,7 @@ export function useCall(
       pushTurn('user', text); // user's turn joins the transcript
       const aid = pushTurn('assistant', ''); // grows as the reply streams
       setPartial('');
+      setReasoning('');
       setSpeakingId(aid);
       setSpeakBase(0);
       setSpokenChars(0);
@@ -466,7 +476,7 @@ export function useCall(
               location: await currentLocation(),
               ...(pb.withContext ? {} : { contextTurns: 0 }),
             },
-            { onToken, onStatus: onToolEvent },
+            { onToken, onReasoning, onStatus: onToolEvent },
             streamAbort.signal,
           );
           if (res.id != null) {
@@ -489,7 +499,7 @@ export function useCall(
             },
             // Other voice event rendering is server-side (spoken citations,
             // drafts announced verbally); tool activity shows in the call UI.
-            { onToken, onStatus: onToolEvent },
+            { onToken, onReasoning, onStatus: onToolEvent },
             streamAbort.signal,
           );
           if (res.id != null) {
@@ -540,6 +550,7 @@ export function useCall(
       transcriber = null;
       queue?.stop();
       setPartial('');
+      setReasoning('');
       setSpeakingId(turnId);
       setSpeakBase(base);
       setSpokenChars(0);
@@ -688,6 +699,7 @@ export function useCall(
 
   return {
     phase,
+    reasoning,
     partial,
     transcript,
     speakingId,

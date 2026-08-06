@@ -1,4 +1,5 @@
 import {
+  Brain,
   Check,
   Loader2,
   Mic,
@@ -180,6 +181,7 @@ export function CallScreen({
 }: CallScreenProps) {
   const {
     phase,
+    reasoning,
     partial,
     transcript,
     speakingId,
@@ -289,7 +291,26 @@ export function CallScreen({
             )}
           </span>
         </div>
-        <p className="text-xs text-muted-foreground">{LABELS[phase]}</p>
+        <p className="text-xs text-muted-foreground">
+          {/* Honest label: during a long think nothing is being generated
+              yet — say so instead of "Responding…". */}
+          {phase === 'responding' && reasoning && !speakingTurn?.text
+            ? 'Thinking…'
+            : LABELS[phase]}
+        </p>
+        {/* Live chain-of-thought ticker (545e1a5): bottom-anchored tail of
+            the newest thinking — glanceable, no interaction needed, never
+            spoken, cleared when the next segment starts. */}
+        {phase === 'responding' && reasoning && (
+          <div className="w-full max-w-md px-2 pt-1">
+            <div className="flex items-start gap-1.5 text-[11px] italic leading-snug text-muted-foreground">
+              <Brain className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70" />
+              <div className="flex max-h-16 min-w-0 flex-1 flex-col justify-end overflow-hidden whitespace-pre-wrap break-words">
+                {reasoning}
+              </div>
+            </div>
+          </div>
+        )}
         {/* Live tool activity for this spoken turn (searches, page reads) —
             so you can SEE it working instead of sitting in silence. */}
         {activity.length > 0 && (
