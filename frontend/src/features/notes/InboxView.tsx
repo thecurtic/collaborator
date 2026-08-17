@@ -16,6 +16,8 @@ import { cn } from '@/lib/utils';
 import type { Note, NoteDraft } from '@/domain/models';
 import { categoryOf } from './categories';
 import { formatEventRange } from './eventFields';
+import { invalidateTagVocabulary } from './tags';
+import { TagAssist } from './TagAssist';
 import {
   draftToFields,
   draftToPatch,
@@ -125,6 +127,7 @@ function DraftView({
         });
       }
       const res = await api.approveDraft(draft.id);
+      invalidateTagVocabulary(); // approved tags join the global set
       const rewrites =
         res.linksRewritten.length > 0
           ? ` (also updated ${res.linksRewritten.length} linking ${
@@ -200,6 +203,11 @@ function DraftView({
               placeholder="tags, comma, separated"
               aria-label="Tags"
               className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <TagAssist
+              tagsText={tagsText}
+              originalTags={draft.tags}
+              onComplete={setTagsText}
             />
             {/* Typed fields — a wrong value in a structured field is exactly
                 what review exists to catch (renders nothing for plain notes). */}

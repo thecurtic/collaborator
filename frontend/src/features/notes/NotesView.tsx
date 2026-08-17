@@ -29,7 +29,10 @@ import { GraphView } from './GraphView';
 import { InboxView } from './InboxView';
 import { PeopleView } from './PeopleView';
 import { ProfileView } from './ProfileView';
+import { ProjectsView } from './ProjectsView';
 import { StateListView } from './StateListView';
+import { invalidateTagVocabulary } from './tags';
+import { TagAssist } from './TagAssist';
 import { NoteBody } from './NoteBody';
 
 /** Which screen the Notes tab is showing. */
@@ -139,6 +142,7 @@ function NoteScreen({
     try {
       const res = await api.updateNote(note.title, patch);
       loadedTitle.current = res.note.title;
+      invalidateTagVocabulary(); // edited tags may extend the global set
       setNote(res.note);
       setDraft(null);
       if (res.linksRewritten.length > 0) {
@@ -266,6 +270,11 @@ function NoteScreen({
               placeholder="tags, comma, separated"
               aria-label="Tags"
               className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <TagAssist
+              tagsText={draft.tagsText}
+              originalTags={note.tags}
+              onComplete={(t) => setDraft({ ...draft, tagsText: t })}
             />
             <FieldsEditor
               category={categoryOf(note.tags)?.tag ?? null}
@@ -623,10 +632,12 @@ export function NotesView({
         <div className="min-h-0 flex-1">
           <CalendarView onOpenNote={openNote} />
         </div>
+      ) : !query.trim() && tagFilter === 'project' ? (
+        <div className="min-h-0 flex-1">
+          <ProjectsView onOpenNote={openNote} />
+        </div>
       ) : !query.trim() &&
-        (tagFilter === 'goal' ||
-          tagFilter === 'question' ||
-          tagFilter === 'project') ? (
+        (tagFilter === 'goal' || tagFilter === 'question') ? (
         <div className="min-h-0 flex-1">
           <StateListView category={tagFilter} onOpenNote={openNote} />
         </div>
