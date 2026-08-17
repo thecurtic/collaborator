@@ -404,8 +404,10 @@ export function NotesView({
   const [screen, setScreen] = useState<Screen>({ kind: 'list' });
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'semantic' | 'keyword'>('semantic');
-  // Reserved-category chip (5b3e491): null = all notes.
-  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  // The active lens. Mind's first page IS the lens picker (2026-08-17):
+  // null = picker; 'all' = whole vault; otherwise a category tag whose lens
+  // renders its own view. The old chip row is retired.
+  const [lens, setLens] = useState<string | null>(null);
   const [notes, setNotes] = useState<NoteMeta[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reindexing, setReindexing] = useState(false);
@@ -425,8 +427,15 @@ export function NotesView({
       setError(null);
       try {
         const result = q
-          ? await api.searchNotes(q, mode, 20, tagFilter ?? undefined)
-          : await api.listNotes(tagFilter ?? undefined);
+          ? await api.searchNotes(
+              q,
+              mode,
+              20,
+              lens && lens !== 'all' ? lens : undefined,
+            )
+          : // The picker page fetches the full list too — it feeds the
+            // per-lens counts.
+            await api.listNotes(lens && lens !== 'all' ? lens : undefined);
         if (searchSeq.current === seq) setNotes(result);
       } catch (err) {
         if (searchSeq.current === seq) {
@@ -441,13 +450,13 @@ export function NotesView({
     }
     const t = setTimeout(() => void run(), 300);
     return () => clearTimeout(t);
-  }, [query, mode, tagFilter]);
+  }, [query, mode, lens]);
 
   // Fresh full list (used after a reindex; also clears any active search).
   const reload = useCallback(() => {
     searchSeq.current++;
     setQuery('');
-    setTagFilter(null);
+    setLens(null);
     void (async () => {
       try {
         setNotes(await api.listNotes());
@@ -587,65 +596,94 @@ export function NotesView({
             </button>
           )}
         </div>
-        {/* Category chips (reserved extended-cognition tags, 5b3e491).
-            A chip alone browses the category; with a query it scopes search. */}
-        <div className="-mx-1 mt-2 flex gap-1.5 overflow-x-auto px-1 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {/* Lens bar: the picker page is Mind's front door (2026-08-17) —
+            this row only appears once a lens is open, as the way back. */}
+        {lens !== null && !query.trim() && (
           <button
             type="button"
-            onClick={() => setTagFilter(null)}
-            className={cn(
-              'shrink-0 rounded-full border px-2.5 py-1 text-xs',
-              tagFilter === null
-                ? 'border-primary bg-primary/10 text-primary'
-                : 'border-border text-muted-foreground hover:text-foreground',
-            )}
+            onClick={() => setLens(null)}
+            className="mt-2 flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
           >
-            All
+            <ChevronLeft className="h-4 w-4" />
+            Lenses
+            <span className="font-medium text-foreground">
+              ·{' '}
+              {lens === 'all'
+                ? 'All notes'
+                : (NOTE_CATEGORIES.find((c) => c.tag === lens)?.label ?? lens)}
+            </span>
           </button>
-          {NOTE_CATEGORIES.map((c) => (
-            <button
-              key={c.tag}
-              type="button"
-              onClick={() =>
-                setTagFilter((t) => (t === c.tag ? null : c.tag))
-              }
-              className={cn(
-                'shrink-0 rounded-full border px-2.5 py-1 text-xs',
-                tagFilter === c.tag
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-border text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {c.label}
-            </button>
-          ))}
-        </div>
+        )}
         {reindexNotice && (
           <p className="mt-1.5 text-xs text-muted-foreground">{reindexNotice}</p>
         )}
       </div>
 
-      {/* Typed surfaces (1f18a9b): with a category chip active and no query,
-          the chip IS the view — calendar, goals, people, profile… A typed
-          query drops back to the scoped flat search list below. */}
-      {!query.trim() && tagFilter === 'event' ? (
+      {/* Mind = lens picker first (2026-08-17): the front page lists the
+          lenses; opening one renders its view. A typed query drops to the
+          flat search list, scoped when a category lens is open. */}
+      {!query.trim() && lens === null ? (
+        <div className="flex-1 overflow-y-auto overscroll-contain">
+          <ul className="divide-y divide-border">
+            <li>
+              <button
+                type="button"
+                onClick={() => setLens('all')}
+                className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-muted/60 active:bg-muted"
+              >
+                <Search className="h-4 w-4 shrink-0 text-primary/70" />
+                <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
+                  All notes
+                </span>
+                {notes && (
+                  <span className="text-xs text-muted-foreground">
+                    {notes.length}
+                  </span>
+                )}
+              </button>
+            </li>
+            {NOTE_CATEGORIES.map((c) => {
+              const count = notes?.filter((n) =>
+                n.tags.includes(c.tag),
+              ).length;
+              return (
+                <li key={c.tag}>
+                  <button
+                    type="button"
+                    onClick={() => setLens(c.tag)}
+                    className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-muted/60 active:bg-muted"
+                  >
+                    <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
+                      {c.label}
+                    </span>
+                    {count != null && count > 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : !query.trim() && lens === 'event' ? (
         <div className="min-h-0 flex-1">
           <CalendarView onOpenNote={openNote} />
         </div>
-      ) : !query.trim() && tagFilter === 'project' ? (
+      ) : !query.trim() && lens === 'project' ? (
         <div className="min-h-0 flex-1">
           <ProjectsView onOpenNote={openNote} />
         </div>
-      ) : !query.trim() &&
-        (tagFilter === 'goal' || tagFilter === 'question') ? (
+      ) : !query.trim() && (lens === 'goal' || lens === 'question') ? (
         <div className="min-h-0 flex-1">
-          <StateListView category={tagFilter} onOpenNote={openNote} />
+          <StateListView category={lens} onOpenNote={openNote} />
         </div>
-      ) : !query.trim() && tagFilter === 'social-graph' ? (
+      ) : !query.trim() && lens === 'social-graph' ? (
         <div className="min-h-0 flex-1">
           <PeopleView onOpenNote={openNote} />
         </div>
-      ) : !query.trim() && tagFilter === 'user-profile' ? (
+      ) : !query.trim() && lens === 'user-profile' ? (
         <div className="min-h-0 flex-1">
           <ProfileView onOpenNote={openNote} />
         </div>
