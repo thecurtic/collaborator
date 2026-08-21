@@ -40,7 +40,7 @@ import sqlite3
 import time
 from urllib.parse import urlparse, parse_qs
 
-from config import get_config
+from config import get_config, resolve_path
 
 
 class NwcError(Exception):
@@ -52,6 +52,12 @@ class NwcTimeout(NwcError):
     complete the payment after we stop waiting — a timed-out pay_invoice is
     UNCONFIRMED, not failed. nwc_pay tracks these attempts and recovers them
     (via lookup_invoice) when the same invoice is retried."""
+
+
+class NwcUnreachable(NwcError):
+    """The wallet answered neither encryption probe, so the real request was
+    NEVER SENT — unlike NwcTimeout, nothing is in flight and (for payments)
+    no money can have moved."""
 
 
 # --- config -----------------------------------------------------------------
@@ -261,108 +267,169 @@ _KIND_INFO = 13194
 _KIND_REQUEST = 23194
 _KIND_RESPONSE = 23195
 
-# Detected encryption per (relay, wallet_pubkey) — positive results only, so a
-# transient relay miss never sticks as "nip04 forever".
-_ENC_SCHEMES = {}
+# Seconds to wait per encryption probe on first contact with a wallet.
+_PROBE_WAIT = 8
+
+# Confirmed encryption per wallet. A scheme lands here only after the wallet
+# ACTUALLY ANSWERED a request encrypted with it — never guessed. Mirrored to
+# disk so backend restarts don't forget; dropped again when a request under
+# it times out, so a stale entry self-heals via re-probe.
+_scheme_mem = {}
 
 
-async def _detect_scheme(ws, conn: dict, loop, deadline: float):
-    """Read the wallet's NIP-47 info event and pick the encryption scheme.
+def _scheme_store_path() -> str:
+    return resolve_path("backend/data/nwc_schemes.json")
 
-    Returns "nip44_v2" when advertised, "nip04" when the info event exists
-    without it (legacy wallet), None when no info event was found in time.
-    """
-    sub_id = secrets.token_hex(8)
-    await ws.send(json.dumps(["REQ", sub_id, {
-        "kinds": [_KIND_INFO], "authors": [conn["wallet_pubkey"]],
-        "limit": 1}]))
-    scheme = None
+
+def _scheme_store_read() -> dict:
     try:
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                break
+        with open(_scheme_store_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (IOError, ValueError):
+        return {}
+
+
+def _scheme_key(conn: dict) -> str:
+    return f"{conn['relay']}|{conn['wallet_pubkey']}"
+
+
+def _scheme_get(conn: dict):
+    key = _scheme_key(conn)
+    if key not in _scheme_mem:
+        val = (_scheme_store_read().get(key) or {}).get("scheme")
+        if val in ("nip04", "nip44_v2"):
+            _scheme_mem[key] = val
+    return _scheme_mem.get(key)
+
+
+def _scheme_put(conn: dict, scheme: str) -> None:
+    key = _scheme_key(conn)
+    if _scheme_mem.get(key) == scheme:
+        return
+    _scheme_mem[key] = scheme
+    try:
+        path = _scheme_store_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data = _scheme_store_read()
+        data[key] = {"scheme": scheme,
+                     "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except IOError:
+        pass    # persistence is best-effort; the in-process mirror still works
+
+
+def _scheme_drop(conn: dict) -> None:
+    key = _scheme_key(conn)
+    _scheme_mem.pop(key, None)
+    data = _scheme_store_read()
+    if key in data:
+        del data[key]
+        try:
+            with open(_scheme_store_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except IOError:
+            pass
+
+
+async def _roundtrip(ws, conn: dict, scheme: str, method: str, params: dict,
+                     loop, deadline: float) -> dict:
+    """Publish one encrypted request and await its response event."""
+    body = json.dumps({"method": method, "params": params or {}})
+    content = _encrypt_payload(scheme, conn["secret"], conn["wallet_pubkey"],
+                               body)
+    tags = [["p", conn["wallet_pubkey"]]]
+    if scheme == "nip44_v2":
+        tags.append(["encryption", "nip44_v2"])
+    event = _signed_event(conn["secret"], _KIND_REQUEST, tags, content)
+
+    sub_id = secrets.token_hex(8)
+    # Subscribe for the response BEFORE publishing, so it can't be missed.
+    await ws.send(json.dumps(["REQ", sub_id, {
+        "kinds": [_KIND_RESPONSE], "#e": [event["id"]],
+        "authors": [conn["wallet_pubkey"]]}]))
+    await ws.send(json.dumps(["EVENT", event]))
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            await ws.send(json.dumps(["CLOSE", sub_id]))
+            raise NwcTimeout("timed out waiting for the wallet's response "
+                             "— the wallet may be offline, or still "
+                             "working on the request")
+        try:
             raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-            try:
-                msg = json.loads(raw)
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(msg, list) or len(msg) < 2 or msg[1] != sub_id:
-                continue
-            if msg[0] == "EVENT" and len(msg) >= 3:
-                advertised = []
-                for tag in (msg[2].get("tags") or []):
-                    if tag and tag[0] == "encryption":
-                        advertised += " ".join(tag[1:]).split()
-                scheme = "nip44_v2" if "nip44_v2" in advertised else "nip04"
-                break
-            if msg[0] in ("EOSE", "CLOSED"):
-                break
-    except asyncio.TimeoutError:
-        pass
-    await ws.send(json.dumps(["CLOSE", sub_id]))
-    return scheme
+        except asyncio.TimeoutError:
+            continue
+        try:
+            msg = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(msg, list) or not msg:
+            continue
+        if msg[0] == "OK" and len(msg) >= 4 and msg[1] == event["id"] \
+                and not msg[2]:
+            raise NwcError(f"relay rejected the request: {msg[3]}")
+        if msg[0] == "EVENT" and len(msg) >= 3 and msg[1] == sub_id:
+            return msg[2]
+        if msg[0] == "CLOSED" and len(msg) >= 2 and msg[1] == sub_id:
+            raise NwcError("relay closed the subscription before the "
+                           "wallet answered")
 
 
 async def _session(conn: dict, method: str, params: dict, pref: str,
                    timeout: float):
-    """One NIP-47 exchange on one websocket: negotiate encryption, publish
-    the encrypted request, await the response event. Returns the raw event."""
+    """One NIP-47 exchange on one websocket. Returns the raw response event.
+
+    Encryption is never guessed: a pinned config preference is used as-is;
+    otherwise the stored wallet-confirmed scheme is used; otherwise the wallet
+    is PROBED with a harmless get_info under nip44_v2 then nip04, and only a
+    scheme the wallet actually answered is used (and persisted). The real
+    request therefore only ever goes out under an encryption the wallet
+    provably speaks — and to a wallet that was alive moments earlier. When a
+    stored scheme stops getting answers, it is dropped so the next call
+    re-probes instead of staying wedged on a stale choice.
+    """
     import websockets
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
-    cache_key = (conn["relay"], conn["wallet_pubkey"])
     async with websockets.connect(conn["relay"], open_timeout=min(timeout, 10),
                                   close_timeout=3) as ws:
-        if pref in ("nip04", "nip44", "nip44_v2"):
+        pinned = pref in ("nip04", "nip44", "nip44_v2")
+        if pinned:
             scheme = "nip44_v2" if pref.startswith("nip44") else "nip04"
-        else:   # auto: info event, cached per connection; nip04 is the default
-            scheme = _ENC_SCHEMES.get(cache_key)
+        else:
+            scheme = _scheme_get(conn)
             if scheme is None:
-                scheme = await _detect_scheme(
-                    ws, conn, loop, min(deadline, loop.time() + 4))
-                if scheme:
-                    _ENC_SCHEMES[cache_key] = scheme
-                scheme = scheme or "nip04"
-
-        body = json.dumps({"method": method, "params": params or {}})
-        content = _encrypt_payload(scheme, conn["secret"],
-                                   conn["wallet_pubkey"], body)
-        tags = [["p", conn["wallet_pubkey"]]]
-        if scheme == "nip44_v2":
-            tags.append(["encryption", "nip44_v2"])
-        event = _signed_event(conn["secret"], _KIND_REQUEST, tags, content)
-
-        sub_id = secrets.token_hex(8)
-        # Subscribe for the response BEFORE publishing, so it can't be missed.
-        await ws.send(json.dumps(["REQ", sub_id, {
-            "kinds": [_KIND_RESPONSE], "#e": [event["id"]],
-            "authors": [conn["wallet_pubkey"]]}]))
-        await ws.send(json.dumps(["EVENT", event]))
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                raise NwcTimeout("timed out waiting for the wallet's response "
-                                 "— the wallet may be offline, or still "
-                                 "working on the request")
-            try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-            except asyncio.TimeoutError:
-                continue
-            try:
-                msg = json.loads(raw)
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(msg, list) or not msg:
-                continue
-            if msg[0] == "OK" and len(msg) >= 4 and msg[1] == event["id"] \
-                    and not msg[2]:
-                raise NwcError(f"relay rejected the request: {msg[3]}")
-            if msg[0] == "EVENT" and len(msg) >= 3 and msg[1] == sub_id:
-                return msg[2]
-            if msg[0] == "CLOSED" and len(msg) >= 2 and msg[1] == sub_id:
-                raise NwcError("relay closed the subscription before the "
-                               "wallet answered")
+                for candidate in ("nip44_v2", "nip04"):
+                    try:
+                        await _roundtrip(
+                            ws, conn, candidate, "get_info", {}, loop,
+                            min(deadline, loop.time() + _PROBE_WAIT))
+                        scheme = candidate
+                        break
+                    except NwcTimeout:
+                        continue
+                if scheme is None:
+                    raise NwcUnreachable(
+                        "the wallet answered neither a nip44 nor a nip04 "
+                        "probe — it looks offline or unreachable via its "
+                        "relay. The request was NOT sent; no payment can "
+                        "have been attempted. Have the user check the "
+                        "wallet app, then simply retry.")
+                _scheme_put(conn, scheme)
+        try:
+            resp = await _roundtrip(ws, conn, scheme, method, params, loop,
+                                    deadline)
+        except NwcTimeout:
+            if not pinned:
+                # Answered the probe but not the request under this scheme?
+                # Don't trust the stored choice — re-probe next call.
+                _scheme_drop(conn)
+            raise
+        if not pinned:
+            _scheme_put(conn, scheme)
+        return resp
 
 
 def nwc_call(uri: str, method: str, params: dict, timeout: float = 30) -> dict:
@@ -535,9 +602,10 @@ def _lookup_payment(uri: str, inv: str, payment_hash, timeout: float):
     """Ask the wallet whether a previously-attempted invoice actually settled.
 
     Returns (state, preimage, fees_msat) with state one of:
-    "settled" — it paid (preimage present when the wallet provides it);
-    "unpaid"  — the wallet has no settled payment for it;
-    "unknown" — the wallet supports neither lookup path, so we can't tell.
+    "settled"     — it paid (preimage present when the wallet provides it);
+    "unpaid"      — the wallet has no settled payment for it;
+    "unreachable" — the wallet didn't answer the check either; try later;
+    "unknown"     — the wallet supports neither lookup path, so we can't tell.
     """
     params = {"invoice": inv}
     if payment_hash:
@@ -548,8 +616,8 @@ def _lookup_payment(uri: str, inv: str, payment_hash, timeout: float):
         if preimage or res.get("settled_at"):
             return "settled", preimage, res.get("fees_paid")
         return "unpaid", None, None
-    except NwcTimeout:
-        return "unknown", None, None
+    except (NwcTimeout, NwcUnreachable):
+        return "unreachable", None, None
     except NwcError as e:
         if "not_found" in str(e).lower() or "not found" in str(e).lower():
             return "unpaid", None, None
@@ -557,6 +625,8 @@ def _lookup_payment(uri: str, inv: str, payment_hash, timeout: float):
     try:
         res = nwc_call(uri, "list_transactions",
                        {"type": "outgoing", "limit": 50}, timeout=timeout)
+    except (NwcTimeout, NwcUnreachable):
+        return "unreachable", None, None
     except NwcError:
         return "unknown", None, None
     for tx in res.get("transactions") or []:
@@ -660,6 +730,14 @@ def nwc_pay(db_path: str, user_key: str, action: str = "pay_invoice",
                                     "returned no preimage, so no L402 token "
                                     "could be minted")
                 return out
+            if state == "unreachable":
+                return {"status": "unconfirmed",
+                        "error": "the wallet didn't answer the settlement "
+                                 "check — it looks unreachable right now. "
+                                 "The earlier attempt stays parked; retry "
+                                 "nwc_pay with this SAME invoice once the "
+                                 "wallet is back online. No new payment was "
+                                 "attempted."}
             if state == "unknown":
                 return {"error": "an earlier attempt to pay this invoice "
                                  "timed out, and the wallet supports no way "

@@ -208,44 +208,47 @@ def test_chacha20_matches_rfc7539_reference():
     print("✓ ChaCha20 counter/nonce composition matches RFC 7539 reference")
 
 
-# --- encryption negotiation over a fake relay ------------------------------------
+# --- encryption probing over a fake relay ----------------------------------------
 
 class _FakeRelay:
-    """Scripted relay + wallet: serves the info event, decrypts the request
-    with the WALLET's key (real interop across roles), answers encrypted."""
+    """Scripted relay + wallet in one: decrypts requests with the WALLET's key
+    (real interop across roles) and answers encrypted — but ONLY for schemes
+    in `supports`; requests under other schemes are silently ignored, exactly
+    like a real wallet that can't decrypt them. `mute` ignores everything."""
 
-    def __init__(self, wallet, advertise, respond_scheme):
+    def __init__(self, wallet, supports=("nip44_v2", "nip04"), mute=False):
         self.wallet = wallet
         self.wallet_pub = wallet.public_key.format(compressed=True)[1:].hex()
-        self.advertise = advertise          # info event encryption tag; None = no info event
-        self.respond_scheme = respond_scheme
-        self.queue, self.request_event, self.resp_sub = [], None, None
+        self.supports, self.mute = set(supports), mute
+        self.queue, self.subs = [], {}
+        self.methods = []                   # (method, scheme) actually served
+        self.request_event = None
 
     async def send(self, raw):
         msg = json.loads(raw)
-        if msg[0] == "REQ" and 13194 in msg[2].get("kinds", []):
-            if self.advertise is not None:
-                tags = ([["encryption", self.advertise]]
-                        if self.advertise else [])
-                self.queue.append(json.dumps(["EVENT", msg[1], {
-                    "kind": 13194, "pubkey": self.wallet_pub, "tags": tags,
-                    "content": "pay_invoice get_balance"}]))
-            self.queue.append(json.dumps(["EOSE", msg[1]]))
-        elif msg[0] == "REQ":
-            self.resp_sub = msg[1]
+        if msg[0] == "REQ":
+            self.subs[msg[1]] = msg[2]
+            if 13194 in (msg[2].get("kinds") or []):
+                self.queue.append(json.dumps(["EOSE", msg[1]]))
         elif msg[0] == "EVENT":
-            ev = self.request_event = msg[1]
+            ev = msg[1]
+            self.queue.append(json.dumps(["OK", ev["id"], True, ""]))
+            scheme = "nip04" if "?iv=" in ev["content"] else "nip44_v2"
+            if self.mute or scheme not in self.supports:
+                return                      # wallet can't read it: dead air
+            self.request_event = ev
             body = json.loads(nwc._decrypt_payload(
                 self.wallet.secret.hex(), ev["pubkey"], ev["content"]))
+            self.methods.append((body["method"], scheme))
             reply = json.dumps({"result_type": body["method"], "error": None,
                                 "result": {"preimage": "aa" * 32,
                                            "fees_paid": 0}})
-            self.queue.append(json.dumps(["OK", ev["id"], True, ""]))
-            self.queue.append(json.dumps(["EVENT", self.resp_sub, {
+            resp_sub = next(s for s, f in self.subs.items()
+                            if ev["id"] in (f.get("#e") or []))
+            self.queue.append(json.dumps(["EVENT", resp_sub, {
                 "kind": 23195, "pubkey": self.wallet_pub,
                 "content": nwc._encrypt_payload(
-                    self.respond_scheme, self.wallet.secret.hex(),
-                    ev["pubkey"], reply),
+                    scheme, self.wallet.secret.hex(), ev["pubkey"], reply),
                 "tags": [["e", ev["id"]]]}]))
 
     async def recv(self):
@@ -255,11 +258,11 @@ class _FakeRelay:
         return self.queue.pop(0)
 
 
-def _fake_wallet(monkeypatch, advertise, respond_scheme):
+def _fake_wallet(monkeypatch, tmp_path, **relay_kw):
     coincurve = pytest.importorskip("coincurve")
     import websockets
     wallet, client = coincurve.PrivateKey(), coincurve.PrivateKey()
-    relay = _FakeRelay(wallet, advertise, respond_scheme)
+    relay = _FakeRelay(wallet, **relay_kw)
 
     class _CM:
         async def __aenter__(self):
@@ -268,47 +271,75 @@ def _fake_wallet(monkeypatch, advertise, respond_scheme):
             return False
 
     monkeypatch.setattr(websockets, "connect", lambda url, **kw: _CM())
-    monkeypatch.setattr(nwc, "_ENC_SCHEMES", {})
+    monkeypatch.setattr(nwc, "_scheme_mem", {})
+    monkeypatch.setattr(nwc, "_scheme_store_path",
+                        lambda: str(tmp_path / "nwc_schemes.json"))
+    monkeypatch.setattr(nwc, "_PROBE_WAIT", 0.3)
     uri = (f"nostr+walletconnect://{relay.wallet_pub}"
            f"?relay=wss://fake.example.com&secret={client.secret.hex()}")
     return relay, uri
 
 
-def test_session_negotiates_nip44(monkeypatch):
-    relay, uri = _fake_wallet(monkeypatch, advertise="nip44_v2 nip04",
-                              respond_scheme="nip44_v2")
-    result = nwc.nwc_call(uri, "pay_invoice", {"invoice": "lnbc1u1p..."})
+def test_probe_confirms_nip44_and_persists(monkeypatch, tmp_path):
+    relay, uri = _fake_wallet(monkeypatch, tmp_path)
+    result = nwc.nwc_call(uri, "pay_invoice", {"invoice": "lnbc1u1p..."},
+                          timeout=3)
     assert result["preimage"] == "aa" * 32
-    ev = relay.request_event
-    assert ["encryption", "nip44_v2"] in ev["tags"]
-    assert "?iv=" not in ev["content"]               # nip44 payload shape
-    assert nwc._ENC_SCHEMES == {("wss://fake.example.com",
-                                 relay.wallet_pub): "nip44_v2"}
-    print("✓ negotiation: nip44_v2 advertised -> nip44 request+response, cached")
+    # First contact: a get_info probe under nip44, then the real request.
+    assert relay.methods == [("get_info", "nip44_v2"),
+                             ("pay_invoice", "nip44_v2")]
+    assert ["encryption", "nip44_v2"] in relay.request_event["tags"]
+    with open(nwc._scheme_store_path()) as f:
+        stored = json.load(f)
+    assert stored[f"wss://fake.example.com|{relay.wallet_pub}"]["scheme"] \
+        == "nip44_v2"
+
+    # Second call: confirmed scheme is reused — no probe, even across a
+    # simulated restart (in-process mirror cleared, disk store kept).
+    monkeypatch.setattr(nwc, "_scheme_mem", {})
+    assert nwc.nwc_call(uri, "get_balance", {}, timeout=3)["preimage"]
+    assert [m for m, _ in relay.methods] == ["get_info", "pay_invoice",
+                                             "get_balance"]
+    print("✓ probe confirms nip44, persists to disk, skipped on later calls")
 
 
-def test_session_falls_back_to_nip04(monkeypatch):
-    # Legacy wallet: info event without an encryption tag.
-    relay, uri = _fake_wallet(monkeypatch, advertise="", respond_scheme="nip04")
-    assert nwc.nwc_call(uri, "get_balance", {})["preimage"] == "aa" * 32
+def test_probe_falls_back_to_nip04_only_wallet(monkeypatch, tmp_path):
+    # Wallet ignores nip44 requests entirely (dead air) but speaks nip04:
+    # this is the silent-mismatch case that produced intermittent timeouts.
+    relay, uri = _fake_wallet(monkeypatch, tmp_path, supports=("nip04",))
+    assert nwc.nwc_call(uri, "get_balance", {}, timeout=3)["preimage"]
+    assert relay.methods == [("get_info", "nip04"), ("get_balance", "nip04")]
     assert "?iv=" in relay.request_event["content"]
     assert all(t[0] != "encryption" for t in relay.request_event["tags"])
+    print("✓ nip44-deaf wallet: probe falls back, request goes out as nip04")
 
-    # No info event at all: default nip04, nothing cached.
-    relay, uri = _fake_wallet(monkeypatch, advertise=None,
-                              respond_scheme="nip04")
-    assert nwc.nwc_call(uri, "get_balance", {})["preimage"] == "aa" * 32
-    assert "?iv=" in relay.request_event["content"]
-    assert nwc._ENC_SCHEMES == {}
 
-    # Config pin overrides detection entirely (no info-event roundtrip needed).
-    relay, uri = _fake_wallet(monkeypatch, advertise=None,
-                              respond_scheme="nip44_v2")
+def test_unreachable_wallet_sends_nothing(monkeypatch, tmp_path):
+    relay, uri = _fake_wallet(monkeypatch, tmp_path, mute=True)
+    with pytest.raises(nwc.NwcUnreachable, match="NOT sent"):
+        nwc.nwc_call(uri, "pay_invoice", {"invoice": "lnbc1u1p..."}, timeout=3)
+    assert relay.methods == []              # the payment never went out
+    assert not os.path.exists(nwc._scheme_store_path())
+    print("✓ deaf wallet: probes fail, payment is never sent (NwcUnreachable)")
+
+
+def test_stale_stored_scheme_drops_on_timeout(monkeypatch, tmp_path):
+    relay, uri = _fake_wallet(monkeypatch, tmp_path, mute=True)
+    conn = nwc.parse_nwc_uri(uri)
+    nwc._scheme_put(conn, "nip44_v2")       # confirmed in some earlier epoch
+    with pytest.raises(nwc.NwcTimeout):
+        nwc.nwc_call(uri, "get_balance", {}, timeout=1)
+    assert nwc._scheme_get(conn) is None    # dropped -> next call re-probes
+    print("✓ stored scheme that stops answering is dropped for re-probe")
+
+
+def test_config_pin_skips_probe(monkeypatch, tmp_path):
+    relay, uri = _fake_wallet(monkeypatch, tmp_path)
     cfg = config.get_config().setdefault("tools", {}).setdefault("nwc", {})
     monkeypatch.setitem(cfg, "encryption", "nip44")
-    assert nwc.nwc_call(uri, "get_balance", {})["preimage"] == "aa" * 32
-    assert "?iv=" not in relay.request_event["content"]
-    print("✓ negotiation: legacy/no-info -> nip04; config pin -> nip44")
+    assert nwc.nwc_call(uri, "get_balance", {}, timeout=3)["preimage"]
+    assert relay.methods == [("get_balance", "nip44_v2")]   # no get_info probe
+    print("✓ pinned encryption goes straight to the request, no probe")
 
 
 # --- caps + ledger (wallet mocked) -----------------------------------------------
@@ -494,6 +525,31 @@ def test_lookup_unsupported_blocks_repay(monkeypatch):
                                             "list_transactions"]
     assert len(_attempt_rows(dbp)) == 1              # still recoverable later
     print("✓ unknown settlement state blocks re-pay instead of gambling")
+
+
+def test_recovery_when_wallet_unreachable(monkeypatch):
+    _nwc_settings(monkeypatch)
+    dbp = _fresh_db()
+    inv = "lnbc100n1p...offline"
+    monkeypatch.setattr(nwc, "nwc_call",
+                        _ScriptedWallet([nwc.NwcTimeout("t/o")]))
+    nwc.nwc_pay(dbp, "default", invoice=inv)
+
+    # Retry while the wallet is deaf: attempt stays parked, nothing new sent.
+    monkeypatch.setattr(nwc, "nwc_call",
+                        _ScriptedWallet([nwc.NwcUnreachable("deaf")]))
+    out = nwc.nwc_pay(dbp, "default", invoice=inv)
+    assert out["status"] == "unconfirmed" and "SAME invoice" in out["error"]
+    assert len(_attempt_rows(dbp)) == 1
+
+    # A FRESH invoice against a deaf wallet: probes fail before anything is
+    # sent, so no unconfirmed state lingers for it.
+    monkeypatch.setattr(nwc, "nwc_call",
+                        _ScriptedWallet([nwc.NwcUnreachable("nothing sent")]))
+    out = nwc.nwc_pay(dbp, "default", invoice="lnbc100n1p...fresh")
+    assert "nothing sent" in out["error"]
+    assert len(_attempt_rows(dbp)) == 1              # only the old parked one
+    print("✓ unreachable wallet: parked attempt survives, fresh pay is a no-op")
 
 
 def test_definitive_wallet_failure_clears_attempt(monkeypatch):
