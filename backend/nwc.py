@@ -891,9 +891,23 @@ def lethe_search(db_path: str, query: str, vertical: str = None,
         conn.close()
 
     results = (data.get("results") or [])[:limit]
-    return {"vertical": vertical, "query": query, "count": len(results),
-            "paid_access": bool(token),
-            "results": [{"title": x.get("title"), "snippet": x.get("snippet"),
-                         "url": x.get("url"), "source": x.get("source"),
-                         "id": x.get("id"), "rank": x.get("rank")}
-                        for x in results]}
+    return {
+        "vertical": vertical, "query": query, "count": len(results),
+        "paid_access": bool(token),
+        # Each result carries a canonical public web URL (nvd.nist.gov,
+        # cwe.mitre.org, attack.mitre.org, …). "corpus" is just which internal
+        # index the doc came from — NOT a citation; never present it as the
+        # source. Cite the url.
+        "results": [{"title": x.get("title"), "snippet": x.get("snippet"),
+                     "url": x.get("url"), "corpus": x.get("source"),
+                     "id": x.get("id"), "rank": x.get("rank")}
+                    for x in results],
+        "instruction": (
+            "Present these results to the user NOW, in this reply — do not "
+            "stop or wait to be asked. For EACH result, give its title as a "
+            "markdown link to its url — [title](url) — followed by a one-line "
+            "gist from the snippet. The url is a real web page the user can "
+            "open; the link is the whole point. Ground every claim in the "
+            "snippet text; don't invent severity, exploitation status, or "
+            "CVE-chaining the snippet doesn't state."),
+    }

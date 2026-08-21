@@ -244,9 +244,17 @@ ATT&CK, CWE, CISA KEV). Access is sold per L402/Lightning: when access isn't
 paid for yet, this returns status=payment_required with an invoice — pay that
 EXACT invoice via nwc_pay, then call lethe_search again; the access token is
 minted automatically and reused for future searches, so most calls after the
-first are free. Results are snippet-and-link: an extract plus the canonical
-URL (fetch_url the URL when you need the full text). This is DIFFERENT from
-web_search (general web via SearXNG): reach for lethe_search when the question
-fits its vertical — vulnerabilities, CVEs/CWEs, attacker techniques — or when
-the user asks for it by name. Modes: hybrid (default), lexical (exact
-identifiers like CVE ids), semantic (fuzzy, behavior-shaped queries).
+first are free. Results are snippet-and-link: each carries a canonical PUBLIC web URL
+(nvd.nist.gov, cwe.mitre.org, attack.mitre.org, …) plus an extract. When
+results come back, PRESENT THEM IN THE SAME REPLY — do not end your turn or
+wait for the user to ask "where are the results?". Show each result's title as
+a markdown link to its url ([title](url)) with a one-line gist; the link is
+what the user wants, so never replace it with the internal "corpus" name
+(kev/cwe/attack is which index it came from, not a source to cite). fetch_url
+a url when the user wants the full text. Ground every statement in the snippet
+— don't embellish severity, exploitation, or CVE-chaining the snippet doesn't
+say. This is DIFFERENT from web_search (general web via SearXNG): reach for
+lethe_search when the question fits its vertical — vulnerabilities, CVEs/CWEs,
+attacker techniques — or when the user asks for it by name. Modes: hybrid
+(default), lexical (exact identifiers like CVE ids), semantic (fuzzy,
+behavior-shaped queries).

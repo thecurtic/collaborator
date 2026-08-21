@@ -644,8 +644,13 @@ def test_l402_loop_end_to_end(monkeypatch):
     # 3. Retried search sends the Authorization header and gets results.
     second = nwc.lethe_search(dbp, "actively exploited kernel bugs")
     assert second["count"] == 1 and second["paid_access"] is True
-    assert second["results"][0]["source"] == "kev"
-    assert "scores" not in second["results"][0]      # debug fields not forwarded
+    item = second["results"][0]
+    assert item["url"] == "https://cisa.gov/x"       # the public link is forwarded
+    assert item["corpus"] == "kev"                   # index name, renamed from 'source'
+    assert "source" not in item and "scores" not in item   # not a citation; debug dropped
+    # The result tells the model to present links now, without being re-asked.
+    assert "markdown link" in second["instruction"]
+    assert "do not" in second["instruction"].lower()
     assert seen[-1]["params"]["q"] == "actively exploited kernel bugs"
     print("✓ L402 loop: 402 -> pay -> minted token -> authorized search")
 
