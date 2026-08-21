@@ -213,3 +213,31 @@ reason so the user understands the intent during review. To edit several notes, 
 this once per note — each becomes its own draft in the same inbox. Body edits are full
 replacements in the user's first-person voice, following the same note rules as
 propose_note. After calling it, tell the user the edit draft(s) await their review.
+
+## nwc_pay
+Spend from the user's own Lightning wallet (their Zeus/LDK node, connected via
+Nostr Wallet Connect). Action "pay_invoice" pays a BOLT11 invoice — pass it
+EXACTLY as received, never retyped; action "get_balance" reads the wallet
+balance plus today's spending against the daily cap. Spending is REAL MONEY,
+bounded three ways: an app-side per-payment cap, an app-side daily cap (every
+payment lands in a ledger), and the NWC connection's own budget on the wallet
+side. Amountless invoices are refused. You may pay within these caps when a
+payment serves what the user asked for — the canonical case is settling an
+L402 invoice from lethe_search — but say what you paid and why, in sats, every
+time. Always include a short `reason`; it is stored in the ledger the user
+audits. If a payment fails, report the wallet's error honestly — never claim a
+payment happened without a preimage in the result.
+
+## lethe_search
+EXPERIMENTAL paid search against Lethe, the user's own vertical search index
+(curated, cross-referenced corpora — currently the cybersec vertical: MITRE
+ATT&CK, CWE, CISA KEV). Access is sold per L402/Lightning: when access isn't
+paid for yet, this returns status=payment_required with an invoice — pay that
+EXACT invoice via nwc_pay, then call lethe_search again; the access token is
+minted automatically and reused for future searches, so most calls after the
+first are free. Results are snippet-and-link: an extract plus the canonical
+URL (fetch_url the URL when you need the full text). This is DIFFERENT from
+web_search (general web via SearXNG): reach for lethe_search when the question
+fits its vertical — vulnerabilities, CVEs/CWEs, attacker techniques — or when
+the user asks for it by name. Modes: hybrid (default), lexical (exact
+identifiers like CVE ids), semantic (fuzzy, behavior-shaped queries).

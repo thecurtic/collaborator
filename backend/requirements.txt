@@ -16,5 +16,8 @@ piper-tts>=1.3.0           # server TTS (CPU ONNX). The tts_stream capability on
                            # the code tolerates this package being absent entirely.
 yt-dlp>=2025.1.1           # transcribe_video tool: fetches the audio track for STT
                            # (never captions). Tolerated absent — tool errors cleanly.
+coincurve>=20.0.0          # nwc_pay tool: secp256k1 Schnorr signatures + ECDH for
+cryptography>=42.0.0       # NIP-47 events and NIP-04 encryption. Both tolerated
+                           # absent — the tool errors cleanly, app runs fine.
 # Note: the one-shot POST /api/transcribe still uses the ffmpeg system package to
 # normalize uploaded audio. The streaming WS path takes PCM16 directly (no ffmpeg).

@@ -174,6 +174,9 @@ tools:
     fetch_url: true           # read a specific page (pasted links)
     screenshot_page: true     # self-gating: needs webtool_url + screenshot.vision_model
     read_logs: true           # agent can read its own recent server logs (ring buffer)
+    nwc_pay: true             # self-gating: active only when tools.nwc.connections has
+                              # an entry for the requesting user
+    lethe_search: true        # self-gating: active only when tools.lethe.url is set
   web_search:                 # private SearXNG instance (JSON format must be enabled
     url: "http://<search-vm-ip>"  # in its settings.yml: search.formats: [html, json])
     results: 5                # max results returned to the model
@@ -211,3 +214,27 @@ tools:
     prompts:                  # per-kind synthesis prompt files (editable/auditable)
       memory: "recall-synthesis-prompt.md"
       web: "synthesis-web.md"
+  nwc:                        # Lightning spending via Nostr Wallet Connect (nwc_pay tool)
+    # Connections are PER USER and NEVER live in this repo — wire real values
+    # into the gitignored config.yaml on the prod box. Key each entry by the
+    # user's identity hash (the directory name under backend/data/users/);
+    # with authentication disabled there is one anonymous user, key "default".
+    # The string comes from the wallet's NWC pairing (e.g. Zeus: create a
+    # connection with its own budget — that budget is the outer spending wall).
+    connections: {}
+    # connections:
+    #   default: "nostr+walletconnect://<wallet-pubkey>?relay=wss://relay.example.com&secret=<64-hex>"
+    #   "<user-identity-hash>": "nostr+walletconnect://..."
+    max_sats_per_payment: 100 # app-side cap per invoice, on top of the NWC budget
+    max_sats_per_day: 500     # app-side rolling daily cap (spend ledger in the per-user DB)
+    timeout: 30               # seconds to wait for the wallet's NIP-47 response
+    encryption: "auto"        # auto (read the wallet's info event: nip44_v2 when
+                              # advertised, else nip04) | nip44 | nip04 to pin one
+  lethe:                      # EXPERIMENTAL paid search (lethe_search tool): a Lethe
+    url: ""                   # vertical index behind an Aperture L402 proxy, e.g.
+                              # "https://lethe.example.com". Empty = tool disabled.
+                              # 402 challenges are settled via nwc_pay; the minted
+                              # L402 token is stored per user and reused.
+    vertical: "cybersec"      # default vertical path segment (/v1/<vertical>/search)
+    results: 8                # max results returned to the model
+    timeout: 20
