@@ -228,6 +228,15 @@ time. Always include a short `reason`; it is stored in the ledger the user
 audits. If a payment fails, report the wallet's error honestly — never claim a
 payment happened without a preimage in the result.
 
+TIMEOUTS ARE NOT FAILURES: status "unconfirmed" means the wallet may still be
+settling the payment in the background. The correct move is ALWAYS to retry
+nwc_pay with the SAME invoice a little later — the tool then asks the wallet
+what actually happened and either recovers the settled payment (result says
+recovered: true; any L402 token is minted; no second payment is made) or
+confirms it never settled and safely retries. NEVER respond to a timeout by
+fetching a fresh invoice for the same purchase: if the first payment settled
+quietly, that pays twice for one thing.
+
 ## lethe_search
 EXPERIMENTAL paid search against Lethe, the user's own vertical search index
 (curated, cross-referenced corpora — currently the cybersec vertical: MITRE

@@ -508,7 +508,10 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                 "the balance (action get_balance). Spending is bounded by "
                 "app-side caps plus the wallet's own NWC budget; every payment "
                 "is recorded in a ledger. Used to settle L402 invoices from "
-                "lethe_search, but general: it can pay any invoice within caps."),
+                "lethe_search, but general: it can pay any invoice within caps. "
+                "A timeout is UNCONFIRMED, not failed — retry with the SAME "
+                "invoice (the tool recovers settled payments); never fetch a "
+                "fresh invoice for the same purchase after a timeout."),
     "lethe_search": ("EXPERIMENTAL paid search against the user's Lethe "
                      "vertical index (L402/Lightning-gated). If access isn't "
                      "paid for yet it returns status=payment_required with an "

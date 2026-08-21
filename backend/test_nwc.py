@@ -77,6 +77,20 @@ def test_bolt11_amounts():
     print("✓ bolt11 hrp amounts: units, case, amountless, sub-msat rejection")
 
 
+def test_bolt11_payment_hash():
+    # A real invoice (10 sats) paid during live testing; hash value pinned.
+    inv = ("lnbc100n1p4g3t0epp5kkzr2ywh75my8cv65h06530qqcgdeu072s3f0reux0h76"
+           "zfv2tkqdqqcqzzsxqrrsssp5fyp5l96z0vk8tw2dttmg5m8zu78h8w4tx678nu2j"
+           "xwf0cfn3wmns9qxpqysgqksnym6lwxd9yn6myqearjkhrgh30xkcdpek2q0fwe33"
+           "f4jc3cxg4l8qyrkf8c5rjw32l6qwygh8e6yle5hzxrf76slxlw2lfs3r3ccqqrmr78k")
+    assert nwc.bolt11_payment_hash(inv) == \
+        "b5843511d7f53643e19aa5dfaa45e00610dcf1fe5422978f3c33efed092c52ec"
+    assert nwc.bolt11_amount_msat(inv) == 10_000        # 10 sats, NOT 10k
+    assert nwc.bolt11_payment_hash("lnbc1u1p...") is None
+    assert nwc.bolt11_payment_hash("garbage") is None
+    print("✓ bolt11 payment hash extracted from tagged data (pinned vector)")
+
+
 # --- NIP-04 + event signing (real crypto, no network) ----------------------------
 
 def test_nip04_roundtrip_and_event_signature():
@@ -350,6 +364,170 @@ def test_get_balance(monkeypatch):
     assert out == {"balance_sats": 123, "spent_today_sats": 0,
                    "daily_cap_sats": 500, "remaining_today_sats": 500}
     print("✓ get_balance: wallet balance + remaining daily budget")
+
+
+# --- timeout recovery (the ghost-payment fix) ------------------------------------
+
+class _ScriptedWallet:
+    """nwc_call stand-in: pops one scripted behavior per call. A behavior is
+    either a result dict to return or an exception to raise."""
+
+    def __init__(self, script):
+        self.script, self.calls = list(script), []
+
+    def __call__(self, uri, method, params, timeout=30):
+        self.calls.append((method, params))
+        behavior = self.script.pop(0)
+        if isinstance(behavior, Exception):
+            raise behavior
+        return behavior
+
+
+def _attempt_rows(dbp):
+    conn = sqlite3.connect(dbp)
+    try:
+        return conn.execute("SELECT invoice, last_error FROM nwc_attempts")\
+            .fetchall()
+    finally:
+        conn.close()
+
+
+def test_timeout_parks_attempt_then_recovers(monkeypatch):
+    _nwc_settings(monkeypatch, max_sats_per_payment=100, max_sats_per_day=500)
+    dbp = _fresh_db()
+    inv = "lnbc100n1p...lethe"
+    # Park an L402 challenge for this invoice, as lethe_search would.
+    conn = sqlite3.connect(dbp)
+    nwc._ensure_schema(conn)
+    conn.execute("INSERT INTO l402_challenges VALUES (?, ?, ?, ?)",
+                 (inv, "MAC", "lethe.example.com", "2026-08-21"))
+    conn.commit(); conn.close()
+
+    wallet = _ScriptedWallet([nwc.NwcTimeout("timed out waiting")])
+    monkeypatch.setattr(nwc, "nwc_call", wallet)
+    out = nwc.nwc_pay(dbp, "default", invoice=inv, reason="lethe access")
+    assert out["status"] == "unconfirmed" and "SAME invoice" in out["note"]
+    assert _attempt_rows(dbp) == [(inv, "timed out waiting")]
+    conn = sqlite3.connect(dbp)
+    assert conn.execute("SELECT COUNT(*) FROM nwc_spends").fetchone()[0] == 0
+    conn.close()
+
+    # Retry: the wallet reveals it actually settled -> recovered, not re-paid.
+    wallet = _ScriptedWallet([{"preimage": "cd" * 32, "fees_paid": 3,
+                               "settled_at": 1755772800}])
+    monkeypatch.setattr(nwc, "nwc_call", wallet)
+    out = nwc.nwc_pay(dbp, "default", invoice=inv)
+    assert out["status"] == "paid" and out["recovered"] is True
+    assert out["amount_sats"] == 10 and "NOT paid twice" in out["note"]
+    assert "lethe.example.com" in out["l402"]        # token minted on recovery
+    # Synthetic invoice -> no extractable payment_hash -> lookup by invoice.
+    assert wallet.calls == [("lookup_invoice", {"invoice": inv})]
+
+    assert _attempt_rows(dbp) == []
+    conn = sqlite3.connect(dbp)
+    spends = conn.execute("SELECT amount_msat, preimage, reason "
+                          "FROM nwc_spends").fetchall()
+    token = conn.execute("SELECT preimage FROM l402_tokens").fetchone()
+    conn.close()
+    assert spends == [(10_000, "cd" * 32, "lethe access")]  # reason survives
+    assert token == ("cd" * 32,)
+    print("✓ timeout parks the attempt; retry recovers, mints, records once")
+
+
+def test_recovery_bypasses_daily_cap(monkeypatch):
+    """A settled ghost payment must be recorded even when today's cap is
+    already spent — the money is gone either way; refusing loses the token."""
+    _nwc_settings(monkeypatch, max_sats_per_day=10)
+    dbp = _fresh_db()
+    conn = sqlite3.connect(dbp)
+    nwc._ensure_schema(conn)
+    nwc._record_spend(conn, 10_000, 0, "lnbc100n1p...old", "ee" * 32, None)
+    conn.execute("INSERT INTO nwc_attempts VALUES (?, ?, ?, ?, ?, ?)",
+                 ("lnbc100n1p...ghost", None, 10_000, None, "2026-08-21", "t/o"))
+    conn.commit(); conn.close()
+
+    monkeypatch.setattr(nwc, "nwc_call", _ScriptedWallet(
+        [{"preimage": "ff" * 32, "settled_at": 1}]))
+    out = nwc.nwc_pay(dbp, "default", invoice="lnbc100n1p...ghost")
+    assert out["status"] == "paid" and out["recovered"] is True
+    assert out["spent_today_sats"] == 20             # truth, cap exceeded
+    # A FRESH invoice is still refused by the cap.
+    out = nwc.nwc_pay(dbp, "default", invoice="lnbc100n1p...new")
+    assert "today's cap" in out["error"]
+    print("✓ recovery records settled ghosts past the cap; new pays still capped")
+
+
+def test_lookup_unpaid_allows_safe_retry(monkeypatch):
+    _nwc_settings(monkeypatch)
+    dbp = _fresh_db()
+    inv = "lnbc100n1p...retry"
+    monkeypatch.setattr(nwc, "nwc_call", _ScriptedWallet(
+        [nwc.NwcTimeout("timed out")]))
+    assert nwc.nwc_pay(dbp, "default", invoice=inv)["status"] == "unconfirmed"
+
+    # Wallet says NOT_FOUND -> never settled -> a fresh pay attempt is safe.
+    wallet = _ScriptedWallet([nwc.NwcError("wallet error NOT_FOUND: no match"),
+                              {"preimage": "ab" * 32, "fees_paid": 0}])
+    monkeypatch.setattr(nwc, "nwc_call", wallet)
+    out = nwc.nwc_pay(dbp, "default", invoice=inv)
+    assert out["status"] == "paid" and "recovered" not in out
+    assert [m for m, _ in wallet.calls] == ["lookup_invoice", "pay_invoice"]
+    assert _attempt_rows(dbp) == []
+    print("✓ wallet-confirmed-unpaid attempts retry safely (one spend)")
+
+
+def test_lookup_unsupported_blocks_repay(monkeypatch):
+    _nwc_settings(monkeypatch)
+    dbp = _fresh_db()
+    inv = "lnbc100n1p...stuck"
+    monkeypatch.setattr(nwc, "nwc_call", _ScriptedWallet(
+        [nwc.NwcTimeout("timed out")]))
+    nwc.nwc_pay(dbp, "default", invoice=inv)
+
+    # Neither lookup_invoice nor list_transactions works -> refuse to re-pay.
+    wallet = _ScriptedWallet([nwc.NwcError("wallet error NOT_IMPLEMENTED: no"),
+                              nwc.NwcError("wallet error NOT_IMPLEMENTED: no")])
+    monkeypatch.setattr(nwc, "nwc_call", wallet)
+    out = nwc.nwc_pay(dbp, "default", invoice=inv)
+    assert "could pay twice" in out["error"] and "manually" in out["error"]
+    assert [m for m, _ in wallet.calls] == ["lookup_invoice",
+                                            "list_transactions"]
+    assert len(_attempt_rows(dbp)) == 1              # still recoverable later
+    print("✓ unknown settlement state blocks re-pay instead of gambling")
+
+
+def test_definitive_wallet_failure_clears_attempt(monkeypatch):
+    _nwc_settings(monkeypatch)
+    dbp = _fresh_db()
+    monkeypatch.setattr(nwc, "nwc_call", _ScriptedWallet(
+        [nwc.NwcError("wallet error FAILED_TO_PAY_INVOICE: no route")]))
+    out = nwc.nwc_pay(dbp, "default", invoice="lnbc100n1p...norouted")
+    assert "FAILED_TO_PAY_INVOICE" in out["error"]
+    assert _attempt_rows(dbp) == []                  # definitive != unconfirmed
+    print("✓ definitive wallet failures leave no attempt row behind")
+
+
+def test_list_transactions_fallback(monkeypatch):
+    _nwc_settings(monkeypatch)
+    dbp = _fresh_db()
+    inv = "lnbc100n1p...fallback"
+    conn = sqlite3.connect(dbp)
+    nwc._ensure_schema(conn)
+    conn.execute("INSERT INTO nwc_attempts VALUES (?, ?, ?, ?, ?, ?)",
+                 (inv, None, 10_000, None, "2026-08-21", "t/o"))
+    conn.commit(); conn.close()
+
+    wallet = _ScriptedWallet([
+        nwc.NwcError("wallet error NOT_IMPLEMENTED: lookup_invoice"),
+        {"transactions": [
+            {"invoice": "lnbc1u1p...other", "payment_hash": "aa" * 32},
+            {"invoice": inv, "preimage": "bb" * 32, "settled_at": 2,
+             "fees_paid": 1}]}])
+    monkeypatch.setattr(nwc, "nwc_call", wallet)
+    out = nwc.nwc_pay(dbp, "default", invoice=inv)
+    assert out["status"] == "paid" and out["recovered"] is True
+    assert out["preimage"] == "bb" * 32
+    print("✓ list_transactions fallback recovers when lookup_invoice is absent")
 
 
 # --- the L402 loop (HTTP + wallet mocked) ----------------------------------------

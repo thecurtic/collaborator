@@ -47,6 +47,13 @@ class NwcError(Exception):
     """Raised for wallet/relay failures the model should see verbatim."""
 
 
+class NwcTimeout(NwcError):
+    """No response inside the timeout. CRUCIAL nuance: the wallet may still
+    complete the payment after we stop waiting — a timed-out pay_invoice is
+    UNCONFIRMED, not failed. nwc_pay tracks these attempts and recovers them
+    (via lookup_invoice) when the same invoice is retried."""
+
+
 # --- config -----------------------------------------------------------------
 
 
@@ -335,8 +342,9 @@ async def _session(conn: dict, method: str, params: dict, pref: str,
         while True:
             remaining = deadline - loop.time()
             if remaining <= 0:
-                raise NwcError("timed out waiting for the wallet — is the "
-                               "Zeus node online and connected to its relay?")
+                raise NwcTimeout("timed out waiting for the wallet's response "
+                                 "— the wallet may be offline, or still "
+                                 "working on the request")
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
             except asyncio.TimeoutError:
@@ -413,6 +421,42 @@ def bolt11_amount_msat(invoice: str):
     return msat_times_div // div
 
 
+_BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+
+def bolt11_payment_hash(invoice: str):
+    """The invoice's payment hash (64 hex chars) from its tagged data part,
+    or None when it can't be extracted. Used to match a timed-out payment
+    against the wallet's transaction history during recovery."""
+    inv = (invoice or "").strip().lower()
+    pos = inv.rfind("1")
+    data = inv[pos + 1:]
+    # Minimum: 7 timestamp words + one tag + 104 signature words + 6 checksum.
+    if pos < 4 or len(data) < 120:
+        return None
+    try:
+        words = [_BECH32_CHARSET.index(c) for c in data[:-6]]
+    except ValueError:
+        return None
+    i, end = 7, len(words) - 104          # skip timestamp; signature is last
+    while i + 3 <= end:
+        tag, length = words[i], words[i + 1] * 32 + words[i + 2]
+        i += 3
+        if i + length > end:
+            return None
+        if tag == 1 and length == 52:     # 'p' tag: 260 bits, 256 used
+            acc = bits = 0
+            out = bytearray()
+            for w in words[i:i + 52]:
+                acc, bits = (acc << 5) | w, bits + 5
+                if bits >= 8:
+                    bits -= 8
+                    out.append((acc >> bits) & 0xff)
+            return bytes(out[:32]).hex()
+        i += length
+    return None
+
+
 # --- spend ledger + L402 storage (per-user conversation DB) -----------------
 
 
@@ -441,6 +485,14 @@ def _ensure_schema(conn) -> None:
             preimage TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS nwc_attempts (
+            invoice TEXT PRIMARY KEY,
+            payment_hash TEXT,
+            amount_msat INTEGER NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL,
+            last_error TEXT
+        );
     """)
     conn.commit()
 
@@ -459,6 +511,61 @@ def _record_spend(conn, amount_msat: int, fees_msat, invoice: str,
         (time.strftime("%Y-%m-%dT%H:%M:%S"), time.strftime("%Y-%m-%d"),
          amount_msat, fees_msat, invoice, preimage, reason))
     conn.commit()
+
+
+def _mint_l402_if_challenge(conn, inv: str, preimage) -> str:
+    """Settling a parked challenge mints the reusable access token. Returns a
+    model-facing note, or None when this invoice wasn't an L402 challenge."""
+    row = conn.execute("SELECT macaroon, host FROM l402_challenges "
+                       "WHERE invoice = ?", (inv,)).fetchone()
+    if not row or not preimage:
+        return None
+    macaroon, host = row
+    conn.execute("INSERT OR REPLACE INTO l402_tokens "
+                 "(host, macaroon, preimage, created_at) VALUES (?, ?, ?, ?)",
+                 (host, macaroon, preimage,
+                  time.strftime("%Y-%m-%dT%H:%M:%S")))
+    conn.execute("DELETE FROM l402_challenges WHERE invoice = ?", (inv,))
+    conn.commit()
+    return (f"access token minted for {host} — call lethe_search again to "
+            "run the paid search")
+
+
+def _lookup_payment(uri: str, inv: str, payment_hash, timeout: float):
+    """Ask the wallet whether a previously-attempted invoice actually settled.
+
+    Returns (state, preimage, fees_msat) with state one of:
+    "settled" — it paid (preimage present when the wallet provides it);
+    "unpaid"  — the wallet has no settled payment for it;
+    "unknown" — the wallet supports neither lookup path, so we can't tell.
+    """
+    params = {"invoice": inv}
+    if payment_hash:
+        params["payment_hash"] = payment_hash
+    try:
+        res = nwc_call(uri, "lookup_invoice", params, timeout=timeout)
+        preimage = (res.get("preimage") or "").strip() or None
+        if preimage or res.get("settled_at"):
+            return "settled", preimage, res.get("fees_paid")
+        return "unpaid", None, None
+    except NwcTimeout:
+        return "unknown", None, None
+    except NwcError as e:
+        if "not_found" in str(e).lower() or "not found" in str(e).lower():
+            return "unpaid", None, None
+        # Fall through to list_transactions for wallets without lookup_invoice.
+    try:
+        res = nwc_call(uri, "list_transactions",
+                       {"type": "outgoing", "limit": 50}, timeout=timeout)
+    except NwcError:
+        return "unknown", None, None
+    for tx in res.get("transactions") or []:
+        if ((payment_hash and tx.get("payment_hash") == payment_hash)
+                or (tx.get("invoice") or "").strip().lower() == inv):
+            preimage = (tx.get("preimage") or "").strip() or None
+            if preimage or tx.get("settled_at"):
+                return "settled", preimage, tx.get("fees_paid")
+    return "unpaid", None, None
 
 
 # --- the tools --------------------------------------------------------------
@@ -517,6 +624,53 @@ def nwc_pay(db_path: str, user_key: str, action: str = "pay_invoice",
     conn = sqlite3.connect(db_path)
     try:
         _ensure_schema(conn)
+
+        # RECOVERY: this invoice was attempted before and timed out. The
+        # payment may have settled after we stopped waiting, so ask the wallet
+        # what happened BEFORE anything else — including the caps, because a
+        # settled payment already spent the money and refusing to record it
+        # would lose both the truth and the L402 token.
+        attempt = conn.execute(
+            "SELECT payment_hash, reason FROM nwc_attempts WHERE invoice = ?",
+            (inv,)).fetchone()
+        if attempt:
+            state, preimage, fees_msat = _lookup_payment(
+                uri, inv, attempt[0], timeout)
+            if state == "settled":
+                if not conn.execute("SELECT 1 FROM nwc_spends WHERE "
+                                    "invoice = ?", (inv,)).fetchone():
+                    _record_spend(conn, amount_msat, fees_msat, inv,
+                                  preimage, reason or attempt[1])
+                conn.execute("DELETE FROM nwc_attempts WHERE invoice = ?",
+                             (inv,))
+                conn.commit()
+                out = {"status": "paid", "recovered": True,
+                       "amount_sats": amount_sats, "preimage": preimage,
+                       "note": "this payment had already settled after the "
+                               "earlier timed-out attempt — recovered from "
+                               "the wallet, NOT paid twice",
+                       "spent_today_sats": _spent_today_msat(conn) // 1000,
+                       "daily_cap_sats": cap_day}
+                if preimage:
+                    l402 = _mint_l402_if_challenge(conn, inv, preimage)
+                    if l402:
+                        out["l402"] = l402
+                else:
+                    out["note"] += ("; the wallet reported it settled but "
+                                    "returned no preimage, so no L402 token "
+                                    "could be minted")
+                return out
+            if state == "unknown":
+                return {"error": "an earlier attempt to pay this invoice "
+                                 "timed out, and the wallet supports no way "
+                                 "to check whether it settled "
+                                 "(lookup_invoice/list_transactions both "
+                                 "unavailable). NOT retrying the payment — "
+                                 "that could pay twice. The user must check "
+                                 "the wallet's payment history manually."}
+            # state == "unpaid": the wallet confirms it never settled — safe
+            # to try again; fall through to a fresh payment attempt.
+
         spent_msat = _spent_today_msat(conn)
         if amount_msat > cap_pay * 1000:
             return {"error": f"invoice is {amount_sats} sats — over the "
@@ -526,33 +680,47 @@ def nwc_pay(db_path: str, user_key: str, action: str = "pay_invoice",
             return {"error": f"paying {amount_sats} sats would exceed today's "
                              f"cap of {cap_day} sats "
                              f"({spent_msat // 1000} already spent)"}
+
+        # Park the attempt BEFORE contacting the wallet, so a timeout (or a
+        # crash) always leaves a recoverable trace.
+        conn.execute("INSERT OR REPLACE INTO nwc_attempts (invoice, "
+                     "payment_hash, amount_msat, reason, created_at, "
+                     "last_error) VALUES (?, ?, ?, ?, ?, NULL)",
+                     (inv, bolt11_payment_hash(inv), amount_msat, reason,
+                      time.strftime("%Y-%m-%dT%H:%M:%S")))
+        conn.commit()
         try:
             result = nwc_call(uri, "pay_invoice", {"invoice": inv},
                               timeout=timeout)
+        except NwcTimeout as e:
+            # UNCONFIRMED, not failed: the attempt row stays for recovery.
+            conn.execute("UPDATE nwc_attempts SET last_error = ? "
+                         "WHERE invoice = ?", (str(e), inv))
+            conn.commit()
+            return {"status": "unconfirmed", "error": str(e),
+                    "note": "the payment may still settle in the background. "
+                            "Retry nwc_pay with this SAME invoice shortly — "
+                            "it will check the wallet and recover the "
+                            "payment (minting any L402 token) if it settled. "
+                            "Do NOT pay a fresh invoice for the same "
+                            "purchase."}
         except NwcError as e:
+            # The wallet answered definitively — nothing to recover.
+            conn.execute("DELETE FROM nwc_attempts WHERE invoice = ?", (inv,))
+            conn.commit()
             return {"error": str(e)}
         preimage = result.get("preimage")
         fees_msat = result.get("fees_paid")
         _record_spend(conn, amount_msat, fees_msat, inv, preimage, reason)
+        conn.execute("DELETE FROM nwc_attempts WHERE invoice = ?", (inv,))
+        conn.commit()
         out = {"status": "paid", "amount_sats": amount_sats,
                "fees_msat": fees_msat, "preimage": preimage,
                "spent_today_sats": (spent_msat + amount_msat) // 1000,
                "daily_cap_sats": cap_day}
-        # L402: settling a parked challenge mints the access token.
-        row = conn.execute("SELECT macaroon, host FROM l402_challenges "
-                           "WHERE invoice = ?", (inv,)).fetchone()
-        if row and preimage:
-            macaroon, host = row
-            conn.execute("INSERT OR REPLACE INTO l402_tokens "
-                         "(host, macaroon, preimage, created_at) "
-                         "VALUES (?, ?, ?, ?)",
-                         (host, macaroon, preimage,
-                          time.strftime("%Y-%m-%dT%H:%M:%S")))
-            conn.execute("DELETE FROM l402_challenges WHERE invoice = ?",
-                         (inv,))
-            conn.commit()
-            out["l402"] = (f"access token minted for {host} — call "
-                           "lethe_search again to run the paid search")
+        l402 = _mint_l402_if_challenge(conn, inv, preimage)
+        if l402:
+            out["l402"] = l402
         return out
     finally:
         conn.close()
