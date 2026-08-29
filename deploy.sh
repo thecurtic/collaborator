@@ -32,11 +32,6 @@ VENV_PIP=".venv/bin/pip"
 echo "Installing Python dependencies..."
 $VENV_PIP install --quiet -r backend/requirements.txt
 
-# yt-dlp rots: YouTube breaks it every few weeks and the >= pin means plain
-# install never upgrades it. Force latest on every deploy (transcribe_video).
-echo "Upgrading yt-dlp..."
-$VENV_PIP install --quiet -U yt-dlp || echo "WARNING: yt-dlp upgrade failed — transcription may 403 until it succeeds"
-
 # Warn if ffmpeg is missing (required by /api/transcribe; not a pip package)
 if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "WARNING: ffmpeg not found on PATH. Audio transcription will fail."
