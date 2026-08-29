@@ -177,12 +177,22 @@ tools:
     nwc_pay: true             # self-gating: active only when tools.nwc.connections has
                               # an entry for the requesting user
     lethe_search: true        # self-gating: active only when tools.lethe.url is set
-  web_search:                 # private SearXNG instance (JSON format must be enabled
-    url: "http://<search-vm-ip>"  # in its settings.yml: search.formats: [html, json])
+  web_search:
+    # Provider switch — the tool registers only when the SELECTED provider's
+    # credential is set:
+    #   searxng: private instance, queries egress via the search VM; needs url
+    #            (JSON format enabled in its settings.yml:
+    #            search.formats: [html, json])
+    #   brave:   Brave Search API, direct HTTPS from this box (NOT private —
+    #            queries are tied to your API key); needs brave_api_key
+    provider: "brave"
+    brave_api_key: "YOUR-BRAVE-API-KEY"
+    # country: "us"           # brave only: result country (optional)
+    url: "http://<search-vm-ip>"  # searxng base URL (kept for switching back)
     results: 5                # max results returned to the model
     timeout: 15
     language: "en"
-    safesearch: 0
+    safesearch: 0             # 0/1/2 (brave maps to off/moderate/strict)
   fetch_url:
     max_chars: 8000           # readable text handed to the model per page
     timeout: 20

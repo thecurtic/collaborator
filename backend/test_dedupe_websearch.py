@@ -150,9 +150,63 @@ def test_web_search_gating_and_executor():
     print("✓ web_search: URL-gated registry, SearXNG JSON parsed, capped, error-safe")
 
 
+def test_web_search_brave_provider():
+    # provider=brave with no key -> tool absent, even with a searxng URL set
+    # (the SELECTED provider's credential is what gates).
+    c, cfg, dbp = _fresh()
+    cfg["tools"]["web_search"]["provider"] = "brave"
+    cfg["tools"]["web_search"]["url"] = "http://<search-vm-ip>"
+    schemas, _, _ = main._build_tools(dbp)
+    assert "web_search" not in {s["function"]["name"] for s in schemas}
+
+    # Key set -> present; executor calls the Brave API and maps the response.
+    cfg["tools"]["web_search"]["brave_api_key"] = "test-key"
+    schemas, execute, _ = main._build_tools(dbp)
+    assert "web_search" in {s["function"]["name"] for s in schemas}
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"web": {"results": [
+                {"title": "Trans<strong>Link</strong>",
+                 "url": "https://translink.ca?utm_source=brave",
+                 "description": "Vancouver &amp; region transit " * 30},
+            ] * 9}}
+    captured = {}
+    orig = inference.requests.get
+    inference.requests.get = (lambda url, **kw:
+                              captured.update(url=url, **kw) or FakeResp())
+    try:
+        out = json.loads(execute("web_search", {"query": "vancouver transit"}))
+    finally:
+        inference.requests.get = orig
+
+    assert captured["url"] == "https://api.search.brave.com/res/v1/web/search"
+    assert captured["headers"]["X-Subscription-Token"] == "test-key"
+    assert captured["params"]["q"] == "vancouver transit"
+    assert captured["params"]["safesearch"] == "off"
+    assert len(out["results"]) == 5                       # capped at config results
+    r = out["results"][0]
+    assert r["title"] == "TransLink"                      # highlight tags stripped
+    assert r["url"] == "https://translink.ca"             # tracking params stripped
+    assert "&amp;" not in r["snippet"] and len(r["snippet"]) <= 300
+    assert r["engine"] == "brave"
+    assert out["engines"]["responded"] == {"brave": 5}    # health shape preserved
+
+    # Failure path returns a tool-level error, not an exception.
+    inference.requests.get = lambda *a, **k: (_ for _ in ()).throw(Exception("down"))
+    try:
+        out = json.loads(execute("web_search", {"query": "x"}))
+    finally:
+        inference.requests.get = orig
+    assert "brave" in out["error"]
+    print("✓ web_search: brave provider — key-gated, mapped, stripped, error-safe")
+
+
 if __name__ == "__main__":
     test_synthesis_flags_duplicates_and_passes_existing()
     test_no_flag_when_dissimilar()
     test_propose_note_warns_on_duplicate()
     test_web_search_gating_and_executor()
+    test_web_search_brave_provider()
     print("\n✓ All dedupe + web-search tests passed!")

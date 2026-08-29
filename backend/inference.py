@@ -953,7 +953,106 @@ def synthesize_notes(tree: Dict, existing_notes: Optional[List[Dict]] = None) ->
     return notes
 
 
-# --- Web search (SearXNG) ------------------------------------------------------
+# --- Web search (provider-pluggable: Brave or SearXNG) -------------------------
+# One model-facing tool ("web_search"), swappable backend. tools.web_search
+# .provider picks the engine; each provider self-gates on its own credential
+# (brave: brave_api_key, searxng: url). A future in-house engine slots in as
+# another provider — tool name, result shape, and UI stay unchanged.
+
+def web_search_provider() -> Optional[str]:
+    """The active, USABLE web-search provider, or None when the tool is off.
+
+    provider=brave needs tools.web_search.brave_api_key; provider=searxng
+    needs tools.web_search.url. A selected-but-uncredentialed provider gates
+    the tool OFF (absent from the registry) rather than erroring at call time.
+    """
+    wcfg = (_tools_config().get("web_search") or {})
+    provider = (wcfg.get("provider") or "searxng").strip().lower()
+    if provider == "brave":
+        return "brave" if wcfg.get("brave_api_key") else None
+    if provider == "searxng":
+        return "searxng" if wcfg.get("url") else None
+    return None
+
+
+def web_search(query: str, limit: Optional[int] = None) -> Dict:
+    """Dispatch a web search to the configured provider (see web_search_provider)."""
+    provider = web_search_provider()
+    if provider == "brave":
+        return web_search_brave(query, limit=limit)
+    if provider == "searxng":
+        return web_search_searxng(query, limit=limit)
+    return {"error": "web search is not configured (tools.web_search: set provider "
+                     "plus its credential — brave: brave_api_key, searxng: url)"}
+
+
+_BRAVE_SAFESEARCH = {0: "off", 1: "moderate", 2: "strict"}
+
+
+def web_search_brave(query: str, limit: Optional[int] = None) -> Dict:
+    """Query the Brave Search API, mapped to the same result shape as SearXNG.
+
+    Config: tools.web_search {brave_api_key (required), results, timeout,
+    language, safesearch, country}. Calls api.search.brave.com directly from
+    this box — unlike SearXNG, queries do NOT route through the search VM,
+    and Brave sees them tied to the API key.
+    """
+    wcfg = (_tools_config().get("web_search") or {})
+    key = wcfg.get("brave_api_key")
+    if not key:
+        return {"error": "web search is not configured (tools.web_search.brave_api_key)"}
+    limit = limit or wcfg.get("results", 5)
+    params = {
+        "q": query,
+        "count": max(1, min(int(limit), 20)),
+        "search_lang": wcfg.get("language", "en"),
+        "safesearch": _BRAVE_SAFESEARCH.get(wcfg.get("safesearch", 0), "off"),
+    }
+    if wcfg.get("country"):
+        params["country"] = wcfg["country"]
+    try:
+        response = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            params=params,
+            headers={"X-Subscription-Token": key, "Accept": "application/json"},
+            timeout=wcfg.get("timeout", 15),
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        return {"error": f"web search failed (brave): {e}"}
+
+    raw = ((data.get("web") or {}).get("results") or [])[:limit]
+    out = {"results": [{
+        "title": _strip_brave_markup(r.get("title")),
+        "url": strip_tracking_params(r["url"]) if r.get("url") else r.get("url"),
+        "snippet": _strip_brave_markup(r.get("description") or "")[:300],
+        "engine": "brave",
+    } for r in raw]}
+    infobox = ((data.get("infobox") or {}).get("results") or [])
+    if infobox:
+        out["infoboxes"] = [{
+            "title": i.get("label") or i.get("title"),
+            "content": _strip_brave_markup(i.get("long_desc")
+                                           or i.get("description") or "")[:300],
+        } for i in infobox[:1]]
+    # Same engine-health shape the SearXNG path emits, so the frontend's
+    # health strip keeps rendering; a single-engine backend is one entry.
+    out["engines"] = {"responded": ({"brave": len(out["results"])}
+                                    if out["results"] else {}),
+                      "failed": []}
+    return out
+
+
+def _strip_brave_markup(text: Optional[str]) -> str:
+    """Brave titles/descriptions carry <strong> highlight tags and HTML
+    entities; flatten to plain text like every other tool hands the model."""
+    import html as _html
+    import re as _re
+    if not text:
+        return ""
+    return _html.unescape(_re.sub(r"<[^>]+>", "", text))
+
 
 def web_search_searxng(query: str, limit: Optional[int] = None) -> Dict:
     """Query the configured SearXNG instance (JSON API) and return compact results.

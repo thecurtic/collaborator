@@ -115,12 +115,13 @@ backlinks (which notes link to it). Use after search_notes to read a note in ful
 to traverse the note graph one hop at a time.
 
 ## web_search
-Search the web through the user's private SearXNG instance. Use for current events,
+Search the web through the user's configured search provider. Use for current events,
 facts outside your knowledge, or anything the user asks you to look up. Returns result
 titles, URLs, snippets, and sometimes direct answers/infoboxes. Each response
 includes an `engines` report — which engines responded and which failed
 (CAPTCHAs, rate limits): when engines failed, coverage is DEGRADED; mention it
-when it matters ("only one engine responded"). Today is {today}: when
+when it matters ("only one engine responded"; a single-engine provider like
+brave normally reports just itself). Today is {today}: when
 a query is time-sensitive, use THIS date/year — never a year remembered from your
 training data (writing a stale year into the query buries the current results). Ground
 what you tell the user in these results and cite sources by domain; if you want to

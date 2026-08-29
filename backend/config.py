@@ -295,11 +295,18 @@ def load_config() -> dict:
                 "proxy": None,            # yt-dlp egress proxy (else direct)
             },
             "web_search": {
-                "url": None,           # SearXNG base URL (e.g. tailnet IP); None = tool off
+                # Provider switch: "searxng" (private instance, queries leave
+                # via the search VM) or "brave" (Brave Search API, direct
+                # HTTPS from this box). The tool registers only when the
+                # SELECTED provider's credential below is set.
+                "provider": "searxng",
+                "url": None,           # searxng: base URL (e.g. tailnet IP)
+                "brave_api_key": None, # brave: API key (set in config.yaml)
+                "country": None,       # brave only: result country (e.g. "us", "ca")
                 "results": 5,
                 "timeout": 15,
                 "language": "en",
-                "safesearch": 0,
+                "safesearch": 0,       # 0/1/2 (brave maps to off/moderate/strict)
             },
             "fetch_url": {
                 "max_chars": 8000,     # readable text handed to the model

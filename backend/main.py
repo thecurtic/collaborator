@@ -30,7 +30,7 @@ from db import (
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
     get_embedding, embed_texts, synthesize_recall, get_available_models,
-    generate_with_tools, synthesize, synthesize_notes, web_search_searxng, fetch_url,
+    generate_with_tools, synthesize, synthesize_notes, web_search, web_search_provider, fetch_url,
     screenshot_page, generate_title,
     get_model_context_tokens, estimate_tokens, get_models_detail,
     resolve_prompt_layer, DEFAULT_PARAGRAPH_STYLE, DEFAULT_VOICE_STYLE,
@@ -447,9 +447,9 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                      "it never edits the vault directly. Pass the note's exact current "
                      "title plus only the fields you want changed. Call once per note "
                      "when editing several."),
-    "web_search": ("Search the web via the user's private SearXNG instance. Use for "
-                   "current events, facts you don't know, or anything the user asks you "
-                   "to look up. Returns result titles, URLs, and snippets. Today is "
+    "web_search": ("Search the web (via the user's configured search provider). Use "
+                   "for current events, facts you don't know, or anything the user asks "
+                   "you to look up. Returns result titles, URLs, and snippets. Today is "
                    "{today}: when a query is time-sensitive, use THIS date/year — never "
                    "a year remembered from your training data."),
     "fetch_url": ("Fetch and read a specific web page. ALWAYS use this when the user "
@@ -716,8 +716,9 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                                          "2, 3, … to read past part 1 "
                                          "(responses say chunk N of M)"}},
                 "required": []}}})
-    # web_search is self-gating: present only when a SearXNG URL is configured.
-    if avail.get("web_search", True) and (tcfg.get("web_search") or {}).get("url"):
+    # web_search is self-gating: present only when the configured provider
+    # (tools.web_search.provider: brave|searxng) has its credential set.
+    if avail.get("web_search", True) and web_search_provider():
         schemas.append(_search_schema("web_search", descs["web_search"]))
     if avail.get("fetch_url", True):
         schemas.append({"type": "function", "function": {
@@ -1127,7 +1128,7 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "note": "Edit draft created; nothing changes until the user approves "
                         "it. Tell the user it's in their drafts inbox."})
         if name == "web_search":
-            return json.dumps(web_search_searxng(args.get("query", "")))
+            return json.dumps(web_search(args.get("query", "")))
         if name == "fetch_url":
             fcfg = tcfg.get("fetch_url", {}) or {}
             budget = fcfg.get("max_per_turn", 3)
@@ -2892,11 +2893,12 @@ async def manual_web_search(
     limit: Optional[int] = None,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
-    """User-driven web search through the private SearXNG instance.
+    """User-driven web search through the configured provider (brave or searxng).
 
     Independent of the LLM tool loop (works even when tools.enabled is false) —
     this is the search-screen endpoint, not the agent's tool. Same backend and
-    privacy path as the web_search tool: queries leave only via the search VM.
+    egress path as the web_search tool: searxng queries leave via the search
+    VM; brave queries go straight to api.search.brave.com from this box.
 
     Query params:
     - **q**: the search query (required, non-empty)
@@ -2911,11 +2913,13 @@ async def manual_web_search(
     query = (q or "").strip()
     if not query:
         raise HTTPException(status_code=400, detail="q (search query) is required")
-    if not (config.get("tools", {}).get("web_search") or {}).get("url"):
-        raise HTTPException(status_code=503,
-                            detail="web search is not configured (tools.web_search.url)")
+    if not web_search_provider():
+        raise HTTPException(
+            status_code=503,
+            detail="web search is not configured (tools.web_search: set provider "
+                   "plus its credential — brave: brave_api_key, searxng: url)")
     lim = max(1, min(limit, 20)) if limit else None
-    out = web_search_searxng(query, limit=lim)
+    out = web_search(query, limit=lim)
     if out.get("error"):
         raise HTTPException(status_code=502, detail=out["error"])
     out["query"] = query
