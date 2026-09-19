@@ -1,5 +1,7 @@
 ## Project Context
 
+**Never use subagents.** Do all work directly in the main session.
+
 Collaborator is a self-hosted personal chat interface backed by local LLM inference.
 
 ### Development Workflow
