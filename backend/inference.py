@@ -106,25 +106,151 @@ DEFAULT_VOICE_STYLE = (
 )
 
 
+# --- Chain-of-thought: every way an OpenAI-compatible server hands it over ---
+#
+# There is no single convention. Servers put reasoning in a SIDE FIELD of the
+# delta/message (a "different channel" from content), or leave it INLINE in
+# content behind markers. All of these are handled, so switching models never
+# silently drops the thinking pane:
+#   - delta.reasoning_content   llama.cpp server, vLLM, DeepSeek, LM Studio
+#                               (qwen3 / MiniMax with reasoning parsing on)
+#   - delta.reasoning           OpenRouter, vLLM (newer parsers), LM Studio
+#                               for gpt-oss (harmony "analysis" channel)
+#   - delta.thinking            Ollama-style servers
+#   - <think>…</think>          inline in content (qwen3 with parsing off)
+#   - <|channel|>analysis<|message|>…<|end|><|start|>assistant<|channel|>final
+#     <|message|>…             raw harmony (gpt-oss) leaking through content
+#                               when the server's channel parser is off
+_REASONING_KEYS = ("reasoning_content", "reasoning", "thinking", "reasoning_text")
+# Delta keys we know about; anything else is logged once per round so a new
+# server dialect shows up in read_logs instead of vanishing silently.
+_KNOWN_DELTA_KEYS = frozenset(_REASONING_KEYS) | {
+    "content", "role", "tool_calls", "function_call", "refusal", "channel"}
+
+
+def _delta_reasoning(delta: Dict) -> str:
+    """Reasoning text carried in a streamed delta (or a full message), from
+    whichever side field this server uses; "" when none."""
+    if not isinstance(delta, dict):
+        return ""
+    for key in _REASONING_KEYS:
+        value = delta.get(key)
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, dict):   # {"text": ...} / {"content": ...} shapes
+            inner = value.get("text") or value.get("content")
+            if isinstance(inner, str) and inner:
+                return inner
+        if isinstance(value, list):   # [{"type":"text","text":...}, ...]
+            parts = [p.get("text") for p in value
+                     if isinstance(p, dict) and isinstance(p.get("text"), str)]
+            if parts:
+                return "".join(parts)
+    return ""
+
+
+class _ThinkSplitter:
+    """Split a content stream into (reasoning, answer) on inline markers.
+
+    Handles <think>/<thinking> blocks and raw harmony channel markers
+    (<|channel|>analysis<|message|> … <|end|> / …<|channel|>final<|message|>).
+    Streaming-safe: a marker split across chunks is caught by holding back a
+    tail that could still be the start of one. Content with no markers passes
+    through untouched (minus that brief tail, released by flush()).
+    """
+    _OPEN = ("<think>", "<thinking>", "<|channel|>analysis<|message|>")
+    _CLOSE = ("</think>", "</thinking>",
+              "<|start|>assistant<|channel|>final<|message|>",
+              "<|channel|>final<|message|>", "<|end|>", "<|return|>")
+    # Control tokens that may appear around the answer and must never reach
+    # the user (harmony framing when the server didn't strip it).
+    _NOISE = ("<|start|>assistant<|channel|>final<|message|>",
+              "<|channel|>final<|message|>", "<|start|>assistant",
+              "<|return|>", "<|end|>", "<|message|>")
+    _ALL = tuple(sorted(set(_OPEN + _CLOSE + _NOISE), key=len, reverse=True))
+    _TAIL = max(len(m) for m in _ALL) - 1
+
+    def __init__(self):
+        self.pending = ""
+        self.in_reasoning = False
+        self.saw_marker = False
+
+    def _pending_tail_len(self) -> int:
+        """Chars at the end of pending that could be the start of a marker.
+
+        Every '<' inside the last _TAIL chars is a candidate start (a marker
+        like <|channel|>analysis<|message|> contains several '<'), so hold
+        from the EARLIEST one whose suffix still prefixes some marker."""
+        start = max(0, len(self.pending) - self._TAIL)
+        pos = self.pending.find("<", start)
+        while pos != -1:
+            tail = self.pending[pos:]
+            if any(m.startswith(tail) for m in self._ALL):
+                return len(tail)
+            pos = self.pending.find("<", pos + 1)
+        return 0
+
+    def feed(self, content: str):
+        """Return (reasoning_text, answer_text) safe to emit now."""
+        self.pending += content
+        reasoning, answer = [], []
+        while self.pending:
+            markers = self._CLOSE if self.in_reasoning else self._OPEN + self._NOISE
+            hits = [(self.pending.find(m), m) for m in markers]
+            hits = [(i, m) for i, m in hits if i != -1]
+            if not hits:
+                keep = self._pending_tail_len()
+                out = self.pending[:len(self.pending) - keep] if keep else self.pending
+                self.pending = self.pending[len(out):]
+                (reasoning if self.in_reasoning else answer).append(out)
+                break
+            i, m = min(hits, key=lambda h: (h[0], -len(h[1])))
+            before, self.pending = self.pending[:i], self.pending[i + len(m):]
+            (reasoning if self.in_reasoning else answer).append(before)
+            self.saw_marker = True
+            if self.in_reasoning:
+                self.in_reasoning = False
+            elif m in self._OPEN:
+                self.in_reasoning = True
+            # else: stray control token in answer mode — dropped
+        return "".join(reasoning), "".join(answer)
+
+    def flush(self):
+        """End of stream: release whatever tail was held back."""
+        out, self.pending = self.pending, ""
+        if self.in_reasoning:
+            return out, ""
+        return "", out
+
+
+def _strip_inline_reasoning(text: str) -> str:
+    """Non-streaming equivalent: drop think blocks + harmony framing."""
+    if not text or "<" not in text:
+        return text
+    splitter = _ThinkSplitter()
+    _r, answer = splitter.feed(text)
+    _r2, tail = splitter.flush()
+    return (answer + tail).strip()
+
+
 def _extract_message_text(data: Dict, context: str = "llm call") -> str:
     """Final text from a non-streaming chat completion, reasoning-model aware.
 
-    Reasoning models (MiniMax, qwen3-thinking) put their chain of thought in
-    message.reasoning_content and the answer in message.content. When
+    Reasoning models put their chain of thought in a side field of the
+    message (reasoning_content / reasoning / thinking, server-dependent) or
+    inline behind <think> / harmony markers, and the answer in content. When
     max_tokens is too small the whole budget goes to reasoning and content
     comes back EMPTY — the silent killer of small-budget calls like titles.
-    We use content only (never leak reasoning as output), strip any inline
-    <think> block, and log loudly when reasoning ate the budget so the
-    failure is visible in read_logs instead of silent."""
-    import re as _re
+    We use the answer only (never leak reasoning as output) and log loudly
+    when reasoning ate the budget so the failure is visible in read_logs."""
     try:
         msg = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
         return ""
-    content = (msg.get("content") or "").strip()
+    content = _strip_inline_reasoning((msg.get("content") or "").strip())
     if content:
-        return _re.sub(r"^\s*<think>.*?</think>\s*", "", content, flags=_re.S).strip()
-    if (msg.get("reasoning_content") or "").strip():
+        return content
+    if _delta_reasoning(msg).strip():
         print(f"Warning: {context}: model spent its whole token budget on "
               "reasoning and returned no answer — raise this call's max_tokens "
               "(reasoning models need headroom beyond the answer length)")
@@ -272,6 +398,11 @@ def _build_payload(messages: List[Dict], stream: bool) -> Dict:
     }
     if inference_config.get("thinking_mode", False):
         payload["reasoning"] = True
+    # OpenAI-style reasoning effort (gpt-oss: low | medium | high). Only sent
+    # when configured — servers that don't know the field would 400 on it.
+    effort = inference_config.get("reasoning_effort")
+    if effort:
+        payload["reasoning_effort"] = str(effort)
     return payload
 
 
@@ -307,6 +438,13 @@ def stream_llm_tokens(
     emitted_any = False
     saw_reasoning = False
     hit_length = False
+    want_reasoning = include_reasoning and _stream_reasoning_enabled()
+    splitter = _ThinkSplitter()   # inline <think>/harmony markers -> reasoning
+    logged_keys = False
+
+    def _emit_token(text):
+        return {"type": "token", "content": text} if include_reasoning else text
+
     try:
         response = requests.post(
             f"{_get_endpoint_url()}/chat/completions",
@@ -340,19 +478,38 @@ def stream_llm_tokens(
                     raise RuntimeError(f"LM Studio error: {msg}")
                 if "choices" in data and len(data["choices"]) > 0:
                     choice = data["choices"][0]
-                    delta = choice.get("delta", {})
-                    if delta.get("reasoning_content"):
+                    delta = choice.get("delta", {}) or {}
+                    if not logged_keys:
+                        logged_keys = True
+                        _log_unknown_delta_keys(delta)
+                    # Side-channel reasoning (reasoning_content / reasoning /
+                    # thinking — whichever this server uses).
+                    side = _delta_reasoning(delta)
+                    if side:
                         saw_reasoning = True
-                        if include_reasoning and _stream_reasoning_enabled():
-                            yield {"type": "reasoning",
-                                   "content": delta["reasoning_content"]}
+                        if want_reasoning:
+                            yield {"type": "reasoning", "content": side}
                     if choice.get("finish_reason") == "length":
                         hit_length = True
-                    content = delta.get("content", "")
+                    content = delta.get("content") or ""
                     if content:
-                        emitted_any = True
-                        yield ({"type": "token", "content": content}
-                               if include_reasoning else content)
+                        # Inline reasoning markers are split out of content.
+                        thought, answer = splitter.feed(content)
+                        if thought:
+                            saw_reasoning = True
+                            if want_reasoning:
+                                yield {"type": "reasoning", "content": thought}
+                        if answer:
+                            emitted_any = True
+                            yield _emit_token(answer)
+        thought, answer = splitter.flush()
+        if thought:
+            saw_reasoning = True
+            if want_reasoning:
+                yield {"type": "reasoning", "content": thought}
+        if answer:
+            emitted_any = True
+            yield _emit_token(answer)
 
         # Reasoning models can burn the entire max_tokens budget on thinking
         # and emit no answer at all — the model "works hard" and the app shows
@@ -1878,6 +2035,19 @@ def _stream_reasoning_enabled() -> bool:
     return bool(_get_config().get("inference", {}).get("stream_reasoning", True))
 
 
+def _log_unknown_delta_keys(delta: Dict) -> None:
+    """Once per round: name any delta fields we don't recognize, so a server
+    that streams reasoning under a new key is diagnosable via read_logs."""
+    if not isinstance(delta, dict):
+        return
+    unknown = sorted(set(delta) - _KNOWN_DELTA_KEYS)
+    if unknown:
+        print(f"stream: delta carries unrecognized field(s) {unknown} — if the "
+              "thinking pane is empty for this model, reasoning may be under "
+              "one of these (report it; known keys: "
+              f"{', '.join(_REASONING_KEYS)})")
+
+
 def generate_with_tools(
     message: str,
     context_turns: Optional[List[Dict]],
@@ -1933,6 +2103,7 @@ def generate_with_tools(
         content_parts: List[str] = []
         emitted_parts: List[str] = []   # what actually reached the user this round
         guard = _StreamGuard()
+        splitter = _ThinkSplitter()     # inline <think>/harmony -> reasoning
         tool_calls: Dict[int, Dict] = {}
         round_started = time.monotonic()
         first_delta_at = None
@@ -1941,6 +2112,25 @@ def generate_with_tools(
         stream_reasoning = _stream_reasoning_enabled()
         reasoning_buf = ""
         last_heartbeat = time.monotonic()
+
+        def _take_reasoning(text):
+            """Buffer reasoning for flushing (or heartbeat when display is off).
+            Returns an event to yield, or None."""
+            nonlocal reasoning_buf, last_heartbeat, saw_reasoning
+            saw_reasoning = True
+            if stream_reasoning:
+                reasoning_buf += text
+                if len(reasoning_buf) >= _REASONING_FLUSH_CHARS:
+                    ev = {"type": "reasoning", "content": reasoning_buf}
+                    reasoning_buf = ""
+                    return ev
+                return None
+            now = time.monotonic()
+            if emit_status and now - last_heartbeat > _HEARTBEAT_SECONDS:
+                last_heartbeat = now
+                return {"type": "status", "label": "Thinking…", "heartbeat": True}
+            return None
+
         try:
             for choice, delta in _iter_stream_events(payload):
                 if first_delta_at is None:
@@ -1948,22 +2138,24 @@ def generate_with_tools(
                     print(f"timing: LLM first delta after "
                           f"{first_delta_at - round_started:.2f}s "
                           f"(round {round_index}, ~{sum(len(str(m.get('content') or '')) for m in messages) // 4} prompt tokens est)")
-                if delta.get("reasoning_content"):
-                    saw_reasoning = True
-                    if stream_reasoning:
-                        reasoning_buf += delta["reasoning_content"]
-                        if len(reasoning_buf) >= _REASONING_FLUSH_CHARS:
-                            yield {"type": "reasoning", "content": reasoning_buf}
-                            reasoning_buf = ""
-                    else:
-                        now = time.monotonic()
-                        if emit_status and now - last_heartbeat > _HEARTBEAT_SECONDS:
-                            last_heartbeat = now
-                            yield {"type": "status", "label": "Thinking…",
-                                   "heartbeat": True}
+                    _log_unknown_delta_keys(delta)
+                # Side-channel reasoning, whichever field this server uses.
+                side = _delta_reasoning(delta)
+                if side:
+                    ev = _take_reasoning(side)
+                    if ev:
+                        yield ev
                 if choice.get("finish_reason") == "length":
                     hit_length = True
                 content = delta.get("content")
+                if content:
+                    # Inline markers (<think>, harmony channels) are split
+                    # out BEFORE the tool-call guard sees the text.
+                    thought, content = splitter.feed(content)
+                    if thought:
+                        ev = _take_reasoning(thought)
+                        if ev:
+                            yield ev
                 if content:
                     content_parts.append(content)
                     out = guard.feed(content)
@@ -1979,6 +2171,18 @@ def generate_with_tools(
                         slot["name"] = fn["name"]
                     if fn.get("arguments"):
                         slot["args"] += fn["arguments"]
+            # Release the splitter's held tail into the same pipeline.
+            thought, content = splitter.flush()
+            if thought:
+                ev = _take_reasoning(thought)
+                if ev:
+                    yield ev
+            if content:
+                content_parts.append(content)
+                out = guard.feed(content)
+                if out:
+                    emitted_parts.append(out)
+                    yield {"type": "token", "content": out}
         except requests.exceptions.RequestException as e:
             print(f"LLM request failed: {e} — message shape: {_message_shape(messages)}")
             yield {"type": "error", "detail": f"LLM request failed: {e}"}

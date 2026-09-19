@@ -72,6 +72,9 @@ def load_config() -> dict:
             # keeps proxies from timing out during long thinks; when off, a
             # periodic heartbeat status covers that instead.
             "stream_reasoning": True,
+            # OpenAI-style reasoning effort for models that take it (gpt-oss:
+            # "low" | "medium" | "high"). None = not sent (other servers 400).
+            "reasoning_effort": None,
             "temperature": 0.7,
             # Reasoning models (MiniMax) spend this same budget on thinking
             # BEFORE the answer — 2048 starves them into empty responses.

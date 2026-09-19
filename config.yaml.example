@@ -20,6 +20,15 @@ inference:
   max_tokens: 2048
   thinking_mode: false
   streaming: true
+  # Chain-of-thought streams to the UI as 'reasoning' events (display-only).
+  # Every server dialect is recognized automatically: side fields
+  # (reasoning_content / reasoning / thinking) and inline markers (<think>,
+  # gpt-oss harmony <|channel|>analysis). Set false to hide it (a keepalive
+  # heartbeat covers long thinks instead).
+  # stream_reasoning: true
+  # gpt-oss reasoning depth ("low" | "medium" | "high"). Leave unset for
+  # models/servers that don't accept the field.
+  # reasoning_effort: "medium"
 
 # Memory settings
 memory:

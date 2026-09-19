@@ -399,3 +399,179 @@ def test_leading_assistant_turns_dropped():
     convo = [m for m in msgs if m["role"] in ("user", "assistant")]
     assert convo[0]["content"] == "real"
     print("✓ history never opens with an assistant turn")
+
+
+# --- Chain-of-thought dialects (side fields + inline markers) ----------------
+
+def test_delta_reasoning_reads_every_known_side_field():
+    """Servers disagree on the field name — all of them must light the pane."""
+    from inference import _delta_reasoning
+    assert _delta_reasoning({"reasoning_content": "a"}) == "a"   # llama.cpp / LM Studio
+    assert _delta_reasoning({"reasoning": "b"}) == "b"           # OpenRouter / gpt-oss
+    assert _delta_reasoning({"thinking": "c"}) == "c"            # Ollama-style
+    assert _delta_reasoning({"reasoning": {"text": "d"}}) == "d"
+    assert _delta_reasoning({"reasoning": [{"type": "text", "text": "e"}]}) == "e"
+    assert _delta_reasoning({"content": "answer"}) == ""
+    assert _delta_reasoning({}) == "" and _delta_reasoning(None) == ""
+    print("✓ reasoning side fields: reasoning_content / reasoning / thinking")
+
+
+def test_think_splitter_inline_tags_across_chunks():
+    """<think>…</think> inline in content, with markers split across chunks."""
+    from inference import _ThinkSplitter
+    s = _ThinkSplitter()
+    chunks = ["<thi", "nk>let me ", "reason</th", "ink>The ans", "wer is 4."]
+    r, a = "", ""
+    for c in chunks:
+        tr, ta = s.feed(c)
+        r += tr
+        a += ta
+    tr, ta = s.flush()
+    r += tr
+    a += ta
+    assert r == "let me reason"
+    assert a == "The answer is 4."
+    print("✓ <think> blocks split out of content even across chunk boundaries")
+
+
+def test_think_splitter_harmony_channels():
+    """Raw gpt-oss harmony framing leaking through content: analysis channel
+    becomes reasoning, final channel becomes the answer, control tokens vanish."""
+    from inference import _ThinkSplitter
+    s = _ThinkSplitter()
+    text = ("<|channel|>analysis<|message|>User wants sum.<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>2 + 2 = 4<|return|>")
+    r, a = "", ""
+    for i in range(0, len(text), 7):   # awkward 7-char chunks
+        tr, ta = s.feed(text[i:i + 7])
+        r += tr
+        a += ta
+    tr, ta = s.flush()
+    r += tr
+    a += ta
+    assert r == "User wants sum."
+    assert a == "2 + 2 = 4"
+    assert "<|" not in a
+    print("✓ harmony analysis/final channels split; control tokens dropped")
+
+
+def test_think_splitter_plain_content_untouched():
+    """No markers: everything passes through verbatim, including '<' in prose."""
+    from inference import _ThinkSplitter
+    s = _ThinkSplitter()
+    out = ""
+    for c in ["if a < b then", " <b>bold</b> ok", " and 3 <", " 5 done"]:
+        out += s.feed(c)[1]
+    out += s.flush()[1]
+    assert out == "if a < b then <b>bold</b> ok and 3 < 5 done"
+    assert not s.saw_marker
+    print("✓ plain content passes the splitter untouched")
+
+
+def test_stream_llm_tokens_reasoning_field_dialect():
+    """A server that streams thinking under `reasoning` (gpt-oss on LM Studio)
+    yields reasoning events, exactly like the reasoning_content dialect."""
+    from unittest.mock import patch, MagicMock
+    import inference
+    lines = [
+        b'data: {"choices":[{"delta":{"reasoning":"Let me "},"finish_reason":null}]}',
+        b'data: {"choices":[{"delta":{"reasoning":"think."},"finish_reason":null}]}',
+        b'data: {"choices":[{"delta":{"content":"Paris."},"finish_reason":null}]}',
+        b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        b'data: [DONE]',
+    ]
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.iter_lines = lambda: iter(lines)
+    with patch("requests.post", return_value=resp):
+        events = list(inference.stream_llm_tokens("capital?", include_reasoning=True))
+    reasoning = "".join(e["content"] for e in events if e["type"] == "reasoning")
+    tokens = "".join(e["content"] for e in events if e["type"] == "token")
+    assert reasoning == "Let me think."
+    assert tokens == "Paris."
+    print("✓ stream_llm_tokens: `reasoning` field dialect streams to the pane")
+
+
+def test_stream_llm_tokens_inline_think_dialect():
+    """Inline <think> in content (parsing off server-side) never reaches the
+    saved answer and does reach the pane."""
+    from unittest.mock import patch, MagicMock
+    import inference
+    lines = [
+        b'data: {"choices":[{"delta":{"content":"<think>hmm"},"finish_reason":null}]}',
+        b'data: {"choices":[{"delta":{"content":" ok</think>Ans"},"finish_reason":null}]}',
+        b'data: {"choices":[{"delta":{"content":"wer"},"finish_reason":null}]}',
+        b'data: [DONE]',
+    ]
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.iter_lines = lambda: iter(lines)
+    with patch("requests.post", return_value=resp):
+        events = list(inference.stream_llm_tokens("q", include_reasoning=True))
+    reasoning = "".join(e["content"] for e in events if e["type"] == "reasoning")
+    tokens = "".join(e["content"] for e in events if e["type"] == "token")
+    assert reasoning == "hmm ok" and tokens == "Answer"
+    # Legacy plain-string mode: the think block is simply absent from the text.
+    with patch("requests.post", return_value=resp):
+        plain = "".join(inference.stream_llm_tokens("q"))
+    assert plain == "Answer"
+    print("✓ stream_llm_tokens: inline <think> split out of the answer")
+
+
+def test_generate_with_tools_harmony_reasoning():
+    """The tool loop handles both dialects too: side-field `reasoning` AND raw
+    harmony channels in content; the answer tokens carry no markers."""
+    from unittest.mock import patch, MagicMock
+    import inference
+    lines = [
+        b'data: {"choices":[{"delta":{"reasoning":"side-channel thought "},"finish_reason":null}]}',
+        b'data: {"choices":[{"delta":{"content":"<|channel|>analysis<|message|>inline thought<|end|>"},"finish_reason":null}]}',
+        b'data: {"choices":[{"delta":{"content":"<|start|>assistant<|channel|>final<|message|>Final answer."},"finish_reason":null}]}',
+        b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        b'data: [DONE]',
+    ]
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.iter_lines = lambda: iter(lines)
+    schema = {"type": "function", "function": {"name": "calculate",
+              "description": "x", "parameters": {"type": "object", "properties": {}}}}
+    with patch("requests.post", return_value=resp):
+        events = list(inference.generate_with_tools(
+            "q", [], None, tool_schemas=[schema],
+            execute_tool=lambda n, a: "{}", max_rounds=2))
+    reasoning = "".join(e["content"] for e in events if e["type"] == "reasoning")
+    tokens = "".join(e["content"] for e in events if e["type"] == "token")
+    assert "side-channel thought" in reasoning and "inline thought" in reasoning
+    assert tokens == "Final answer."
+    assert not any(e["type"] == "error" for e in events)
+    print("✓ generate_with_tools: side-field + harmony reasoning both stream")
+
+
+def test_extract_message_text_other_dialects():
+    """Non-streaming: `reasoning`/`thinking` side fields count as reasoning for
+    the budget warning, and harmony framing is stripped from content."""
+    from inference import _extract_message_text
+    data = {"choices": [{"message": {
+        "reasoning": "thinking", "content":
+        "<|start|>assistant<|channel|>final<|message|>Title Here<|return|>"}}]}
+    assert _extract_message_text(data) == "Title Here"
+    data = {"choices": [{"message": {"thinking": "all budget", "content": ""}}]}
+    assert _extract_message_text(data) == ""
+    data = {"choices": [{"message": {"content": "<think>x</think>Real"}}]}
+    assert _extract_message_text(data) == "Real"
+    print("✓ non-streaming extraction handles every dialect")
+
+
+def test_reasoning_effort_passthrough():
+    """inference.reasoning_effort rides the payload only when set."""
+    import config, inference
+    cfg = config.get_config()["inference"]
+    old = cfg.get("reasoning_effort")
+    try:
+        cfg["reasoning_effort"] = None
+        assert "reasoning_effort" not in inference._build_payload([], stream=True)
+        cfg["reasoning_effort"] = "high"
+        assert inference._build_payload([], stream=True)["reasoning_effort"] == "high"
+    finally:
+        cfg["reasoning_effort"] = old
+    print("✓ reasoning_effort forwarded only when configured")
