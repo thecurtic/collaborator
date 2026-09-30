@@ -182,7 +182,7 @@ The slow part of building isn't the model writing code; it's finding out whether
 
 A loose thought becomes project work without me filing anything, but two gates stay mine: pushing a note to the PM, and merging.
 
-&#91;embedded content: chat to merge · two gates held by me\]
+![Chat to merge: two gates held by me](delegation-flow.svg)
 
 The highlighted steps are my gates. Between them sits trying it: from the review I test the work in the sandbox, and it either goes on to merge or back to the team through the PM.
 
