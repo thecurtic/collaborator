@@ -1,6 +1,6 @@
 # Collaborator UX Redesign — Intentions
 
-Sep 27, 2026 · @Curtis
+Sep 27, 2026
 
 ## Framing
 
