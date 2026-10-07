@@ -1,13 +1,9 @@
 # Collaborator — Frontend
 
-Web UI for **Collaborator**, a self-hosted personal chat interface backed by
-local LLM inference. See `api-spec/INTENTS.md` for the product philosophy
-(visible, editable, first-class memory) and `api-spec/API-SPEC.md` for the REST
-contract this app codes against.
-
-> Repo rules live in [`AGENTS.md`](./AGENTS.md): code is pushed to the frontend
-> repo only; the backend repo is read-only and used solely to vendor the design
-> docs in `api-spec/`.
+Web UI for **Collaborator**, a self-hosted personal AI hub backed by local LLM
+inference. See [`../INTENTS.md`](../INTENTS.md) for the product philosophy and
+[`../API-SPEC.md`](../API-SPEC.md) for the REST and WebSocket contract this app
+codes against.
 
 ## Stack
 
@@ -15,6 +11,7 @@ contract this app codes against.
 - Tailwind CSS v4 + shadcn/ui-style components
 - **Mobile-first** layout (primary target is phone; desktop supported)
 - **Installable PWA** (vite-plugin-pwa: manifest, service worker, offline shell)
+- Capacitor Android shell in `android/` (remote-URL mode, see `DEV.md`)
 - Thin typed API layer with a swappable service seam
 
 ## Getting started
@@ -28,9 +25,13 @@ Make sure the backend is running on `http://localhost:8001` (or set
 `VITE_BACKEND_URL`). Copy `.env.example` to `.env.local` to override.
 
 ```bash
-npm run build        # type-check + production build
+npm run build        # type-check + production build -> dist/
 npm run typecheck    # types only
+npm test             # vitest
 ```
+
+`DEV.md` covers the full dev loop: running the backend, testing on a phone,
+PWA install, and building the Android shell.
 
 ## Microphone use (heads-up for self-hosters)
 
@@ -52,32 +53,22 @@ situations than you might expect:
 ```
 src/
   api/        wire types, HTTP client, and the CollaboratorApi service seam
-  auth/       passkey session, auth gate context, and the passkey screen
+  auth/       session handling, auth gate context, and the passkey screen
   domain/     canonical app models + adapters from the wire format
-  features/   chat (history, composer, bubbles) and health indicator
+  features/   chat, scratch, notes, events, voice, settings
   components/ shadcn-style UI primitives
-  lib/        utilities (cn, date parsing)
+  native/     feature-detected bridge to the Android shell (no-op in browsers)
+  lib/        utilities
 ```
 
-**Design intent — built against the API as-built, without blocking the vision.**
-The canonical model mirrors the implemented endpoints (health, send/list/discard
-messages). The recall, tagging, and settings endpoints described under "API
-Extensions Needed" in `INTENTS.md` are **not yet served** — calling code depends
-on the `CollaboratorApi` interface (`src/api/collaborator.ts`), so they can be
-added there (real or mocked) as the backend ships them, with no UI rewrite.
+Everything that talks to the backend goes through the `CollaboratorApi`
+interface (`src/api/collaborator.ts`), so endpoints can be added or mocked
+without touching the UI.
 
-## Current scope (Phase 1)
+## Authentication
 
-- Send a message and see the model response
-- Load conversation history
-- Discard a turn (drops it from model context; stays in the DB)
-- Backend health indicator
-- Device-session authentication (passkey exchanged at login, never stored;
-  httpOnly cookie in browsers, `X-Session` in the Android shell) with a lock
-  screen on 403 — optional when the backend has auth disabled (see `DEV.md`)
-
-## Roadmap (from INTENTS.md, pending backend)
-
-- Editable recall block above responses (visible memory synthesis)
-- Per-turn free-form tagging with recall boosts
-- Context-assembly preview (recall → recent window → current)
+The passkey is exchanged at login for a device session and never stored
+client-side: browsers get an httpOnly cookie, the Android shell stores the
+session token and sends `X-Session`. A 403 locks the app and shows the login
+screen. Auth is optional; with it disabled on the backend the app runs
+without a lock screen.

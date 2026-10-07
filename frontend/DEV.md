@@ -1,16 +1,14 @@
-# Local Dev Testing — Frontend + Backend
+# Local Dev — Frontend + Backend
 
-How to run the Collaborator frontend against a **local** backend on this
-machine. The backend runs from a sibling directory and is never committed to
-this repo (see [`AGENTS.md`](./AGENTS.md)).
+How to run the frontend against a local backend. Both live in this monorepo:
 
 ```
-E:\Tools\Apps\
-├── collaborator-frontend\   <- this repo (pushed to the frontend remote)
-└── collaborator-backend\    <- sibling clone, NOT part of this repo
+collaborator/
+├── backend/     FastAPI backend (its venv at backend/.venv)
+└── frontend/    this app
 ```
 
-## Architecture of the dev loop
+## The dev loop
 
 ```
 Browser → http://localhost:3000  (Vite dev server)
@@ -19,196 +17,138 @@ Browser → http://localhost:3000  (Vite dev server)
          http://127.0.0.1:8001    (FastAPI backend)
             │  calls the OpenAI-compatible LLM endpoint
             ▼
-         http://<inference-host>:1234/v1  (LM Studio — model: qwen/qwen3-coder-next)
+         http://<inference-host>:1234/v1  (LM Studio, llama.cpp, vLLM, …)
 ```
 
-The proxy target and LLM endpoint are configurable:
-- Frontend proxy → `VITE_BACKEND_URL` (default `http://localhost:8001`), see `vite.config.ts`.
-- Backend LLM/DB → `../collaborator-backend/.config.yaml` (gitignored local override).
+- Frontend proxy target: `VITE_BACKEND_URL` (default `http://localhost:8001`),
+  see `vite.config.ts`. Copy `.env.example` to `.env.local` to override.
+- Backend LLM endpoint, DB path, port: the gitignored `../config.yaml`
+  (copy from `../config.yaml.example`).
 
-## One-time backend setup (already done on this machine)
+## One-time backend setup
 
-```powershell
-cd E:\Tools\Apps
-git clone <backend-remote> collaborator-backend
-cd collaborator-backend
-py -m venv venv
-.\venv\Scripts\python.exe -m pip install -r backend\requirements.txt pyyaml requests
+```bash
+cd ..                                   # repo root
+cp config.yaml.example config.yaml      # set inference.endpoint_url
+python3 -m venv backend/.venv
+backend/.venv/bin/pip install -r backend/requirements.txt
 ```
 
-> Note: `pyyaml` and `requests` are imported by the backend but missing from its
-> `requirements.txt`, so they're installed explicitly above.
-
-The local override `collaborator-backend\.config.yaml` (gitignored) sets:
-- `inference.endpoint_url: http://<inference-host>:1234/v1`
-- `memory.db_path: E:/Tools/Apps/collaborator-backend/backend/data/conversations.db`
-- `server.backend_port: 8001`
+On Windows: `py -m venv backend\.venv` and
+`backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt`.
 
 ## Running it (two terminals)
 
-**Terminal 1 — backend:**
-```powershell
-.\scripts\start-backend.ps1
+**Terminal 1, backend:**
+
+```bash
+cd backend && ../backend/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8001
 ```
 
-**Terminal 2 — frontend:**
-```powershell
+(Windows: `.\scripts\start-backend.ps1` from this directory.)
+
+**Terminal 2, frontend:**
+
+```bash
 npm install   # first time only
 npm run dev
 ```
 
-Then open <http://localhost:3000>. In the Claude Code session you can also launch
-either with the `!` prefix, e.g. `! ./scripts/start-backend.ps1`.
+Then open <http://localhost:3000>.
 
 ## Testing on your phone (mobile-first)
 
-The dev server is exposed on the LAN (`server.host: true`), so on the same
-network you can open:
+The dev server listens on the LAN (`server.host: true`), so a phone on the
+same network can open `http://<your-machine-ip>:3000`. That is enough to test
+the mobile UI, but:
 
-```
-http://<dev-machine-ip>:3000      (this machine's LAN IP)
-```
+> **PWA install, the microphone and offline need HTTPS.** Service workers and
+> `getUserMedia` only run in a secure context (`https://…` or `localhost`).
 
-That's enough to test the **mobile UI**. But note:
+The service worker is **disabled in `npm run dev`** (see PWA notes), so to
+test install and offline you need a production build:
 
-> **PWA install / offline needs HTTPS.** Service workers only run in a secure
-> context — i.e. `https://…` or `localhost`. Over plain `http://<lan-ip>` the
-> app loads but the SW won't register and you won't get an "Install" prompt.
-
-To install the PWA on your phone, use one of:
-
-The service worker is **disabled in `npm run dev`** (see PWA notes), so to test
-**install/offline** you need a production build:
-
-```powershell
+```bash
 npm run build
 npm run preview   # serves the built app (with SW) on http://localhost:4173
 ```
 
-- **Tailscale serve (recommended — you're already on Tailscale).** Gives a real
-  HTTPS cert on your tailnet. With `npm run preview` running:
-  ```powershell
-  tailscale serve --https=443 http://127.0.0.1:4173
-  ```
-  Then open `https://<this-machine>.<your-tailnet>.ts.net` on your phone (also on
-  the tailnet) and use the browser's **Add to Home Screen / Install**. Stop it
-  with `tailscale serve --https=443 off`. (`allowedHosts` already permits `.ts.net`.)
-  Note: `npm run preview` does not proxy `/api`; set `VITE_API_BASE_URL` to the
-  backend (or run preview behind something that proxies) when testing the build.
-- **Desktop check:** open `http://localhost:4173` in Chrome/Edge — secure
-  context, so install works immediately for a quick verification.
+- **Tailscale Serve (if you use Tailscale):** gives a real HTTPS cert on your
+  tailnet. With `npm run preview` running:
+  `tailscale serve --https=443 http://127.0.0.1:4173`, then open
+  `https://<machine>.<your-tailnet>.ts.net` on the phone and use the browser's
+  Install / Add to Home Screen. (`allowedHosts` already permits `.ts.net`.)
+  `npm run preview` does not proxy `/api`; set `VITE_API_BASE_URL` to the
+  backend when testing the build this way.
+- **Desktop check:** `http://localhost:4173` in Chrome or Edge is a secure
+  context, so install works immediately.
 
 ## PWA notes
 
 - Config lives in `vite.config.ts` (`VitePWA`); icons are generated by
   `node scripts/generate-icons.mjs` from `public/favicon.svg` into `public/`.
 - `registerType: 'autoUpdate'` + `skipWaiting`/`clientsClaim`/
-  `cleanupOutdatedCaches` — a new build takes control immediately and evicts the
-  old precache, so updates never serve a stale app shell.
-- The SW never intercepts `/api/*` (`navigateFallbackDenylist`), so API calls
-  always hit the network.
+  `cleanupOutdatedCaches`: a new build takes control immediately and evicts
+  the old precache, so updates never serve a stale app shell.
+- The SW never intercepts `/api/*` (`navigateFallbackDenylist`).
 - **SW is OFF in `npm run dev`** (`devOptions.enabled: false`). An active dev
-  service worker caches the app shell and serves stale code across reloads —
-  that's what hid the passkey screen behind the old build. Use a production
-  build (above) to test the PWA.
+  service worker caches the app shell and serves stale code across reloads.
 
-### Stuck on an old version? (clear a stale service worker)
+### Stuck on an old version?
 
-If a browser previously loaded the app while the dev SW was active, it may keep
-serving the old cached shell. To recover once:
-
-- **Desktop:** DevTools → **Application → Service Workers → Unregister**, then
-  **Application → Storage → Clear site data**, then hard-reload (Ctrl+Shift+R).
-- **Phone (installed PWA):** remove/uninstall the app from the home screen and
-  clear the browser site data for the origin, then reload.
+- **Desktop:** DevTools → Application → Service Workers → Unregister, then
+  Application → Storage → Clear site data, then hard-reload.
+- **Phone (installed PWA):** remove the app from the home screen, clear the
+  browser's site data for the origin, reload.
 
 ## Passkey authentication
 
-The backend supports per-user database isolation via a passkey sent as the
-`X-Passkey` header (see `api-spec/API-SPEC.md`).
+- **Auth is OFF by default** (`authentication.enabled: false` in
+  `../config.yaml`): no passkey needed, all requests share one DB.
+- With auth on, the passkey is **never stored client-side**. The lock screen
+  exchanges it via `POST /api/auth/login` for a device session: browsers get
+  an httpOnly cookie, the Android shell stores the token and sends
+  `X-Session`. On load the app probes the API; a 403 shows the login screen
+  (sessions expire: 30 days idle, 90 days absolute), a 429 shows the
+  brute-force lockout wait. Devices are listed and revocable in Settings.
 
-- **Auth is OFF by default** (`authentication.enabled: false`) — no passkey
-  needed, all requests share one DB. This is the normal local dev mode.
-- **Device sessions (b60da69):** the passkey is NEVER stored client-side.
-  The lock screen exchanges it via `POST /api/auth/login` for a device
-  session — browsers get an httpOnly cookie (rides automatically); the
-  Android shell stores the response token and sends `X-Session`. Any legacy
-  `collaborator_passkey` in localStorage is deleted on load.
-- On app load it probes `GET /api/messages?limit=1`; a **403 locks the app**
-  and shows the login screen (sessions expire: 30d idle / 90d absolute). 429
-  = brute-force lockout — the screen shows the Retry-After wait. Devices are
-  listed/revocable in Settings → Devices.
+To exercise the flow locally:
 
-### Testing the passkey UI locally
-
-A test passkey **`letmein`** is already provisioned in the local passkeys DB.
-To exercise the flow:
-
-1. In `../collaborator-backend/.config.yaml` set `authentication.enabled: true`.
-2. Restart the backend (`./scripts/start-backend.ps1`).
-3. Load <http://localhost:3000> → you should see the passkey screen. Enter
-   `letmein` to unlock; enter anything else to see the error path.
-4. When done, set `enabled: false` and restart to return to no-auth dev mode.
-
-> **Backend caveat (flag to backend dev):** `backend/auth.py` hardcodes
-> `PASSKEYS_DB_PATH` to a POSIX path and ignores `authentication.passkeys_db_path`
-> from config. On Windows that resolves to `E:\home\chat\collaborator\backend\
-> data\authentication\passkeys.db` (where the test passkey was created). It
-> should read the path from config instead.
+1. Create a passkey: `cd ../backend && ../backend/.venv/bin/python data/passkey.py create`.
+2. Set `authentication.enabled: true` in `../config.yaml` and restart the backend.
+3. Load <http://localhost:3000>, enter the passkey.
 
 ## Smoke tests
 
 ```bash
 curl http://127.0.0.1:8001/api/health                 # backend direct
 curl http://localhost:3000/api/health                 # through the Vite proxy
-curl -X POST http://localhost:3000/api/messages \
-  -H "Content-Type: application/json" \
-  -d '{"message":"hello","commit":false}'             # full loop (commit:false = no DB write)
 ```
-
-## Known backend ↔ spec discrepancies (found while wiring this up)
-
-These are real differences between `api-spec/API-SPEC.md` and the **as-built**
-backend. The frontend already tolerates them; flagged here so they don't bite
-later (and are worth fixing in the backend/spec to stop the drift):
-
-1. **`GET /api/messages` returns `content`, not `message`/`response`.** Each turn
-   has one `content` field; the role determines whether it's the prompt or reply.
-2. **Errors use `{ "detail": ... }` (FastAPI), not `{ "error": ... }`.**
-3. **`committed` comes back as `0/1`**, not a JSON boolean.
-4. **`created_at` is `"YYYY-MM-DD HH:MM:SS"` UTC**, not ISO-8601 with `Z`. The UI
-   normalizes this to UTC before display (`parseApiDate` in `src/lib/utils.ts`).
-5. **`GET /api/messages` only returns committed turns** — discarded turns vanish
-   from history on reload (they remain in the DB).
 
 ## Troubleshooting
 
-- **`POST /api/messages` returns 500** → the backend can't reach the LLM. Confirm
-  `curl http://<inference-host>:1234/v1/models` works, or update `endpoint_url` in
-  `.config.yaml`.
-- **Frontend health shows "offline"** → backend isn't running on `:8001`.
-- **Port 8001 in use** → another backend instance is running; stop it first.
+- **`POST /api/messages` returns 500**: the backend can't reach the LLM.
+  Check `inference.endpoint_url` in `../config.yaml`.
+- **Health shows "offline"**: backend isn't running on `:8001`.
+- **Port 8001 in use**: another backend instance is running; stop it first.
 
 ## Android shell (`android/`)
 
-A Capacitor wrapper in **remote-URL mode**: the WebView loads
-`https://collaborator.example.com` directly, so every frontend deploy
-updates the app through the existing service-worker flow — **the APK is built
-once** and only rebuilt if the native layer itself changes. Its sole job is a
-microphone-type **foreground service** (capawesome plugin) so calls keep
-capturing with the screen off; the web app starts/stops it around calls via
-`src/native/nativeShell.ts` (feature-detected — browsers no-op, and nothing
-from `@capacitor/*` is imported into the web bundle).
+A Capacitor wrapper in **remote-URL mode**: the WebView loads your deployed
+PWA, so every frontend deploy updates the app through the service-worker
+flow and the APK is built once. Its sole job is a microphone-type
+**foreground service** so calls keep capturing with the screen off; the web
+app starts and stops it around calls via `src/native/nativeShell.ts`
+(feature-detected, a no-op in browsers).
 
-Build (needs Android Studio / an Android SDK):
+Point it at your deployment and build (needs an Android SDK):
 
 ```bash
-npm run android:sync                    # sync config + plugin registrations
-cd android && ./gradlew assembleDebug   # or open android/ in Android Studio
-# → android/app/build/outputs/apk/debug/app-debug.apk
+COLLABORATOR_URL=https://collaborator.example.com npm run android:sync
+cd android && ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-First call in the app prompts for microphone + notification permissions.
-The debug APK is fine for personal sideloading; set up a signing config in
-`android/app/build.gradle` only if you ever want a release build.
+The first call prompts for microphone and notification permissions. The
+debug APK is fine for personal sideloading; set up a signing config in
+`android/app/build.gradle` only for a release build.
