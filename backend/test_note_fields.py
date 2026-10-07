@@ -182,13 +182,13 @@ def test_user_note_bootstrap_and_fields():
 
     # USER-only fields via PATCH; rejected on other notes.
     r = c.patch("/api/notes/USER", json={
-        "fields": {"name": "Curtis", "timezone": "America/Chicago",
+        "fields": {"name": "Alex", "timezone": "America/Chicago",
                    "dob": "1990-05-01"}})
     assert r.status_code == 200, r.text
     conn = sqlite3.connect(dbp)
     note = notes_index.get_note_by_title(conn, "USER")
     conn.close()
-    assert note["fields"]["name"] == "Curtis"
+    assert note["fields"]["name"] == "Alex"
     assert note["fields"]["timezone"] == "America/Chicago"
 
     assert c.patch("/api/notes/USER", json={

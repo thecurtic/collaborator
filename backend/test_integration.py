@@ -13,7 +13,7 @@ import json
 from dotenv import load_dotenv
 load_dotenv()
 
-LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "http://<inference-host>:1234/v1")
+LLM_ENDPOINT = os.environ.get("LLM_ENDPOINT", "http://localhost:1234/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen/qwen3-coder-next")
 
 

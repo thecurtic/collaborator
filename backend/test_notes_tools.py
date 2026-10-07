@@ -78,7 +78,7 @@ def test_search_and_get_note_executors():
 
 def test_search_notes_tag_filter_executor():
     c, cfg, dbp = _fresh()
-    _seed_note(cfg, dbp, "Curtis runs a homelab", "profile fact", tags=["user-profile"])
+    _seed_note(cfg, dbp, "Alex runs a homelab", "profile fact", tags=["user-profile"])
     _seed_note(cfg, dbp, "Sam", "friend from the maker space", tags=["social-graph"])
     _seed_note(cfg, dbp, "Loose idea", "no category")
 
@@ -86,7 +86,7 @@ def test_search_notes_tag_filter_executor():
 
     # Tag + empty query = whole category listing (the full user profile).
     hits = json.loads(execute("search_notes", {"query": "", "tag": "user-profile"}))
-    assert [h["title"] for h in hits] == ["Curtis runs a homelab"]
+    assert [h["title"] for h in hits] == ["Alex runs a homelab"]
 
     # Tag constrains a keyword search.
     hits = json.loads(execute("search_notes",

@@ -1,0 +1,22 @@
+# Example reverse-proxy config for Collaborator (Caddy). Serves the built
+# frontend and routes the API, including WebSockets, to the backend.
+#
+#   sudo cp deploy/Caddyfile.example /etc/caddy/Caddyfile   # then edit
+#   sudo systemctl reload caddy
+#
+# Caddy obtains the TLS certificate itself for a public hostname. On a private
+# network (e.g. a tailnet) use `tls internal` or your own certificate.
+
+collaborator.example.com {
+    encode gzip
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle {
+        root * /srv/collaborator/frontend/dist
+        try_files {path} /index.html
+        file_server
+    }
+}

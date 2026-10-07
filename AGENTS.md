@@ -2,130 +2,66 @@
 
 **Never use subagents.** Do all work directly in the main session.
 
-Collaborator is a self-hosted personal chat interface backed by local LLM inference.
+Collaborator is a self-hosted personal AI hub backed by local LLM inference.
+This is a monorepo: `backend/` (Python, FastAPI, SQLite, markdown notes vault)
+and `frontend/` (Vite + React PWA with a Capacitor Android shell). They talk
+over the HTTP and WebSocket API documented in `API-SPEC.md`.
 
-### Development Workflow
+## Principles
 
-When making changes to Collaborator, follow this workflow:
+- Minimal dependencies.
+- Privacy-first: no external service unless the user explicitly configures it.
+- Self-hosted everything; local inference by default.
+- Nothing personal in the repository: no hostnames, IPs, names or credentials.
+  Use placeholders like `<inference-host>` in examples. Real values live only
+  in the gitignored `config.yaml`.
 
-1. **Develop locally in dev environment** (`/home/chat/collaborator`)
-2. **Test before committing or pushing**:
+## Layout
+
+```
+backend/            FastAPI app (main.py), db.py, notes_index.py, tools, voice, auth
+backend/test_*.py   pytest suite
+frontend/src/       React app; frontend/android/ the Capacitor shell
+deploy/             systemd unit, reverse-proxy example
+docs/               known issues, design notes
+*.md at the root    design docs + prompt files the backend loads at runtime
+config.yaml         machine-local, gitignored; config.yaml.example is the template
+```
+
+## Workflow
+
+1. Make the change.
+2. Test it:
    ```bash
-   npm run build          # Verify build succeeds
-   npm start              # Start standalone server to test full app
-   npx playwright test    # Run API and e2e tests
+   backend/.venv/bin/python -m pytest backend -q        # backend
+   cd frontend && npm run typecheck && npm run build && npm test   # frontend
    ```
-3. **Verify functionality works locally**:
-   - Open http://localhost:3000 in browser
-   - Test sending messages
-   - Verify button enable/disable behavior
-   - Check console for errors
-4. **Commit and push changes**
-5. **Deploy to production** on webserver:
-   ```bash
-   cd /home/chat/collaborator
-   git pull origin main
-   ./deploy.sh
-   ```
-6. **Test production deployment**:
-   - Verify site loads at collaborator.example.com
-   - Test all functionality including send button
-   - Check browser console for errors
-
-### Important Notes
-- **Dev and Production are separate environments** - Changes must be tested locally before production deployment
-- **Always run `npm build && npm start` locally before pushing** - This catches build failures and runtime issues
-- **Test the deploy.sh script locally first** if possible, or ensure it works on webserver
-- **Production testing is mandatory** after deployment - verify critical functionality (send button, chat flow)
-
-### Architecture
-
-This is a deployment host for two separate repositories:
-
-- **backend/** — runs on this VM. Manages SQLite conversation persistence (with tree-structured branching), context assembly, and proxies inference to the local LLM endpoint. Exposes a simple HTTP API. (Repository: `collaborator-backend`)
-- **frontend/** — served from a separate machine on the tailnet. Web UI (PWA) for sending messages, viewing responses, editing or discarding turns before they commit to memory. Supports conversation branching with a vertical tree visualization optimized for mobile devices. (Repository: `collaborator-frontend`)
-
-They are loosely coupled via HTTP API. Either component can be developed and deployed independently.
+3. Housekeeping (same commit):
+   - New or changed endpoint or schema: update `API-SPEC.md`.
+   - New config option: add it to `config.yaml.example` with a comment and a
+     default in `backend/config.py`.
+   - Note format change: update `NOTES-FORMAT.md`.
+   - Design decision: record it in `INTENTS.md` or the UX intentions doc.
+4. Commit with a conventional prefix (`feat:`, `fix:`, `docs:`, `refactor:`).
+5. Deploy on the server with `./deploy.sh` (see `DEPLOY.md`).
 
 ## Inference
 
-All inference is local. Use the same endpoint and model that Pi itself is using for this session (`qwen/qwen3-coder-next` via LM Studio at `http://<inference-host>:1234/v1`).
+All inference goes to the OpenAI-compatible endpoint in `config.yaml`
+(`inference.endpoint_url`). Tests never call a live model.
 
-## Networking
+## Memory model
 
-The web UI must be accessible from any network via the tailnet. The frontend is served from a machine on the tailnet. The backend API on this VM is also reachable via its tailnet IP. No public internet exposure. All communication stays within the tailnet.
+Conversations are trees of turns in SQLite. A turn records the user message
+and the final model response. Discarded turns never enter future context.
+Context for a new turn is the active branch (root to current turn) plus the
+recall block. Ideas worth keeping become atomic notes (`NOTES-FORMAT.md`),
+always through a draft the user approves; the model never writes to the vault
+directly.
 
-## Memory Model
+## Authentication
 
-Conversations are stored as a tree structure in SQLite. Each turn records the user message and the final model response (not intermediate tool calls). The user can discard any turn before it commits — discarded turns never enter memory or future context. Context for each new turn is assembled from the active branch (path from root to current turn).
-
-### Conversation Branching
-
-Conversations form a tree, not a linear list. This is a core architectural feature:
-- **Forking** — Users can fork at any point to explore alternative threads
-- **Branch switching** — When exhausted, users return to the fork point and switch to another branch
-- **Synthesis** — Users can combine insights from multiple branches into a unified response
-
-## Principles
-- Minimal dependencies
-- Privacy-first, no external services unless explicitly requested
-- Self-hosted everything
-- Local inference only
-
-## Testing Requirements
-**CRITICAL: Always test your work before pushing to the repository**
-
-Before committing or pushing any changes to Collaborator, you MUST:
-1. Run `npm run build` - Verify the frontend builds without errors
-2. Run `npm start` or `./deploy.sh` - Start the standalone server and verify functionality
-3. Open http://localhost:3000 in browser - Test the send button and chat flow
-4. Run `npx playwright test` - Ensure API tests pass
-5. Verify no console errors in browser DevTools
-
-**CRITICAL: Frontend developers must be notified before backend changes are pushed**
-- Backend developers: Create frontend-updates one-pagers for any API/config/data changes
-- Frontend developers: Check `frontend-updates/` after pull to understand backend changes
-
-Failure to test before pushing will result in broken deployments and wasted time debugging production issues.
-
-## Config Layer
-
-The project uses a single `config.yaml` at the project root for shared configuration:
-- **Inference** - Endpoint, model ID, temperature, max tokens, thinking mode, streaming
-- **Memory** - Default context window size, database path
-- **Server** - Backend host/port, allowed CORS origins
-- **System prompt** - Text or file path for system prompt template
-
-Both the backend and Pi read from this config. The model can be swapped without touching code, allowing Pi to use a more powerful coding model while Collaborator uses a conversational one.
-
-## Housekeeping
-
-When making backend changes, follow this housekeeping checklist to keep frontend developers informed:
-
-### For Backend Developers (CODE PUSHER)
-
-1. **Update INTENTS.md** - Update `Last Updated:` date and add any new philosophical or architectural notes
-2. **Create frontend-updates one-pager** - For commits affecting frontend:
-   - File: `frontend-updates/{commit-hash}-{short-description}.md`
-   - Include: API changes, config changes, data model changes, testing checklist
-3. **Update API-SPEC.md** - Document any endpoint or schema changes
-4. **Update config.yaml.example** - Add new configuration options with comments
-5. **Run `npm run build && npm start` locally** - Verify no breaking changes
-6. **Push** - Frontend developers will read the one-pagers in `frontend-updates/` to understand what changed
-7. **Deploy** - After pull on production
-
-### For Frontend Developers (PULLER)
-
-1. **Read frontend-updates/** - Check for new one-pagers since last sync (they'll be committed after backend pushes)
-2. **Review INTENTS.md** - Check `Last Updated:` for new changes
-3. **Check API-SPEC.md** - Look for endpoint or schema changes
-4. **Test locally** - Verify frontend works with backend changes before deployment
-5. **Report issues** - Flag any broken functionality to backend developer
-
-### How Communication Works
-
-Frontend developers are informed via CODE, not direct notification:
-- Backend pushes → `frontend-updates/` directory populated with one-pagers
-- Frontend pulls → reads one-pagers to understand what changed
-- Frontend commits → responds with frontend-specific fixes if needed
-- This creates an auditable trail of all changes and their impact
+Passkeys (Argon2id-hashed) map to a stable identity hash that names the
+user's data directory. Clients hold a session token, never the passkey.
+`backend/data/passkey.py` manages passkeys (`create`, `rotate`, `revoke`,
+`list`).

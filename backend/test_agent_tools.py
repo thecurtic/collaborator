@@ -64,9 +64,9 @@ def test_git_read(monkeypatch):
     def fake_get(url, params=None, headers=None, timeout=None):
         seen["url"], seen["headers"] = url, headers
         if url.endswith("/user/repos"):
-            return _Resp([{"full_name": "curtis/collaborator", "private": True,
+            return _Resp([{"full_name": "alex/collaborator", "private": True,
                            "default_branch": "main", "description": "chat app"}])
-        if url.endswith("/repos/curtis/collaborator/contents/"):
+        if url.endswith("/repos/alex/collaborator/contents/"):
             return _Resp([{"name": "backend", "path": "backend", "type": "dir",
                            "size": 0}])
         if url.endswith("/contents/backend/main.py"):
@@ -78,17 +78,17 @@ def test_git_read(monkeypatch):
     monkeypatch.setattr(requests, "get", fake_get)
 
     repos = agent_tools.git_read("list_repos")
-    assert repos["repos"][0]["name"] == "curtis/collaborator"
+    assert repos["repos"][0]["name"] == "alex/collaborator"
     assert seen["headers"]["Authorization"] == "token ro-token"
 
-    files = agent_tools.git_read("list_files", repo="curtis/collaborator")
+    files = agent_tools.git_read("list_files", repo="alex/collaborator")
     assert files["entries"][0]["type"] == "dir"
 
-    f = agent_tools.git_read("read_file", repo="curtis/collaborator",
+    f = agent_tools.git_read("read_file", repo="alex/collaborator",
                              path="backend/main.py")
     assert f["content"] == "hello = 'x'" and f["truncated"] is False
 
-    missing = agent_tools.git_read("read_file", repo="curtis/collaborator",
+    missing = agent_tools.git_read("read_file", repo="alex/collaborator",
                                    path="nope.txt")
     assert "not found" in missing["error"]
     assert "repo" in agent_tools.git_read("read_file")["error"]
@@ -127,28 +127,28 @@ def test_git_issue_create_and_comment(monkeypatch):
     posts = []
 
     def fake_get(url, params=None, headers=None, timeout=None):
-        assert url.endswith("/repos/curtis/collaborator/labels")
+        assert url.endswith("/repos/alex/collaborator/labels")
         return _Resp([{"id": 7, "name": "enhancement"}, {"id": 9, "name": "bug"}])
 
     def fake_post(url, json=None, headers=None, timeout=None):
         posts.append((url, json))
         if url.endswith("/issues"):
             return _Resp({"number": 42, "title": json["title"],
-                          "html_url": "http://forge:3000/curtis/collaborator/issues/42"})
+                          "html_url": "http://forge:3000/alex/collaborator/issues/42"})
         if url.endswith("/issues/42/comments"):
-            return _Resp({"html_url": "http://forge:3000/curtis/collaborator/issues/42#c1"})
+            return _Resp({"html_url": "http://forge:3000/alex/collaborator/issues/42#c1"})
         return _Resp({}, status=404)
 
     monkeypatch.setattr(requests, "get", fake_get)
     monkeypatch.setattr(requests, "post", fake_post)
 
-    out = agent_tools.git_issue("create", repo="curtis/collaborator",
+    out = agent_tools.git_issue("create", repo="alex/collaborator",
                                 title="Add graph view", body="Details.",
                                 labels=["Enhancement", "nonexistent"])
     assert out["created"] and out["number"] == 42 and "issues/42" in out["url"]
     assert posts[0][1]["labels"] == [7]          # resolved by name, unknown dropped
 
-    out = agent_tools.git_issue("comment", repo="curtis/collaborator",
+    out = agent_tools.git_issue("comment", repo="alex/collaborator",
                                 issue_number=42, body="Follow-up.")
     assert out["commented"] and out["issue_number"] == 42
 

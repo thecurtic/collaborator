@@ -3833,7 +3833,7 @@ def _consume_ws_ticket(ticket: Optional[str]) -> bool:
 
 class LoginRequest(BaseModel):
     passkey: str
-    # Shown in the sessions list ("my phone"); set it from the client.
+    # Shown in the sessions list (e.g. "my phone"); set it from the client.
     device_label: Optional[str] = None
 
 

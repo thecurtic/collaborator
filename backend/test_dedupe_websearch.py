@@ -112,7 +112,7 @@ def test_web_search_gating_and_executor():
     assert "web_search" not in {s["function"]["name"] for s in schemas}
 
     # URL set -> present; executor parses SearXNG JSON (mocked HTTP).
-    cfg["tools"]["web_search"]["url"] = "http://<search-vm-ip>"
+    cfg["tools"]["web_search"]["url"] = "http://searx.example"
     schemas, execute, _ = main._build_tools(dbp)
     assert "web_search" in {s["function"]["name"] for s in schemas}
 
@@ -133,7 +133,7 @@ def test_web_search_gating_and_executor():
     finally:
         inference.requests.get = orig
 
-    assert captured["url"].startswith("http://<search-vm-ip>/search")
+    assert captured["url"].startswith("http://searx.example/search")
     assert captured["params"]["q"] == "vancouver transit" and captured["params"]["format"] == "json"
     assert len(out["results"]) == 5                                # capped at config results
     assert len(out["results"][0]["snippet"]) <= 300                # snippets trimmed
@@ -155,7 +155,7 @@ def test_web_search_brave_provider():
     # (the SELECTED provider's credential is what gates).
     c, cfg, dbp = _fresh()
     cfg["tools"]["web_search"]["provider"] = "brave"
-    cfg["tools"]["web_search"]["url"] = "http://<search-vm-ip>"
+    cfg["tools"]["web_search"]["url"] = "http://searx.example"
     schemas, _, _ = main._build_tools(dbp)
     assert "web_search" not in {s["function"]["name"] for s in schemas}
 

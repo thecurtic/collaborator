@@ -1,15 +1,12 @@
-# systemd unit for the Collaborator Python backend (uvicorn).
+# systemd unit for the Collaborator backend (FastAPI/uvicorn).
 #
-# OPTIONAL: install this for boot persistence + journald logs. Once installed,
-# ./restart.sh automatically uses `systemctl restart` instead of nohup.
-#
-# Install on the server (adjust User / paths if your checkout differs):
+# Install on the server (adjust User and paths to your checkout):
 #   sudo cp deploy/collaborator-backend.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now collaborator-backend
 #
-# Then one-command restart:
-#   sudo systemctl restart collaborator-backend     # or just: ./restart.sh
+# Afterwards:
+#   sudo systemctl restart collaborator-backend     # or: ./deploy.sh
 #   journalctl -u collaborator-backend -f           # logs
 
 [Unit]
@@ -20,8 +17,8 @@ After=network.target
 Type=simple
 User=collaborator
 WorkingDirectory=/srv/collaborator/backend
-# uvicorn reads port/host from config.yaml via main.py defaults; override here if needed.
-ExecStart=/srv/collaborator/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8001
+# Port and host are also read from config.yaml; override here if needed.
+ExecStart=/srv/collaborator/backend/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8001
 Restart=on-failure
 RestartSec=2
 

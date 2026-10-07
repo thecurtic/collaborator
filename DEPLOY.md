@@ -1,162 +1,106 @@
-# Collaborator Deployment Guide
+# Deploying Collaborator
 
-## Development vs Production Environments
+One server runs everything: the Python backend, the built frontend (static
+files behind a reverse proxy), and whatever inference server you point it at.
 
-### Development Environment
-- **Location**: `/home/chat/collaborator`
-- **Runs on**: localhost:3000
-- **Usage**: Local testing, feature development, running tests
-- **Commands**:
-  ```bash
-  # Start dev server
-  npm run dev
-  
-  # Build for production
-  npm run build
-  
-  # Run tests
-  npx playwright test
-  ```
+## Prerequisites
 
-### Production Environment
-- **Location**: `/home/chat/collaborator` (on webserver)
-- **Runs on**: collaborator.example.com:3000
-- **Usage**: Public-facing deployment
-- **Deployment**: Use the deploy script (see below)
+- Linux host with Python 3.10+, Node 20+, git, ffmpeg.
+- An OpenAI-compatible inference endpoint reachable from the server (LM Studio,
+  llama.cpp, vLLM, …).
+- A reverse proxy for TLS (Caddy, nginx, Tailscale Serve, …). The PWA, the
+  microphone and the service worker all require a secure origin.
 
-## Quick Start on Webserver
-
-1. Pull the latest code from git:
-   ```bash
-   cd /home/chat/collaborator
-   git pull origin main
-   ```
-2. Copy and configure config.yaml (gitignored — it's your machine's actual
-   config; the tracked `config.yaml.example` is the documented template):
-   ```bash
-   cp config.yaml.example config.yaml
-   # Edit with your tailnet IPs and production URL
-   ```
-3. Copy environment template:
-   ```bash
-   cp .env.local.example .env.local
-   # Edit with your production domain (e.g., https://collaborator.example.com)
-   ```
-4. Run the deploy script:
-   ```bash
-   chmod +x deploy.sh
-   ./deploy.sh
-   ```
-
-## Restarting the backend
-
-The Python backend (FastAPI/uvicorn) is a **separate process** from the Next.js
-server. Pulling code does not restart it. Use the one-command restarter:
+## First install
 
 ```bash
-./restart.sh
+sudo mkdir -p /srv/collaborator && sudo chown "$USER" /srv/collaborator
+git clone <your-remote> /srv/collaborator
+cd /srv/collaborator
+cp config.yaml.example config.yaml
+$EDITOR config.yaml                # inference.endpoint_url, server.cors_origins, …
 ```
 
-It reads the port from `config.yaml`, uses the project `.venv`, and prints a health
-check. `./deploy.sh` calls it automatically, so a normal deploy bounces the backend.
+Create the backend environment and your passkey:
 
-**Optional — run it under systemd** (boot persistence + `journalctl` logs). Once
-installed, `./restart.sh` automatically uses it:
+```bash
+python3 -m venv backend/.venv
+backend/.venv/bin/pip install -r backend/requirements.txt
+cd backend && ../backend/.venv/bin/python data/passkey.py create && cd ..
+```
+
+Set `authentication.enabled: true` in `config.yaml` once you have a passkey.
+
+Install the backend as a service (edit `User=` and the paths first):
 
 ```bash
 sudo cp deploy/collaborator-backend.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now collaborator-backend
-# adjust User/paths in the unit if your checkout isn't /srv/collaborator
 ```
 
-Verify a restart took effect:
+Build the frontend and put it behind your proxy. `deploy/Caddyfile.example`
+serves `frontend/dist` and routes `/api/*` to the backend on port 8001; any
+static server plus proxy works the same way (WebSockets must be passed through
+for voice).
+
 ```bash
-curl -s http://localhost:8001/api/health   # {"status":"healthy","version":"0.2.0"}
+./deploy.sh
 ```
+
+## Updating
+
+```bash
+cd /srv/collaborator && ./deploy.sh
+```
+
+The script pulls, installs backend requirements, upgrades yt-dlp, builds the
+frontend, restarts the backend unit (or falls back to `./restart.sh`) and waits
+for `/api/health`. Flags: `SKIP_PULL=1`, `SKIP_FRONTEND=1`. If a dedicated
+static server runs as a systemd unit, name it in `FRONTEND_SERVICE` and the
+script restarts it too.
 
 ## Configuration
 
-### config.yaml
-Update these values:
-- `inference.endpoint_url`: LM Studio endpoint (tailnet IP:1234)
-- `server.cors_origins`: Add your production domain
-- `server.backend_port`: Change if 8001 is occupied (default)
-- `memory.db_path`: Database location
+Everything machine-specific lives in the gitignored `config.yaml`:
 
-### .env.local
-Set `NEXT_PUBLIC_BACKEND_URL` to your production domain.
+- `inference.endpoint_url`, `inference.model_id`
+- `server.backend_port`, `server.cors_origins` (add your public origin)
+- `authentication.enabled`, `authentication.passkeys_db_path`
+- `tools.*`: web search provider and key, fetch proxy, transcription limits,
+  wallet keys. Every secret the app holds is in this file.
 
-## Port Conflicts
+User data lives under `backend/data/users/<identity-hash>/`: the SQLite
+database and the notes vault. Back that directory up, plus `config.yaml` and
+`backend/data/authentication/passkeys.db`.
 
-If ports conflict, change in `config.yaml`:
-```yaml
-server:
-  backend_port: 8002  # Backend API port
-```
+## Passkeys
 
-Set PORT environment variable for frontend:
 ```bash
-PORT=3001 ./deploy.sh  # Frontend port
+cd backend
+../backend/.venv/bin/python data/passkey.py create
+../backend/.venv/bin/python data/passkey.py list
+../backend/.venv/bin/python data/passkey.py rotate <old-hash>   # new passkey, same data
+../backend/.venv/bin/python data/passkey.py revoke <hash>
 ```
 
-## Architecture
+`rotate` issues a new passkey for an existing identity, moves nothing on disk,
+and logs every device out. The identity hash printed at creation is what
+`tools.nwc.connections` and the per-user wallet config are keyed by.
 
-Collaborator uses a **Next.js standalone server** that:
-- Serves static frontend assets (CSS, JS)
-- Proxies `/api/*` requests to the Python FastAPI backend
-- Handles both frontend and backend in a single process
+## Android shell
 
-The deploy script now runs `node .next/standalone/server.js` which:
-1. Loads the built Next.js application
-2. Serves static assets on port 3000 (or custom PORT)
-3. Proxies API calls to the Python backend on port 8001 (or custom)
+The APK is a WebView pointed at your deployment. Set the URL when syncing:
 
-## Development Workflow
-
-### Making Changes Locally
-1. Work on your feature in the development environment
-2. **Always test before committing/pushing**:
-   ```bash
-   npm run build
-   npm start  # or use ./deploy.sh for production testing
-   npx playwright test
-   ```
-3. Verify all functionality works in local build
-4. Commit and push changes
-
-### Deploying to Production
-1. Pull latest code on webserver:
-   ```bash
-   git pull origin main
-   ```
-2. Ensure config.yaml and .env.local are configured
-3. Run deploy script:
-   ```bash
-   ./deploy.sh
-   ```
-
-## Troubleshooting
-
-### Static Assets 404
-If you see 404 errors for `_next/static/...`:
-1. Ensure you pulled the latest code
-2. Run `npm run build` to rebuild
-3. Restart with `./deploy.sh`
-
-### Port Already in Use
 ```bash
-# Find process using port 3000
-lsof -i :3000
-
-# Kill it
-kill -9 <PID>
+cd frontend
+COLLABORATOR_URL=https://collaborator.example.com npm run android:sync
+cd android && ./gradlew assembleDebug
 ```
 
-### Send Button Not Working (Production)
-If the send button is disabled on production:
-1. Check browser console for JavaScript errors
-2. Verify Next.js build completed successfully: `npm run build`
-3. Check that static assets exist in `.next/static/`
-4. Ensure the deploy script ran successfully
-5. Restart with `./deploy.sh` to ensure fresh build is served
+## Health
+
+```bash
+curl -s http://localhost:8001/api/health
+journalctl -u collaborator-backend -f
+```

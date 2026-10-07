@@ -56,7 +56,7 @@ def load_config() -> dict:
     # Default configuration - use relative paths that work on any machine
     defaults = {
         "inference": {
-            "endpoint_url": "http://<inference-host>:1234/v1",
+            "endpoint_url": "http://localhost:1234/v1",
             "model_id": "qwen/qwen3-coder-next",
             # Optional model for UTILITY calls — ephemeral background output
             # (titles, recall/tool synthesis). A small model here is faster and
@@ -286,7 +286,7 @@ def load_config() -> dict:
             "git": {
                 # Read-only forge access (Gitea; GitHub API-compatible for these
                 # routes). The git_read tool registers only when BOTH are set.
-                "api_url": None,       # e.g. "http://<gitea-host>:3000/api/v1"
+                "api_url": None,       # e.g. "https://gitea.example.com/api/v1"
                 "token": None,         # READ-ONLY token (set in .config.yaml)
                 "max_chars": 20000,
                 "timeout": 15,

@@ -864,7 +864,7 @@ authentication:
   users_dir: "/home/chat/collaborator/backend/data/users"
 
 inference:
-  endpoint_url: "http://<inference-host>:1234/v1"
+  endpoint_url: "http://localhost:1234/v1"
   model_id: "qwen/qwen3-coder-next"
   temperature: 0.7
   max_tokens: 2048

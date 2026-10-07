@@ -90,7 +90,7 @@ def test_login_session_flow():
 
     # Login mints a session: token in body + httpOnly cookie.
     r = c.post("/api/auth/login", json={"passkey": PASSKEY,
-                                        "device_label": "my phone"})
+                                        "device_label": "Alex's phone"})
     assert r.status_code == 200
     token = r.json()["token"]
     assert "collaborator_session" in r.cookies
@@ -112,7 +112,7 @@ def test_login_session_flow():
     # Sessions list shows the device; revoking kills the token immediately.
     listing = c2.get("/api/auth/sessions",
                      headers={"X-Session": token}).json()["sessions"]
-    mine = [s for s in listing if s["label"] == "my phone"]
+    mine = [s for s in listing if s["label"] == "Alex's phone"]
     assert mine and mine[0]["current"] is True
     sid = mine[0]["id"]
     r3 = c2.delete(f"/api/auth/sessions/{sid}", headers={"X-Session": token})
