@@ -38,12 +38,10 @@ def _get_passkeys_db_path() -> str:
         return resolve_path("backend/data/authentication/passkeys.db")
 
 
-PASSKEYS_DB_PATH = _get_passkeys_db_path()
-
-
 def get_db_connection():
-    """Get database connection."""
-    return sqlite3.connect(PASSKEYS_DB_PATH)
+    """Connection to the passkeys DB (path resolved at call time so a config
+    change, e.g. in tests, is honoured)."""
+    return sqlite3.connect(_get_passkeys_db_path())
 
 
 def hash_passkey(passkey: str) -> tuple:
@@ -70,12 +68,17 @@ def create_passkey() -> str:
         import auth as _auth
         kdf = _auth.kdf_hash(passkey)
     except ImportError:
+        _auth = None
         kdf = None
 
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
+        if _auth is not None:
+            # First run on a fresh install: create the tables (same schema the
+            # server itself ensures at startup).
+            _auth.ensure_auth_schema(conn)
         cursor.execute("PRAGMA table_info(passkeys)")
         cols = {row[1] for row in cursor.fetchall()}
         if "kdf_hash" not in cols:
@@ -89,13 +92,83 @@ def create_passkey() -> str:
         )
         conn.commit()
         print(f"✓ Generated passkey: {passkey}")
-        print(f"  Hash (for revocation): {hash_value}")
+        print(f"  Identity hash: {hash_value}")
+        print("  (names this user's data directory and keys per-user config; "
+              "use it for rotate / revoke)")
     except sqlite3.IntegrityError:
         print("✗ Error: Passkey hash collision (extremely unlikely)")
     finally:
         conn.close()
-    
+
     return passkey
+
+
+def _resolve_identity(cursor, identity: str):
+    """Find one enabled passkey row by full identity hash or unique prefix.
+    Returns (row_id, hash) or None (prints why)."""
+    identity = (identity or "").strip().lower()
+    if len(identity) < 8:
+        print("✗ Error: give at least 8 characters of the identity hash")
+        return None
+    rows = cursor.execute(
+        "SELECT id, hash FROM passkeys WHERE disabled = 0 AND hash LIKE ?",
+        (identity + "%",)).fetchall()
+    if not rows:
+        print("✗ Error: no active passkey matches that identity hash")
+        return None
+    if len(rows) > 1:
+        print("✗ Error: prefix is ambiguous; give more characters")
+        return None
+    return rows[0]
+
+
+def rotate_passkey(identity: str):
+    """Issue a NEW passkey for an EXISTING identity and log every device out.
+
+    The identity hash (the `hash` column) is untouched, so the user's data
+    directory, wallet config and everything keyed by it stay exactly where
+    they are. What changes: the Argon2id verifier (now of the new passkey)
+    and the salt (so the legacy SHA-256 path can never verify the old
+    passkey again). All sessions for the identity are revoked.
+
+    Requires argon2-cffi: without it the new passkey would have no verifier.
+    Returns the new passkey, or None on failure."""
+    try:
+        import auth as _auth
+    except ImportError:
+        print("✗ Error: cannot import the auth module")
+        return None
+    new_passkey = generate_passkey()
+    kdf = _auth.kdf_hash(new_passkey)
+    if not kdf:
+        print("✗ Error: argon2-cffi is required to rotate a passkey "
+              "(pip install argon2-cffi)")
+        return None
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        _auth.ensure_auth_schema(conn)
+        found = _resolve_identity(cursor, identity)
+        if not found:
+            return None
+        row_id, identity_hash = found
+        cursor.execute(
+            "UPDATE passkeys SET salt = ?, kdf_hash = ? WHERE id = ?",
+            (secrets.token_hex(16), kdf, row_id))
+        cursor.execute(
+            "UPDATE sessions SET revoked = 1 WHERE user_hash = ? AND revoked = 0",
+            (identity_hash,))
+        revoked = cursor.rowcount
+        conn.commit()
+        print(f"✓ Rotated passkey for identity {identity_hash[:12]}…")
+        print(f"  New passkey: {new_passkey}")
+        print(f"  Identity hash (unchanged): {identity_hash}")
+        print(f"  Sessions logged out: {revoked}")
+        print("  The old passkey no longer works. Nothing on disk moved.")
+        return new_passkey
+    finally:
+        conn.close()
 
 
 def revoke_passkey(passkey_hash: str) -> bool:
@@ -157,21 +230,27 @@ def main():
         description="Passkey management for Collaborator"
     )
     subparsers = parser.add_subparsers(dest="command", help="Commands")
-    
-    # Generate command
-    gen_parser = subparsers.add_parser("generate", help="Generate a new passkey")
-    
-    # Revoke command
+
+    subparsers.add_parser("create", aliases=["generate"],
+                          help="Create a new passkey (a new identity)")
+
+    rotate_parser = subparsers.add_parser(
+        "rotate", help="Issue a new passkey for an existing identity; "
+                       "keeps its data, logs every device out")
+    rotate_parser.add_argument("identity",
+                               help="Identity hash (or unique prefix, 8+ chars)")
+
     revoke_parser = subparsers.add_parser("revoke", help="Revoke a passkey")
-    revoke_parser.add_argument("hash", help="Passkey hash to revoke")
-    
-    # List command
+    revoke_parser.add_argument("hash", help="Identity hash to revoke")
+
     subparsers.add_parser("list", help="List all passkeys")
-    
+
     args = parser.parse_args()
-    
-    if args.command == "generate":
+
+    if args.command in ("create", "generate"):
         create_passkey()
+    elif args.command == "rotate":
+        rotate_passkey(args.identity)
     elif args.command == "revoke":
         revoke_passkey(args.hash)
     elif args.command == "list":
