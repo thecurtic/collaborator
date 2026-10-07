@@ -127,7 +127,7 @@ One shared `state` key; its allowed values depend on the note's category:
 
 | category | fields (all optional unless noted) |
 |---|---|
-| `event` | `start` (required), `end`, `all_day`, `location` (free text), `people` (list of social-graph note titles — indexed as GRAPH EDGES, same as body wikilinks) |
+| `event` | `start` (required), `end`, `all_day`, `location` (free text), `people` (list of social-graph note titles — indexed as GRAPH EDGES, same as body wikilinks), `repeat` (recurrence rule), `exceptions` (per-occurrence overrides; see Recurrence) |
 | `goal` | `state`: proposed / started / finished / discarded; `due` (ISO date) |
 | `question` | `state`: open / answered |
 | `project` | `state`: proposed / started / paused / done / abandoned |
@@ -182,11 +182,45 @@ Frontmatter keys (whitelisted, machine-parseable from day one):
 - People and projects are referenced as normal `[[wikilinks]]` in the body — the
   graph edges are the connections; no special fields.
 - Description = the body, like any note.
-- **No recurrence** (v1): a repeating event is separate notes. RRULE only if
-  genuinely needed later.
-- Export: `GET /api/events.ics` (standard iCalendar; all-day and timed both);
+- Export: `GET /api/events.ics` (standard iCalendar; all-day and timed both;
+  recurring events as one VEVENT with RRULE and EXDATE);
   date-window queries via `GET /api/notes/search?tag=event&from=&to=` and the
-  agent's `list_events` tool.
+  agent's `list_events` tool. Both return **expanded occurrences**, so a
+  caller never computes a calendar itself.
+
+### Recurrence (agreed 2026-10-06; supersedes the v1 "separate notes" rule)
+
+A repeating event is **one note** carrying a rule. Occurrences are always
+derived, never stored: the expander takes the rule, the exceptions and a date
+window and does arithmetic, with no model involved. One file is the truth, the
+horizon is infinite, "change all of them" is one edit, and ICS import/export
+maps straight onto RRULE and EXDATE.
+
+| key | format | notes |
+|---|---|---|
+| `repeat` | object: `freq` (daily / weekly / monthly / yearly), `interval` (int, default 1), `by_day` (list of MO…SU, weekly only), `by_month_day` (int, monthly only), `until` (ISO date) or `count` (int) | the rule; `start`/`end` on the note are the first occurrence and set the time of day and duration |
+| `exceptions` | list of objects, each keyed by the occurrence's original `date` (ISO date): either `cancelled: true`, or a replacement `start`/`end`, or `note: <title>` pointing at a one-off event note that replaces the occurrence | per-occurrence overrides |
+
+Rules:
+
+- **Exceptions are kept forever, never pruned.** A cancelled occurrence
+  pruned after the fact would reappear in that week as having happened; the
+  calendar must stay truthful looking back.
+- **An occurrence never grows its own fields in the rule note.** When one
+  occurrence needs a body (notes from that meeting, different people), it
+  becomes an ordinary one-off `event` note for that date, links back to the
+  series with a `[[wikilink]]`, and an exception with `note:` points the
+  occurrence at it. The expander emits the one-off in place of the derived
+  occurrence.
+- Editing a note with a rule asks "this one or all of them" (UI and typed
+  tool params alike). "This one" writes an exception; "all of them" rewrites
+  the rule. Editing a one-off never asks.
+- Frontmatter boundary unchanged: the model proposes `repeat` and `exceptions`
+  through typed tool parameters, validated and reviewed, and the app writes
+  the YAML. The whitelist of content-derived keys grows by exactly these two.
+- The index invariant unchanged: nothing about occurrences is stored
+  index-only. Dropping the index and re-expanding from the files yields the
+  same calendar.
 
 ### Body
 
