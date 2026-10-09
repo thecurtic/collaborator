@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+dev-dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Env & local config
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Safety net: the backend lives in a SIBLING dir (../collaborator-backend) and
+# must never be vendored here (see AGENTS.md). Ignore it if ever nested by mistake.
+/collaborator-backend/
+/backend-local/
