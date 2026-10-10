@@ -12,8 +12,8 @@
 #   2. backend/.venv: install requirements, upgrade yt-dlp (it rots against
 #      YouTube, so every deploy refreshes it)
 #   3. frontend: npm ci + npm run build  ->  frontend/dist
-#   4. restart the backend (systemd unit if installed, else ./restart.sh)
-#      and the frontend unit if one exists
+#   4. restart the backend (systemd user or system unit if installed, else
+#      ./restart.sh) and the frontend unit if one exists
 #   5. wait for /api/health
 #
 # The frontend is static files in frontend/dist. Serve them with your reverse
@@ -31,9 +31,17 @@ VENV="$ROOT/backend/.venv"
 
 log() { printf '\n== %s\n' "$*"; }
 
-unit_exists() {
-    command -v systemctl >/dev/null 2>&1 && \
-        systemctl list-unit-files 2>/dev/null | grep -q "^$1\.service"
+# Restart a systemd unit by name: a user unit (systemctl --user) if one is
+# installed, else a system unit (sudo). Returns 1 when neither exists.
+restart_unit() {
+    command -v systemctl >/dev/null 2>&1 || return 1
+    if systemctl --user list-unit-files 2>/dev/null | grep -q "^$1\.service"; then
+        systemctl --user restart "$1"
+    elif systemctl list-unit-files 2>/dev/null | grep -q "^$1\.service"; then
+        sudo systemctl restart "$1"
+    else
+        return 1
+    fi
 }
 
 # --- 0. preconditions --------------------------------------------------------
@@ -61,7 +69,7 @@ command -v ffmpeg >/dev/null 2>&1 || \
 if [ -z "${SKIP_FRONTEND:-}" ]; then
     if command -v npm >/dev/null 2>&1; then
         log "Frontend build"
-        ( cd frontend && npm ci --no-audit --no-fund && npm run build )
+        ( cd frontend && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npm run build )
     else
         echo "WARNING: npm not found; skipping the frontend build."
     fi
@@ -69,14 +77,11 @@ fi
 
 # --- 4. restart --------------------------------------------------------------
 log "Restarting backend"
-if unit_exists "$BACKEND_SERVICE"; then
-    sudo systemctl restart "$BACKEND_SERVICE"
-else
-    ./restart.sh
-fi
-if [ -z "${SKIP_FRONTEND:-}" ] && unit_exists "$FRONTEND_SERVICE"; then
+restart_unit "$BACKEND_SERVICE" || ./restart.sh
+if [ -z "${SKIP_FRONTEND:-}" ]; then
     log "Restarting frontend ($FRONTEND_SERVICE)"
-    sudo systemctl restart "$FRONTEND_SERVICE"
+    restart_unit "$FRONTEND_SERVICE" || \
+        echo "no $FRONTEND_SERVICE unit; frontend/dist is built, your proxy serves it"
 fi
 
 # --- 5. health ---------------------------------------------------------------

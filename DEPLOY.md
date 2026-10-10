@@ -39,6 +39,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now collaborator-backend
 ```
 
+A systemd **user** unit works too (drop the `User=` line, put the file in
+`~/.config/systemd/user/`, use `systemctl --user` and `loginctl enable-linger`).
+`deploy.sh` and `restart.sh` find either kind.
+
 Build the frontend and put it behind your proxy. `deploy/Caddyfile.example`
 serves `frontend/dist` and routes `/api/*` to the backend on port 8001; any
 static server plus proxy works the same way (WebSockets must be passed through
