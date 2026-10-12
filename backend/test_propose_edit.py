@@ -205,10 +205,10 @@ def test_read_before_edit_gate():
         "title": "Transit is freedom", "body": "Informed rewrite."}))
     assert out["status"] == "pending"
 
-    # Field-only edits (state, tags) don't need the read — no body to clobber.
+    # Field-only edits (tags, fields) don't need the read — no body to clobber.
     _seed_note(cfg, dbp, "Ship the app", "Goal body.", ["goal"])
     out = json.loads(execute("propose_edit", {
-        "title": "Ship the app", "state": "started"}))
+        "title": "Ship the app", "tags": ["goal", "project", "app"]}))
     assert out["status"] == "pending"
     print("✓ read-before-edit: body needs a fresh read; field-only edits don't")
 
@@ -220,9 +220,8 @@ def test_body_metadata_duplication_rejected():
     _, execute, _ = main._build_tools(dbp)
 
     out = json.loads(execute("propose_note", {
-        "title": "Ship the deck", "tags": ["goal"], "state": "started",
-        "due": "2026-08-15",
-        "body": "Due: 2026-08-15\nFinish the investor deck."}))
+        "title": "Kiln day", "tags": ["event"], "start": "2026-08-15T10:00",
+        "body": "Date: 2026-08-15\nA hands-on firing day."}))
     assert "pure prose" in out["error"]
 
     out = json.loads(execute("propose_note", {
@@ -232,8 +231,8 @@ def test_body_metadata_duplication_rejected():
 
     # Prose that merely mentions a date inline is fine.
     out = json.loads(execute("propose_note", {
-        "title": "Ship the deck", "tags": ["goal"], "state": "started",
-        "due": "2026-08-15",
-        "body": "Finish the investor deck before the board meeting."}))
+        "title": "Ship the deck", "tags": ["goal"],
+        "body": "Finish the investor deck by 2026-08-15, before the board "
+                "meeting."}))
     assert out["status"] == "pending"
     print("✓ metadata smuggled into the body rejected; clean prose accepted")

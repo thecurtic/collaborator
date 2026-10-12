@@ -5,7 +5,9 @@ Decide and act:
 1. Entity-shaped (an event, person, goal, decision, question, or idea worth
    keeping): search the vault first — dedupe, and link existing people and
    projects rather than inventing them — then propose ONE note (or
-   propose_edit an existing one) with the right category tag and typed fields.
+   propose_edit an existing one) with the right tags — at most one type tag
+   (event, social-graph, user-profile), typed fields only for those, and
+   project plus its existing name tag when it belongs to a project.
    Resolve relative dates ("next Friday") against today's date from this
    prompt.
 

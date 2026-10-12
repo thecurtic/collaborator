@@ -93,49 +93,53 @@ frontmatter. v1 keys:
   may go stale if source conversations are deleted — dangling ids are harmless.
 - Unknown/extra keys must be preserved by all tooling (forward compatibility).
 
-### Reserved tag vocabulary (extended-cognition categories, agreed 2026-07-27)
+### Types and tags (agreed 2026-10-12; supersedes the 2026-07-27 category table and the 2026-08-03 per-type fields)
 
-The agent is the user's extended cognition: it accumulates perceptions, tracks
-relationships, and surfaces context at request time. All special categories are
-**just tags on notes** — no new primitives. These tag names are reserved for that
-system; don't reuse them for unrelated organic tagging:
+Everything is **just tags on notes**, no other primitive. A tag earns a **type**
+only when its entries carry fields of their own, and type and frontmatter come
+together or not at all. Three tags qualify:
 
-| tag | holds | notes |
+| type tag | holds | fields (all optional unless noted) |
 |---|---|---|
-| `user-profile` | facts about the user; accumulated perceptions | the full profile is the totality of notes with this tag; ALWAYS approval-gated |
-| `social-graph` | one note per person/entity in the user's network | note title = the person's name (a graph node; renames rewrite wikilinks) |
-| `memory` | salient events, statements, context worth remembering | agent-initiated (salience), not necessarily user-initiated |
-| `goal` | stated intentions with a lifecycle | states (proposed/started/finished/discarded) arrive in Phase 2 frontmatter; a finished goal graduates to `memory` |
-| `decision` | explicit choices **with their reasoning** | "I'm going with X because Y" — the Y is the point |
-| `question` | unresolved queries, expressed uncertainty, open threads | |
-| `project` | container grouping related notes/goals/memories | membership = wikilinks from the project note |
-| `event` | calendar events: appointments, meetings, deadlines | structured `start`/`end`/`all_day`/`location`/`people` frontmatter (below); exportable via `GET /api/events.ics` |
+| `event` | calendar events: appointments, meetings, deadlines | `start` (required), `end`, `all_day`, `location` (free text), `people` (list of social-graph note titles — indexed as GRAPH EDGES, same as body wikilinks), `repeat` (recurrence rule), `exceptions` (per-occurrence overrides; see Recurrence). Exportable via `GET /api/events.ics` |
+| `social-graph` | one note per person/entity in the user's network; title = their name (a graph node; renames rewrite wikilinks) | `aliases` (list — other names, matched in search), `kind`: person / org, `relation` (free text), `birthday` (YYYY-MM-DD, or MM-DD when year unknown) |
+| `user-profile` | facts about the user; the full profile is the totality of notes with this tag | `area` — which USER.md section a satellite note belongs to (lowercase-hyphenated) |
 
-Every entry in every category passes through the drafts review queue — the agent
+**Type tags are exclusive**: a note carries at most one (validation rejects
+more; a thing that is an event and a person is two notes). No other note has
+any fields, and no note has a manual `state`.
+
+Every other tag is ordinary and combines with anything, type tags included.
+`goal`, `decision`, `question` and `memory` were categories with their own
+frontmatter until 2026-10-12; they are now plain tags with no type, no fields
+and no state. A deadline or an outcome is written in the body.
+
+Empty-string on edit clears a field.
+
+#### Project membership
+
+A note belongs to a project when it carries `project` plus one other tag, taken
+as the project's **name**: `[project, garden]`, or on an event,
+`[event, project, garden]`. `project` is not a type, so events and people can
+belong to projects. Membership is single: a note carries exactly one name,
+and a name never appears beside another name. That exclusivity is how the app
+tells names apart from kind tags like `bug` or `feature`, which turn up beside
+many names. Projects have no fields and no frontmatter of their own; there is
+no repository field.
+
+#### What changed on 2026-10-12, and the migration
+
+- `project` left the exclusive set; `goal`, `question`, `decision` and
+  `memory` left the type set altogether.
+- The `state` key (goal / question / project) and goal's `due` are gone.
+  Validation rejects them on every note, and the index no longer reads them.
+- Existing frontmatter is **removed, not hidden**: existing vaults are
+  migrated by stripping top-level `state` and `due` from every note, leaving
+  the tags, every other key and the body untouched.
+
+Every note of every type passes through the drafts review queue — the agent
 proposes, the user approves. The agent can never silently update its model of the
-user or anyone else. (`expertise` is deliberately deferred: no crisp trigger yet.)
-
-**Categories are DISCRETE: a note carries at most one category tag** (validation
-rejects more — they exist to be distinct views over the vault; a thing that is
-two categories is two notes). Consequence: a finished goal does NOT gain the
-memory tag — `tag: goal, state: finished` IS the record of what was intended
-and done, queryable as such.
-
-### Per-type frontmatter (agreed 2026-08-03)
-
-One shared `state` key; its allowed values depend on the note's category:
-
-| category | fields (all optional unless noted) |
-|---|---|
-| `event` | `start` (required), `end`, `all_day`, `location` (free text), `people` (list of social-graph note titles — indexed as GRAPH EDGES, same as body wikilinks), `repeat` (recurrence rule), `exceptions` (per-occurrence overrides; see Recurrence) |
-| `goal` | `state`: proposed / started / finished / discarded; `due` (ISO date) |
-| `question` | `state`: open / answered |
-| `project` | `state`: proposed / started / paused / done / abandoned |
-| `social-graph` | `aliases` (list — other names, matched in search), `kind`: person / org, `relation` (free text), `birthday` (YYYY-MM-DD, or MM-DD when year unknown) |
-| `user-profile` | `area` — which USER.md section a satellite note belongs to (lowercase-hyphenated) |
-| `memory`, `decision` | none — their value is prose |
-
-Empty-string on edit clears a field. All values flow model→typed tool params→
+user or anyone else. All values flow model→typed tool params→
 validation→review→app-written YAML, per the frontmatter boundary below.
 
 ### USER.md — the profile hub
@@ -163,8 +167,8 @@ The precise rule behind "frontmatter is app-managed":
    YAML by the app at approval.
 2. **App-authoritative keys** (`created`, `source_turns`) record system actions;
    they are never delegated to the model.
-3. **Content-derived keys** (tags; event `start`/`end`/`all_day`; later goal
-   `state`) carry facts from the conversation the model legitimately knows.
+3. **Content-derived keys** (tags; the type fields: event `start`/`end`/
+   `all_day`/…, person `aliases`/…, profile `area`) carry facts from the conversation the model legitimately knows.
    These follow the propose → review → app-writes pipeline.
 4. The whitelist of content-derived keys grows only deliberately — every new key
    is a design decision, made here.
@@ -179,8 +183,9 @@ Frontmatter keys (whitelisted, machine-parseable from day one):
 | `end` | same format as `start` | optional |
 | `all_day` | boolean | written only when true; a date-only `start` implies it |
 
-- People and projects are referenced as normal `[[wikilinks]]` in the body — the
-  graph edges are the connections; no special fields.
+- People are referenced in `people` or as normal `[[wikilinks]]` in the body —
+  the graph edges are the connections. An event joins a project by its tags
+  (`project` + the name), like any note.
 - Description = the body, like any note.
 - Export: `GET /api/events.ics` (standard iCalendar; all-day and timed both;
   recurring events as one VEVENT with RRULE and EXDATE);
@@ -296,7 +301,8 @@ must not block it. Rules the future integration must honor:
 
 ## Non-goals (v1)
 
-- No `type`, `status`, or other forced structure per the intent spec.
+- No `type` or `status` key: a type is derived from its tag, and no note has
+  a manual status.
 - No note ids separate from the title/filename.
 - No Nostr fields, keys, or signatures in files.
 - No LLM-written frontmatter, ever.

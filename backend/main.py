@@ -212,8 +212,8 @@ class NoteEditRequest(BaseModel):
     title: Optional[str] = None   # rename (rewrites inbound [[links]])
     body: Optional[str] = None
     tags: Optional[List[str]] = None
-    # Whitelisted per-type fields (event start/end/…, goal state/due, person
-    # aliases/…). Empty string clears a field; omitted keys keep their value.
+    # Whitelisted per-type fields (event start/end/…, person aliases/…,
+    # profile area). Empty string clears a field; omitted keys keep their value.
     fields: Optional[dict] = None
 
 
@@ -778,14 +778,6 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                            "description": "event only: social-graph note titles "
                                           "of people involved (become graph "
                                           "edges)"},
-                "state": {"type": "string",
-                          "description": "lifecycle — goal: proposed/started/"
-                                         "finished/discarded; question: open/"
-                                         "answered; project: proposed/started/"
-                                         "paused/done/abandoned"},
-                "due": {"type": "string",
-                        "description": "goal only: deadline, ISO date "
-                                       "(YYYY-MM-DD, resolved against today)"},
                 "aliases": {"type": "array", "items": {"type": "string"},
                             "description": "social-graph only: other names this "
                                            "person/entity goes by"},
@@ -826,11 +818,6 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "location": {"type": "string", "description": "events only"},
                 "people": {"type": "array", "items": {"type": "string"},
                            "description": "events only: full replacement list"},
-                "state": {"type": "string",
-                          "description": "goal/question/project lifecycle — the "
-                                         "usual way to record progress ('I "
-                                         "finished X' -> state finished)"},
-                "due": {"type": "string", "description": "goal only: ISO date"},
                 "aliases": {"type": "array", "items": {"type": "string"},
                             "description": "social-graph only: full replacement"},
                 "kind": {"type": "string", "enum": ["person", "org"]},
@@ -1041,7 +1028,7 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             fields, ferr = _normalize_note_fields(args, tags=tags, title=title)
             if ferr:
                 return json.dumps({"error": ferr})
-            if (_note_category(tags) == "event" and not fields.get("start")):
+            if (_note_type(tags) == "event" and not fields.get("start")):
                 return json.dumps({"error": "notes tagged 'event' need a start "
                                             "(ISO 8601) — pass start (and end/"
                                             "all_day as appropriate)"})
@@ -1405,34 +1392,26 @@ _EVENT_DT_RE = _re_mod.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?([+-]\d{2}:\d{2}|Z)?$")
 _BIRTHDAY_RE = _re_mod.compile(r"^(\d{4}-)?\d{2}-\d{2}$")   # YYYY-MM-DD or MM-DD
 
-# Category tags are DISCRETE: a note carries at most one (validation rejects
-# more). The shared `state` key's allowed values depend on that one category.
-CATEGORY_TAGS = {"user-profile", "social-graph", "memory", "goal", "decision",
-                 "question", "project", "event"}
-STATE_ENUMS = {
-    "goal": ("proposed", "started", "finished", "discarded"),
-    "question": ("open", "answered"),
-    "project": ("proposed", "started", "paused", "done", "abandoned"),
-}
-# Per-category field whitelist (beyond app-managed created/tags/source_turns).
+# Type tags (NOTES-FORMAT.md, 2026-10-12): a tag earns a type only when its
+# entries carry fields of their own, and type and frontmatter come together.
+# Types are EXCLUSIVE: a note carries at most one (validation rejects more).
+# Every other tag — project, goal, decision, question, memory, a project's
+# name — is an ordinary tag with no fields, so it combines with anything.
+TYPE_TAGS = {"event", "social-graph", "user-profile"}
+# Per-type field whitelist (beyond app-managed created/tags/source_turns).
 # The USER note (title "USER", the profile hub) has its own additional set.
-CATEGORY_FIELDS = {
+TYPE_FIELDS = {
     "event": {"start", "end", "all_day", "location", "people"},
-    "goal": {"state", "due"},
-    "question": {"state"},
-    "project": {"state"},
     "social-graph": {"aliases", "kind", "relation", "birthday"},
     "user-profile": {"area"},
 }
 USER_NOTE_FIELDS = {"name", "dob", "resides_in", "timezone"}
-# A finished goal IS the memory — category exclusivity forbids tag graduation,
-# and tag=goal state=finished is exactly queryable as "intended and done".
 
 
-def _note_category(tags: Optional[List[str]]) -> Optional[str]:
-    cats = [t for t in (_normalize_tag(t) for t in (tags or []))
-            if t in CATEGORY_TAGS]
-    return cats[0] if cats else None
+def _note_type(tags: Optional[List[str]]) -> Optional[str]:
+    types = [t for t in (_normalize_tag(t) for t in (tags or []))
+             if t in TYPE_TAGS]
+    return types[0] if types else None
 
 
 def _normalize_note_fields(args: dict, tags: Optional[List[str]] = None,
@@ -1441,16 +1420,23 @@ def _normalize_note_fields(args: dict, tags: Optional[List[str]] = None,
     (fields, error). Every entry path — propose tools, draft edits, direct
     PATCH — goes through here, so they cannot drift. Empty-string values mean
     "clear this field" and pass through for the writers to drop."""
+    # Removed 2026-10-12 (NOTES-FORMAT.md): no note has a manual state, and
+    # goal's due date went with its type.
+    for key in ("state", "due"):
+        if args.get(key) not in (None, ""):
+            return {}, (f"'{key}' is not a note field — notes carry no manual "
+                        "state or due date; say it in the body instead")
     norm_tags = [_normalize_tag(t) for t in (tags or [])]
-    cats = [t for t in norm_tags if t in CATEGORY_TAGS]
-    if len(cats) > 1:
-        return {}, ("a note carries at most ONE category tag "
-                    f"(got: {', '.join(sorted(set(cats)))}) — the categories "
-                    "are discrete; split this into separate notes")
-    category = cats[0] if cats else None
+    types = sorted(set(t for t in norm_tags if t in TYPE_TAGS))
+    if len(types) > 1:
+        return {}, ("a note carries at most ONE type tag "
+                    f"(got: {', '.join(types)}) — event, social-graph and "
+                    "user-profile are exclusive; split this into separate "
+                    "notes")
+    category = types[0] if types else None
     is_user_note = (title or "").strip().upper() == "USER"
 
-    allowed = set(CATEGORY_FIELDS.get(category, set()))
+    allowed = set(TYPE_FIELDS.get(category, set()))
     if is_user_note:
         allowed |= USER_NOTE_FIELDS
 
@@ -1475,29 +1461,23 @@ def _normalize_note_fields(args: dict, tags: Optional[List[str]] = None,
             return []
         return [str(v).strip()[:item_cap] for v in value if str(v).strip()][:cap]
 
-    for key in ("location", "people", "state", "due", "aliases", "kind",
+    for key in ("location", "people", "aliases", "kind",
                 "relation", "birthday", "area", "name", "dob", "resides_in",
                 "timezone"):
         if key not in args or args.get(key) is None:
             continue
         if key not in allowed:
             where = f"notes tagged '{category}'" if category else "this note"
-            return {}, (f"field '{key}' does not apply to {where} — "
-                        "check the category's field list")
+            return {}, (f"field '{key}' does not apply to {where} — only "
+                        "event, social-graph and user-profile notes carry "
+                        "fields")
         value = args[key]
         if value == "" or value == []:
             fields[key] = ""          # explicit clear
             continue
         if key in ("people", "aliases"):
             fields[key] = _clean_list(key)
-        elif key == "state":
-            state = str(value).strip().lower()
-            enum = STATE_ENUMS.get(category or "", ())
-            if state not in enum:
-                return {}, (f"state for a '{category}' note must be one of "
-                            f"{', '.join(enum)}; got {state!r}")
-            fields[key] = state
-        elif key in ("due", "dob"):
+        elif key == "dob":
             v = str(value).strip()
             if not _EVENT_DATE_RE.match(v):
                 return {}, f"{key} must be an ISO date (YYYY-MM-DD); got {v!r}"
@@ -1590,7 +1570,7 @@ def _finalize_event_fields(fields: dict) -> dict:
 
 
 # Frontmatter serialization order for whitelisted fields (stable, readable).
-_FIELD_ORDER = ["start", "end", "all_day", "location", "people", "state", "due",
+_FIELD_ORDER = ["start", "end", "all_day", "location", "people",
                 "aliases", "kind", "relation", "birthday", "area",
                 "name", "dob", "resides_in", "timezone"]
 
@@ -1636,7 +1616,7 @@ def _apply_fields_to_front(front: dict, fields: Optional[dict]) -> dict:
 # Body lines that look like frontmatter smuggled into prose ("Due: Friday",
 # "**Location:** annex") — the model repeating its typed fields in the body.
 _BODY_METADATA_RE = _re_mod.compile(
-    r"^\s*(?:[-*]\s*)?(?:\*\*)?(start|end|all[ _]day|state|due|location|people|"
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?(start|end|all[ _]day|location|people|"
     r"aliases|kind|relation|birthday|area|when|where|date|time)(?:\*\*)?\s*:",
     _re_mod.IGNORECASE)
 
@@ -2349,7 +2329,7 @@ async def create_draft(
                                           title=request.title)
     if ferr:
         raise HTTPException(status_code=422, detail=ferr)
-    if _note_category(request.tags) == "event" and not fields.get("start"):
+    if _note_type(request.tags) == "event" and not fields.get("start"):
         raise HTTPException(status_code=422,
                             detail="event drafts need fields.start (ISO 8601)")
     try:
@@ -2475,7 +2455,7 @@ async def approve_draft(
             # the calendar — a silent data black hole. Whatever entry path let
             # it in, it does not get PAST approval without a start (add one
             # during review via PATCH fields, or drop the event tag).
-            if (_note_category(draft["tags"]) == "event"
+            if (_note_type(draft["tags"]) == "event"
                     and not (draft.get("fields") or {}).get("start")):
                 raise HTTPException(
                     status_code=422,

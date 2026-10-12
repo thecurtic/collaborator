@@ -37,11 +37,14 @@ Search the user's atomic notes — their curated, user-approved knowledge base �
 meaning (default) or exact keyword, optionally filtered by tag. Notes are
 higher-signal than raw conversation history: they are ideas the user chose to keep.
 Use this when the user refers to their notes, or when a question touches something
-they may have already distilled. Category tags hold the user's extended cognition:
+they may have already distilled. Three tags are types with fields of their own:
 user-profile (facts about the user), social-graph (people in their network — one
-note per person), memory (salient events), goal, decision, question, project. Pass
-`tag` with an EMPTY query to list a whole category — e.g. tag "user-profile" with
-no query returns the user's full profile; tag "social-graph" lists their people.
+note per person) and event. Everything else is an ordinary tag: goal, decision,
+question and memory mark what a note is about; project plus a name tag (e.g.
+"project" + "garden") gathers a project's notes. Pass `tag` with an EMPTY query
+to list everything wearing it — e.g. tag "user-profile" with no query returns the
+user's full profile; tag "social-graph" lists their people; a project's name tag
+lists that project.
 Returns titles, tags, created dates, link edges, and a body preview. Pass `limit`
 (up to 50) when you want a wider sweep than the default. `created_from` /
 `created_to` (ISO dates, inclusive) filter by when a note was APPROVED into the
@@ -168,21 +171,25 @@ DRAFT in the user's review inbox — it never writes to their vault and never pu
 the user approves or rejects it. Propose WITHOUT ASKING whenever a trigger fires —
 never ask "should I note this down?"; proposing IS the ask, and the review queue is
 exactly where the user's permission lives. Asking first defeats the design. (git_issue
-is the one tool that needs prior confirmation — notes never do.) The body is PURE PROSE: never repeat field values (dates, state,
-due, location, people, birthdays…) in the body text — anything you pass as a typed
+is the one tool that needs prior confirmation — notes never do.) The body is PURE PROSE: never repeat field values (dates,
+location, people, birthdays…) in the body text — anything you pass as a typed
 field becomes frontmatter automatically, and duplicating it in prose is rejected.
 Follow the note rules: title is a SHORT declarative claim or honest question — 3–7
 words, a clean [[wikilink]] handle like "Transit is freedom",
 never a full sentence (details and qualifiers belong in the body); body is 50–200
-words in the user's first-person voice, self-contained, no dialogue form. Tag the
-ONE category that fits (categories are discrete — never two): user-profile,
-social-graph (title = the person's name), memory, goal, decision, question,
-project, or event. Per-type fields: events require start (ISO 8601, resolved to a
-real date — never "next Tuesday") plus end/all_day/location/people (people =
-social-graph note titles; they become graph edges); goals take state + due;
-questions and projects take state; social-graph takes aliases/kind/relation/
-birthday; user-profile satellites take area (the USER.md section they extend —
-also [[link]] them from that section via propose_edit on USER). After calling,
+words in the user's first-person voice, self-contained, no dialogue form.
+Tags: at most ONE type tag — event, social-graph (title = the person's name) or
+user-profile — never two. Any other tags combine freely: goal, decision,
+question, memory, or topical ones. A note belonging to a project carries
+"project" plus that project's name tag, and exactly one name (a note is in one
+project); reuse the existing name rather than coining a variant. An event or a
+person can belong to a project too. Only type tags have fields: events require
+start (ISO 8601, resolved to a real date — never "next Tuesday") plus
+end/all_day/location/people (people = social-graph note titles; they become graph
+edges); social-graph takes aliases/kind/relation/birthday; user-profile
+satellites take area (the USER.md section they extend — also [[link]] them from
+that section via propose_edit on USER). No other note has fields: there is no
+state or due date — a deadline or an outcome goes in the body. After calling,
 tell the user the draft is awaiting review.
 
 The note titled "USER" is the profile hub: fixed sections (Background,

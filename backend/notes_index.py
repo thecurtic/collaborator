@@ -29,7 +29,7 @@ _COLS = ", ".join(NOTES_INDEX_COLUMNS)
 
 # Per-type frontmatter keys mirrored into the generic `fields` JSON column —
 # one column, so the whitelist can grow without index migrations.
-INDEXED_FIELD_KEYS = ("location", "people", "state", "due", "aliases", "kind",
+INDEXED_FIELD_KEYS = ("location", "people", "aliases", "kind",
                       "relation", "birthday", "area",
                       "name", "dob", "resides_in", "timezone")
 
@@ -111,7 +111,7 @@ def parse_note_file(path: str) -> dict:
                 value = [str(value)]
             fields[key] = [str(v) for v in value if str(v).strip()]
         else:
-            fields[key] = _norm_when(value) if key in ("due", "dob") else str(value)
+            fields[key] = _norm_when(value) if key == "dob" else str(value)
 
     # Graph edges = body [[wikilinks]] UNION event `people` (frontmatter is
     # file content, so the rebuildable-from-files invariant holds; one source

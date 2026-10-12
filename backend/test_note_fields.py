@@ -40,58 +40,94 @@ def _approve(c, execute, args):
     return r.json()["path"]
 
 
-def test_category_exclusivity_and_state_validation():
+def test_type_exclusivity_and_removed_fields():
     c, cfg, dbp = _fresh()
     _, execute, _ = main._build_tools(dbp)
 
+    # The three type tags stay exclusive.
     out = json.loads(execute("propose_note", {
-        "title": "Two hats", "body": "x", "tags": ["goal", "event"]}))
-    assert "ONE category" in out["error"]
+        "title": "Two hats", "body": "x", "tags": ["social-graph", "event"],
+        "start": "2026-08-09"}))
+    assert "ONE type tag" in out["error"]
 
+    # state and due are gone everywhere, project and the old goal type included.
+    for tags in (["goal"], ["question"], ["project", "garden"], ["event"]):
+        out = json.loads(execute("propose_note", {
+            "title": "Has state", "body": "x", "tags": tags,
+            "start": "2026-08-09", "state": "started"}))
+        assert "not a note field" in out["error"], tags
     out = json.loads(execute("propose_note", {
-        "title": "Bad state", "body": "x", "tags": ["goal"], "state": "open"}))
-    assert "goal" in out["error"] and "proposed" in out["error"]
+        "title": "Has due", "body": "x", "tags": ["goal"], "due": "2026-09-30"}))
+    assert "not a note field" in out["error"]
 
+    # Plain tags carry no fields.
     out = json.loads(execute("propose_note", {
         "title": "Wrong home", "body": "x", "tags": ["memory"],
         "birthday": "1990-01-01"}))
     assert "does not apply" in out["error"]
-
-    out = json.loads(execute("propose_note", {
-        "title": "Bad due", "body": "x", "tags": ["goal"], "due": "next friday"}))
-    assert "ISO date" in out["error"]
-    print("✓ exclusivity + per-category state/field validation")
+    print("✓ type exclusivity; state/due rejected; plain tags have no fields")
 
 
-def test_goal_question_project_states_roundtrip():
+def test_former_categories_are_plain_tags():
     c, cfg, dbp = _fresh()
     _, execute, _ = main._build_tools(dbp)
 
+    # goal/question/decision/memory combine with each other and write no fields.
     path = _approve(c, execute, {
-        "title": "Learn woodworking", "body": "A goal.", "tags": ["goal"],
-        "state": "proposed", "due": "2026-09-30"})
+        "title": "Learn woodworking", "body": "By the end of September.",
+        "tags": ["goal", "question", "decision", "memory"]})
     raw = open(path, encoding="utf-8").read()
-    assert "state: proposed" in raw and "due: '2026-09-30'" in raw or "due: 2026-09-30" in raw
-
-    # Progress via propose_edit -> state finished stays a goal (no tag change).
-    out = json.loads(execute("propose_edit", {
-        "title": "Learn woodworking", "state": "finished"}))
-    assert "error" not in out
-    r = c.post(f"/api/notes/drafts/{out['draft_id']}/approve")
-    assert r.status_code == 200
+    assert "state:" not in raw and "due:" not in raw
     conn = sqlite3.connect(dbp)
     note = notes_index.get_note_by_title(conn, "Learn woodworking")
     conn.close()
-    assert note["fields"]["state"] == "finished"
-    assert note["tags"] == ["goal"]                       # no memory graduation
+    assert note["fields"] == {}
+    hits = json.loads(execute("search_notes", {"query": "", "tag": "goal"}))
+    assert [h["title"] for h in hits] == ["Learn woodworking"]
+    print("✓ goal/question/decision/memory are plain, combinable tags")
 
-    _approve(c, execute, {"title": "Is MLX worth it", "body": "?",
-                          "tags": ["question"], "state": "open"})
-    _approve(c, execute, {"title": "Garden overhaul", "body": "p",
-                          "tags": ["project"], "state": "started"})
-    hits = json.loads(execute("search_notes", {"query": "", "tag": "question"}))
-    assert hits[0]["fields"]["state"] == "open"
-    print("✓ shared state key round-trips per category; finished stays goal")
+
+def test_events_and_people_join_projects():
+    """project left the exclusive set: membership is project + one name tag,
+    on any note, typed or not."""
+    c, cfg, dbp = _fresh()
+    _, execute, _ = main._build_tools(dbp)
+    _approve(c, execute, {
+        "title": "Ana", "body": "Runs the seed library.",
+        "tags": ["social-graph", "project", "garden"], "relation": "neighbour"})
+    path = _approve(c, execute, {
+        "title": "Seed swap", "body": "Spring swap at the library.",
+        "tags": ["event", "project", "garden"],
+        "start": "2026-03-21T10:00", "people": ["Ana"]})
+    raw = open(path, encoding="utf-8").read()
+    assert "tags: [event, project, garden]" in raw and "start:" in raw
+
+    hits = json.loads(execute("search_notes", {"query": "", "tag": "garden"}))
+    assert {h["title"] for h in hits} == {"Ana", "Seed swap"}
+    listing = json.loads(execute("list_events",
+                                 {"from": "2026-03-21", "to": "2026-03-21"}))
+    assert [e["title"] for e in listing["events"]] == ["Seed swap"]
+
+    # Direct PATCH accepts the combination too, and still validates fields.
+    r = c.patch("/api/notes/Ana", json={"tags": ["social-graph", "project",
+                                                 "garden", "volunteer"]})
+    assert r.status_code == 200, r.text
+    print("✓ events and people carry project + name; typed fields intact")
+
+
+def test_stale_state_on_pending_draft_is_not_written():
+    """A draft proposed before the change may still hold state/due; approving
+    it writes neither (the serializer no longer knows them)."""
+    c, cfg, dbp = _fresh()
+    conn = sqlite3.connect(dbp)
+    d = db.create_note_draft(conn, "Ship the deck", "Finish it.", tags=["goal"],
+                             fields={"state": "started", "due": "2026-08-15"})
+    conn.close()
+    r = c.post(f"/api/notes/drafts/{d['id']}/approve")
+    assert r.status_code == 200, r.text
+    raw = open(r.json()["path"], encoding="utf-8").read()
+    assert "state:" not in raw and "due:" not in raw
+    print("✓ stale state/due on a pending draft is dropped at approval")
 
 
 def test_social_graph_fields_and_alias_search():
