@@ -1,5 +1,25 @@
 # Known issues and optimization backlog
 
+## Housekeeping (added 2026-10-13)
+
+- **Python 3.13 support.** `backend/requirements.txt` pins fastembed 0.3.6,
+  numpy 1.26.4 and faster-whisper 1.0.3, none of which install on 3.13 (Ubuntu
+  25.04 ships 3.13). Bump to current releases (fastembed 0.5+, numpy 2.x,
+  faster-whisper 1.1+ with a matching ctranslate2), run the suite, and test
+  recall embeddings and server STT by hand. Until then the supported range is
+  Python 3.10 to 3.12; README and DEPLOY.md should say so and suggest
+  `python3.12 -m venv` where the system Python is newer.
+- **Template token budgets lag the code.** `config.yaml.example` shows 256 for
+  `recall.synthesis_max_tokens` and `tools.synthesis.max_tokens` and 24 for
+  `titles.max_tokens`; the code defaults are 768, 768 and 512, set that way
+  because reasoning models spend part of the budget thinking. Align the
+  template with the defaults.
+- **Stale design docs.** INTENTS.md and API-SPEC.md carry status banners
+  (2026-10-12) marking what is superseded. The real fix is an architecture
+  doc written after the UX overhaul lands, and letting the backend's own
+  `/docs` be the REST reference.
+
+
 Carried over from an internal review of the backend and frontend on
 2026-09-15. Line numbers were accurate then and drift; search for the symbol.
 Most important first.

@@ -34,7 +34,9 @@ file plays which role.
 
 ## Quick start
 
-Needs Python 3.10+ with `venv`, Node 20+, and ffmpeg for transcription.
+Needs Python 3.10 to 3.12 with `venv` (the pinned requirements don't install
+on 3.13 yet; on a newer system use `python3.12 -m venv backend/.venv`),
+Node 20+, and ffmpeg for transcription.
 
 ```bash
 cp config.yaml.example config.yaml      # edit inference.endpoint_url at least
