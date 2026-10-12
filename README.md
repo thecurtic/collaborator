@@ -34,21 +34,19 @@ file plays which role.
 
 ## Quick start
 
-Backend:
+Needs Python 3.10+ with `venv`, Node 20+, and ffmpeg for transcription.
 
 ```bash
 cp config.yaml.example config.yaml      # edit inference.endpoint_url at least
-python3 -m venv backend/.venv
-backend/.venv/bin/pip install -r backend/requirements.txt
-cd backend && .venv/bin/uvicorn main:app --port 8001
+./dev.sh                                # backend on :8001, app on http://localhost:3000
 ```
 
-Frontend (in a second terminal):
+The first run creates `backend/.venv`, installs requirements and runs
+`npm install`. Ctrl-C stops both servers. To run the two halves yourself:
 
 ```bash
-cd frontend
-npm install
-npm run dev                             # http://localhost:3000, proxies /api to :8001
+cd backend && .venv/bin/uvicorn main:app --port 8001 --reload
+cd frontend && npm run dev              # proxies /api to :8001
 ```
 
 Authentication is on by default, so create a passkey before the first login
@@ -66,10 +64,13 @@ for the frontend dev loop, PWA testing and the Android shell.
 
 ## Design documents
 
-- [INTENTS.md](INTENTS.md): philosophy and architecture decisions.
+- [INTENTS.md](INTENTS.md): the original design rationale (July 2026). Its
+  philosophy and data model still hold; parts are superseded, see its status
+  note.
 - [Collaborator UX Redesign — Intentions](Collaborator%20UX%20Redesign%20%E2%80%94%20Intentions.md): where it is going.
 - [NOTES-FORMAT.md](NOTES-FORMAT.md): the on-disk note format.
-- [API-SPEC.md](API-SPEC.md): the REST and WebSocket contract.
+- [API-SPEC.md](API-SPEC.md): the streaming, WebSocket and auth protocols. The
+  REST routes are documented live by the running backend at `/docs`.
 - [docs/known-issues.md](docs/known-issues.md): bugs and the optimization backlog.
 
 ## Contributing

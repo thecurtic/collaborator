@@ -58,7 +58,11 @@ fi
 
 # --- 2. backend --------------------------------------------------------------
 log "Backend dependencies"
-[ -d "$VENV" ] || python3 -m venv "$VENV"
+[ -x "$VENV/bin/pip" ] || python3 -m venv "$VENV" || true
+[ -x "$VENV/bin/pip" ] || {
+    echo "python3 -m venv could not create a venv with pip (on Debian/Ubuntu: sudo apt install python3-venv)" >&2
+    exit 1
+}
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet -r backend/requirements.txt
 "$VENV/bin/pip" install --quiet --upgrade yt-dlp

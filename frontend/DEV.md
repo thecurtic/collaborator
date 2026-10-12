@@ -37,24 +37,23 @@ backend/.venv/bin/pip install -r backend/requirements.txt
 On Windows: `py -m venv backend\.venv` and
 `backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt`.
 
-## Running it (two terminals)
+## Running it
 
-**Terminal 1, backend:**
-
-```bash
-cd backend && ../backend/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8001
-```
-
-(Windows: `.\scripts\start-backend.ps1` from this directory.)
-
-**Terminal 2, frontend:**
+One command from the repo root starts both and stops both on Ctrl-C:
 
 ```bash
-npm install   # first time only
-npm run dev
+../dev.sh
 ```
 
-Then open <http://localhost:3000>.
+Or run the halves yourself in two terminals:
+
+```bash
+cd ../backend && .venv/bin/uvicorn main:app --host 127.0.0.1 --port 8001 --reload
+npm run dev            # in this directory; npm install first time only
+```
+
+(Windows: `.\scripts\start-backend.ps1` starts the backend.) Then open
+<http://localhost:3000>.
 
 ## Testing on your phone (mobile-first)
 

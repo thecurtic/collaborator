@@ -4,6 +4,17 @@ A living document describing the core philosophy, architecture decisions, and in
 
 **Last Updated:** 2026-07-07
 
+> **Status (2026-10-12):** this is the original design rationale, kept as
+> written. The core philosophy, the tree memory model, the notes layer and the
+> data model still hold. The following are superseded by the code and by
+> *Collaborator UX Redesign — Intentions*: recall no longer runs on every turn
+> (it is off by default, enabled per request, and in tool-calling mode the
+> model retrieves on demand through its search tools), the "Context Assembly
+> Order" and "API Extensions Needed" sections describe a state that has moved
+> on, and the "Frontend Update Notes" refer to a two-repository layout that no
+> longer exists. Where this document and the UX intentions document disagree,
+> the UX document wins.
+
 > **Implementation status (2026-07-06):** The atomic-notes layer is underway. The
 > note file format is specified in `NOTES-FORMAT.md` (one markdown file per idea,
 > title-as-filename, app-managed frontmatter with local tags + `source_turns`

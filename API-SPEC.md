@@ -1,5 +1,13 @@
 # Collaborator Backend API Specification
 
+> **Status (2026-10-12):** hand-maintained and partial: it covers roughly 26
+> of the backend's 43 routes. The authoritative reference for the REST routes
+> is the OpenAPI schema the running backend serves at `/docs` (interactive)
+> and `/openapi.json`, generated from the code and therefore never stale. Use
+> this file for what OpenAPI cannot express: the SSE event stream of
+> `POST /api/messages`, the WebSocket protocols for voice and streaming
+> transcription, and the passkey/session auth flow.
+
 ## Overview
 Self-hosted personal chat interface backed by local LLM inference. This document defines the REST API endpoints for backend development.
 
