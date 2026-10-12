@@ -315,6 +315,8 @@ def load_config() -> dict:
                 "git_read": True,      # self-gating: needs tools.git.api_url + token
                 "git_issue": True,     # issue create/comment (token needs write:issue)
                 "transcribe_video": True,  # yt-dlp audio -> STT (never captions)
+                "list_transcripts": True,  # catalogue of stored transcripts
+                "read_transcript": True,   # read one stored transcript by id
                 "read_logs": True,     # agent can read its own recent server logs
             },
             "git": {

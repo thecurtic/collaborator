@@ -316,9 +316,9 @@ def test_startless_event_cannot_pass_approval():
     print("✓ start-less event: blocked at REST create AND at approval; repairable")
 
 
-def test_transcript_search_tool_mode():
-    """No url = find: query searches stored transcripts (title + text) and
-    returns snippets + urls; the model then fetches by url as usual."""
+def test_transcript_list_and_read_tools():
+    """Stored transcripts are found with list_transcripts and read by id —
+    never by URL; transcribe_video is for new URLs only."""
     c, cfg, dbp = _fresh()
     conn = sqlite3.connect(dbp)
     r1 = db.create_transcript(conn, "https://youtu.be/pumps", "Home Heating Deep Dive", 900)
@@ -329,17 +329,21 @@ def test_transcript_search_tool_mode():
     conn.close()
 
     _, execute, _ = main._build_tools(dbp)
-    out = json.loads(execute("transcribe_video", {"query": "heat pumps"}))
+    out = json.loads(execute("list_transcripts", {"query": "heat pumps"}))
     assert out["count"] == 1
     hit = out["transcripts"][0]
-    assert hit["url"] == "https://youtu.be/pumps"
-    assert "heat pumps" in hit["snippet"]
+    assert hit["id"] == r1["id"] and "heat pumps" in hit["snippet"]
     assert "text" not in hit                       # snippet only, never full text
 
-    out = json.loads(execute("transcribe_video", {}))          # bare = list recent
+    out = json.loads(execute("list_transcripts", {}))          # bare = everything
     assert out["count"] == 2
     assert out["transcripts"][0]["title"] == "Sourdough Basics"  # newest first
-    print("✓ transcribe_video find-mode: keyword search + snippet, bare list")
+
+    read = json.loads(execute("read_transcript", {"id": r1["id"]}))
+    assert read["transcript"].startswith("Today we compare")
+
+    assert "error" in json.loads(execute("transcribe_video", {}))  # url required
+    print("✓ list_transcripts finds, read_transcript reads by id")
 
 
 def test_delete_note_transcript_and_scratch_orphans():

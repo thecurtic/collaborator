@@ -232,6 +232,21 @@ def ensure_conversation_schema(conn) -> None:
             finished_at TEXT
         )
     """)
+    # channel: the video's channel/uploader, captured at probe time (UX doc:
+    # filterable and searchable). video_key: canonical identity (video_urls),
+    # so youtu.be / watch?v= / &t= forms of one video share one row.
+    tr_cols = {row[1] for row in cursor.execute("PRAGMA table_info(transcripts)").fetchall()}
+    if "channel" not in tr_cols:
+        cursor.execute("ALTER TABLE transcripts ADD COLUMN channel TEXT")
+    if "video_key" not in tr_cols:
+        cursor.execute("ALTER TABLE transcripts ADD COLUMN video_key TEXT")
+    from video_urls import canonical_video
+    for (tid, url) in cursor.execute(
+            "SELECT id, url FROM transcripts WHERE video_key IS NULL").fetchall():
+        cursor.execute("UPDATE transcripts SET video_key = ? WHERE id = ?",
+                       (canonical_video(url)[0], tid))
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_key "
+                   "ON transcripts(video_key)")
 
     # Event columns + the generic per-type fields JSON on the notes index
     # (parsed from frontmatter at index time).
@@ -1211,16 +1226,22 @@ def delete_scratch(db, scratch_id: int) -> Optional[dict]:
 # --- Video transcripts (STT jobs) ----------------------------------------------
 
 TRANSCRIPT_COLUMNS = ["id", "url", "title", "duration_s", "status", "text",
-                      "error", "created_at", "finished_at"]
+                      "error", "created_at", "finished_at", "channel",
+                      "video_key"]
 _TRANSCRIPT_COLS = ", ".join(TRANSCRIPT_COLUMNS)
 
 
 def create_transcript(db, url: str, title: Optional[str],
-                      duration_s: Optional[int]) -> dict:
+                      duration_s: Optional[int],
+                      channel: Optional[str] = None) -> dict:
+    """New job row. `url` should already be canonical (video_urls); the key
+    is derived here so every row has one."""
+    from video_urls import canonical_video
     cursor = db.cursor()
     cursor.execute(
-        "INSERT INTO transcripts (url, title, duration_s) VALUES (?, ?, ?)",
-        (url, title, duration_s))
+        "INSERT INTO transcripts (url, title, duration_s, channel, video_key) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (url, title, duration_s, channel, canonical_video(url)[0]))
     db.commit()
     return get_transcript(db, cursor.lastrowid)
 
@@ -1242,40 +1263,46 @@ def get_transcript(db, transcript_id: int) -> Optional[dict]:
 
 
 def get_transcript_by_url(db, url: str) -> Optional[dict]:
-    """Most recent transcript row for a URL — INCLUDING errored attempts, so
+    """Most recent transcript row for a video, matched by its canonical key
+    (any URL form of the same video) — INCLUDING errored attempts, so
     failures surface to the model instead of masquerading as fresh jobs."""
+    from video_urls import canonical_video
     row = db.cursor().execute(
-        f"SELECT {_TRANSCRIPT_COLS} FROM transcripts WHERE url = ? "
-        "ORDER BY id DESC LIMIT 1", (url,)).fetchone()
+        f"SELECT {_TRANSCRIPT_COLS} FROM transcripts WHERE video_key = ? "
+        "ORDER BY id DESC LIMIT 1", (canonical_video(url)[0],)).fetchone()
     return dict(zip(TRANSCRIPT_COLUMNS, row)) if row else None
 
 
 def search_transcripts(db, query: Optional[str] = None,
-                       limit: int = 10) -> List[dict]:
-    """Find stored transcripts by keyword over title + text (or list recent
-    when query is empty). Returns metadata + a snippet around the first match —
-    never the full text (the model fetches that by URL via transcribe_video)."""
+                       channel: Optional[str] = None,
+                       limit: Optional[int] = None) -> List[dict]:
+    """The transcript catalogue, newest first: metadata only, never the full
+    text (read_transcript pages that by id). `query` keyword-matches title,
+    channel and full text (all terms) and adds a snippet around the first
+    hit; `channel` keeps only that channel (case-insensitive substring).
+    Errored rows are included with their error, so failures are visible."""
     rows = db.cursor().execute(
-        f"SELECT {_TRANSCRIPT_COLS} FROM transcripts WHERE status != 'error' "
-        "ORDER BY id DESC").fetchall()
+        f"SELECT {_TRANSCRIPT_COLS} FROM transcripts ORDER BY id DESC").fetchall()
     out = []
     terms = [t for t in (query or "").lower().split() if len(t) >= 2]
+    want_channel = (channel or "").strip().lower()
     for row in rows:
         d = dict(zip(TRANSCRIPT_COLUMNS, row))
         text = d.pop("text") or ""
-        haystack = f"{d.get('title') or ''}\n{text}".lower()
+        d.pop("video_key", None)
+        if want_channel and want_channel not in (d.get("channel") or "").lower():
+            continue
+        haystack = f"{d.get('title') or ''}\n{d.get('channel') or ''}\n{text}".lower()
         if terms and not all(t in haystack for t in terms):
             continue
-        snippet = ""
         if terms:
             pos = text.lower().find(terms[0])
-            if pos >= 0:
-                snippet = text[max(0, pos - 120):pos + 200].strip()
-        d.pop("error", None)
-        d["snippet"] = snippet
+            d["snippet"] = text[max(0, pos - 120):pos + 200].strip() if pos >= 0 else ""
+        if d.get("status") != "error":
+            d.pop("error", None)
         d["chars"] = len(text)
         out.append(d)
-        if len(out) >= limit:
+        if limit and len(out) >= limit:
             break
     return out
 
@@ -1287,6 +1314,7 @@ def list_transcripts(db) -> List[dict]:
     for row in rows:
         d = dict(zip(TRANSCRIPT_COLUMNS, row))
         d["chars"] = len(d.pop("text") or "")   # listing omits the body
+        d.pop("video_key", None)
         out.append(d)
     return out
 

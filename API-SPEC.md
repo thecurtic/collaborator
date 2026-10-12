@@ -847,6 +847,41 @@ never touches conversations, recall, or the LLM.
 
 ---
 
+### 16. Video Transcripts
+
+Videos transcribed from their audio (the model's `transcribe_video` tool, or a
+YouTube link sent to Scratch). Short ones finish in the turn; long ones run in
+the background and surface here.
+
+**`GET /api/transcripts`** → `{ "transcripts": [...], "count": N }`, newest
+first, metadata only (no text):
+```json
+{ "id": 7, "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "title": "Raised beds", "channel": "Garden Answers", "duration_s": 912,
+  "status": "done", "error": null, "chars": 14210,
+  "created_at": "2026-10-12 21:00:00", "finished_at": "2026-10-12 21:04:10" }
+```
+- `status`: `processing` | `done` | `error` (then `error` holds the reason).
+- `channel`: the video's channel/uploader, captured at transcription time
+  (null for transcripts made before 2026-10-12).
+- `url` is canonical: every YouTube form of a video (youtu.be, `watch?v=`,
+  `&t=`, `si=`, shorts, live, embed, m./music.) maps to
+  `https://www.youtube.com/watch?v=<id>` and to one row, so re-sending a video
+  in another form reads the stored transcript instead of downloading again.
+- Optional filters: `?channel=` (case-insensitive substring) and `?q=`
+  (keywords, all of which must appear in title, channel or text; matching rows
+  add a `snippet`).
+
+**`GET /api/transcripts/{id}`** → `{ "transcript": {…, "text": "…"} }` with the
+full text when done. `404` if unknown.
+
+**`DELETE /api/transcripts/{id}`** → `{ "deleted": id }`. `404` if unknown.
+
+The model reads the same table through two tools: `list_transcripts` (this
+catalogue, freely browsable) and `read_transcript(id, chunk?, query?)` (paged
+by id, never downloads). `transcribe_video` takes a new URL only.
+
+
 ## Data Models
 
 ### Turn

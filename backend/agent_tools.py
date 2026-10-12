@@ -8,6 +8,7 @@ import ast
 import math
 import operator
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -277,8 +278,43 @@ def _video_cfg() -> dict:
     return (get_config().get("tools", {}) or {}).get("transcribe_video") or {}
 
 
+# yt-dlp failure messages -> a kind the model can act on (retrying a private
+# video or a bot check with other URLs is the fumbling this exists to stop).
+_YTDLP_ERROR_KINDS = [
+    ("bot_check", ("sign in to confirm", "not a bot", "confirm your age",
+                   "inappropriate for some users")),
+    ("private", ("private video",)),
+    ("members_only", ("members-only", "join this channel")),
+    ("unavailable", ("video unavailable", "has been removed", "is not available",
+                     "this video is no longer available")),
+    ("live_not_started", ("live event will begin", "premieres in")),
+    ("unsupported_url", ("unsupported url",)),
+    ("not_found", ("http error 404", "404: not found")),
+    ("network", ("timed out", "connection", "name or service not known",
+                 "temporary failure")),
+]
+
+
+def classify_video_error(message: str) -> str:
+    """A short kind for a yt-dlp/transcription failure (else 'other')."""
+    m = (message or "").lower()
+    for kind, needles in _YTDLP_ERROR_KINDS:
+        if any(n in m for n in needles):
+            return kind
+    return "other"
+
+
+def _video_error(prefix: str, e) -> dict:
+    """Model-facing failure: the kind plus enough of the real message to act
+    on (yt-dlp's text carries the reason; 200 chars cut it off)."""
+    msg = " ".join(str(e).split())
+    msg = re.sub(r"\x1b\[[0-9;]*m", "", msg)      # yt-dlp colour codes
+    return {"error": f"{prefix}: {msg[:600]}",
+            "error_kind": classify_video_error(msg)}
+
+
 def _probe_video(url: str) -> dict:
-    """Metadata only (no download): {title, duration_s} or {error}."""
+    """Metadata only (no download): {title, duration_s, channel} or {error}."""
     import yt_dlp
     opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
     if _video_cfg().get("proxy"):
@@ -287,9 +323,10 @@ def _probe_video(url: str) -> dict:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
-        return {"error": f"could not read video metadata: {str(e)[:200]}"}
+        return _video_error("could not read video metadata", e)
     return {"title": info.get("title") or url,
-            "duration_s": int(info.get("duration") or 0)}
+            "duration_s": int(info.get("duration") or 0),
+            "channel": info.get("channel") or info.get("uploader") or None}
 
 
 def _download_and_transcribe(url: str) -> str:
@@ -321,41 +358,101 @@ def _download_and_transcribe(url: str) -> str:
         return voice.transcribe_batch(wav)
 
 
-def _transcript_chunk(url: str, title, duration_s, text: str,
-                      return_chars: int, chunk: int) -> dict:
-    """One pageable chunk of a transcript. The old flat [:return_chars] slice
-    made long transcripts unreadable past the cut — every fetch returned the
-    identical first chunk with no way to continue."""
+def _transcript_part(row: dict, return_chars: int, chunk: int = 1,
+                     query: str = None) -> dict:
+    """One pageable part of a stored transcript. `query` jumps to the part
+    holding its first occurrence (case-insensitive)."""
+    text = row.get("text") or ""
     total = max(1, -(-len(text) // return_chars))          # ceil division
+    note_extra = ""
+    if query and query.strip():
+        pos = text.lower().find(query.strip().lower())
+        if pos >= 0:
+            chunk = pos // return_chars + 1
+        else:
+            note_extra = f" (\"{query.strip()}\" does not occur in this transcript.)"
     chunk = max(1, min(int(chunk or 1), total))
     seg = text[(chunk - 1) * return_chars: chunk * return_chars]
-    out = {"url": url, "title": title, "duration_s": duration_s,
-           "status": "done", "transcript": seg,
-           "chunk": chunk, "total_chunks": total,
-           "truncated": chunk < total}
+    out = {"id": row["id"], "title": row.get("title"),
+           "channel": row.get("channel"), "duration_s": row.get("duration_s"),
+           "url": row.get("url"), "status": "done", "transcript": seg,
+           "chunk": chunk, "total_chunks": total, "truncated": chunk < total}
     if total > 1:
-        if chunk < total:
-            out["note"] = (f"Part {chunk} of {total}. Call transcribe_video "
-                           f"again with the same url and chunk={chunk + 1} "
-                           "for the next part.")
-        else:
-            out["note"] = f"Part {chunk} of {total} — this is the final part."
+        out["note"] = (f"Part {chunk} of {total}. read_transcript(id={row['id']}, "
+                       f"chunk={chunk + 1}) for the next part." if chunk < total
+                       else f"Part {chunk} of {total} — this is the final part.")
+    if note_extra:
+        out["note"] = (out.get("note", "") + note_extra).strip()
     return out
+
+
+def read_transcript(db_path: str, transcript_id, chunk: int = 1,
+                    query: str = None) -> dict:
+    """Read a stored transcript by id. Never downloads anything."""
+    import sqlite3
+    import db as _db
+    try:
+        tid = int(transcript_id)
+    except (TypeError, ValueError):
+        return {"error": "read_transcript needs a numeric id from list_transcripts"}
+    conn = sqlite3.connect(db_path)
+    try:
+        row = _db.get_transcript(conn, tid)
+    finally:
+        conn.close()
+    if row is None:
+        return {"error": f"no transcript with id {tid} — call list_transcripts "
+                         "to see what's stored"}
+    if row["status"] == "processing":
+        return {"id": tid, "title": row["title"], "status": "processing",
+                "note": "Still transcribing in the background — tell the user "
+                        "and check again on a later turn."}
+    if row["status"] == "error":
+        return {"id": tid, "title": row["title"], "status": "error",
+                "error": row.get("error"),
+                "error_kind": classify_video_error(row.get("error") or ""),
+                "note": "This transcription failed; tell the user why. "
+                        "transcribe_video with the url retries it."}
+    return _transcript_part(row, _video_cfg().get("return_chars", 15000),
+                            chunk, query)
+
+
+def list_transcripts(db_path: str, query: str = None,
+                     channel: str = None) -> dict:
+    """The stored-transcript catalogue (metadata, never full text)."""
+    import sqlite3
+    import db as _db
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = _db.search_transcripts(conn, query, channel=channel, limit=200)
+    finally:
+        conn.close()
+    for r in rows:
+        if r.get("status") == "error":
+            r["error_kind"] = classify_video_error(r.get("error") or "")
+            r["error"] = (r.get("error") or "")[:160]
+    return {"transcripts": rows, "count": len(rows),
+            "note": ("read_transcript(id) reads one (paged). Empty list: "
+                     "nothing matches." if rows else
+                     "No stored transcripts match.")}
 
 
 def transcribe_video(db_path: str, url: str, chunk: int = 1) -> dict:
     """Transcribe a video/audio URL from its actual audio (never captions).
 
-    Short videos (<= sync_max_minutes) return the transcript in-turn. Longer
-    ones start a background job: this returns status=processing, and a later
-    call with the same URL (or GET /api/transcripts) returns the result.
-    Long transcripts are paged: pass chunk=2, 3, … to read past the first part.
+    The URL is canonicalized first, so any form of an already-stored video
+    reads the stored row instead of downloading again. Short videos (<=
+    sync_max_minutes) return part 1 of the transcript in-turn; longer ones
+    start a background job and return status=processing. Every result
+    carries the transcript `id`; read_transcript pages it from there.
     """
     import sqlite3
     import db as _db
+    from video_urls import canonical_video
     url = (url or "").strip()
     if not url.startswith(("http://", "https://")):
         return {"error": f"transcribe_video needs an http(s) URL, got {url!r}"}
+    url = canonical_video(url)[1]
     cfg = _video_cfg()
     return_chars = cfg.get("return_chars", 15000)
 
@@ -364,12 +461,12 @@ def transcribe_video(db_path: str, url: str, chunk: int = 1) -> dict:
     try:
         existing = _db.get_transcript_by_url(conn, url)
         if existing and existing["status"] == "done":
-            return _transcript_chunk(url, existing["title"],
-                                     existing["duration_s"],
-                                     existing["text"] or "",
-                                     return_chars, chunk)
+            out = _transcript_part(existing, return_chars, chunk)
+            out["note"] = ("Already transcribed. " + out.get("note", "")).strip()
+            return out
         if existing and existing["status"] == "processing":
-            return {"url": url, "title": existing["title"], "status": "processing",
+            return {"id": existing["id"], "url": url, "title": existing["title"],
+                    "status": "processing",
                     "note": "Still transcribing in the background — tell the user "
                             "and check again next turn."}
         if existing and existing["status"] == "error":
@@ -386,23 +483,27 @@ def transcribe_video(db_path: str, url: str, chunk: int = 1) -> dict:
     hard_max = cfg.get("max_minutes", 240)
     if minutes > hard_max:
         return {"error": f"video is {minutes:.0f} min — over the "
-                         f"{hard_max} min cap (tools.transcribe_video.max_minutes)"}
+                         f"{hard_max} min cap (tools.transcribe_video.max_minutes)",
+                "error_kind": "too_long"}
 
     if minutes <= cfg.get("sync_max_minutes", 10):
         conn = sqlite3.connect(db_path)
         try:
-            row = _db.create_transcript(conn, url, meta["title"], meta["duration_s"])
+            row = _db.create_transcript(conn, url, meta["title"], meta["duration_s"],
+                                        channel=meta.get("channel"))
             try:
                 text = _download_and_transcribe(url)
             except Exception as e:
                 print(f"Warning: transcribe_video failed for {url}: {e}")
-                _db.set_transcript_result(conn, row["id"], error=str(e)[:300])
-                return {"error": f"transcription failed: {str(e)[:200]}"}
+                _db.set_transcript_result(conn, row["id"], error=str(e)[:600])
+                out = _video_error("transcription failed", e)
+                out["id"] = row["id"]
+                return out
             _db.set_transcript_result(conn, row["id"], text=text)
+            row = _db.get_transcript(conn, row["id"])
         finally:
             conn.close()
-        out = _transcript_chunk(url, meta["title"], meta["duration_s"],
-                                text, return_chars, chunk)
+        out = _transcript_part(row, return_chars, chunk)
         if previous_error:
             out["note"] = (out.get("note", "") + " " if out.get("note") else "") + \
                 f"(an earlier attempt failed: {previous_error}; this retry succeeded)"
@@ -411,7 +512,8 @@ def transcribe_video(db_path: str, url: str, chunk: int = 1) -> dict:
     # Long video: background job, surfaced via the transcripts table.
     conn = sqlite3.connect(db_path)
     try:
-        row = _db.create_transcript(conn, url, meta["title"], meta["duration_s"])
+        row = _db.create_transcript(conn, url, meta["title"], meta["duration_s"],
+                                    channel=meta.get("channel"))
     finally:
         conn.close()
 
@@ -428,17 +530,18 @@ def transcribe_video(db_path: str, url: str, chunk: int = 1) -> dict:
                       f"({len(text)} chars)")
             except Exception as e:
                 print(f"Warning: transcribe_video job #{row['id']} failed: {e}")
-                _db.set_transcript_result(wconn, row["id"], error=str(e)[:300])
+                _db.set_transcript_result(wconn, row["id"], error=str(e)[:600])
         finally:
             wconn.close()
 
     threading.Thread(target=_worker, daemon=True,
                      name=f"transcribe-{row['id']}").start()
-    out = {"url": url, "title": meta["title"], "duration_s": meta["duration_s"],
+    out = {"id": row["id"], "url": url, "title": meta["title"],
+           "channel": meta.get("channel"), "duration_s": meta["duration_s"],
            "status": "processing",
            "note": f"~{minutes:.0f} min video — transcribing in the background. "
-                   "Tell the user it's underway; call this tool again with the "
-                   "same URL on a later turn to fetch the finished transcript."}
+                   "Tell the user it's underway; on a later turn, "
+                   f"read_transcript(id={row['id']}) fetches it once it's done."}
     if previous_error:
         out["note"] += (f" NOTE: a previous attempt FAILED with: {previous_error} "
                         "— tell the user; if this retry hits the same problem "

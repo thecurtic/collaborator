@@ -212,10 +212,18 @@ tools:
     web_search: true          # self-gating: active only when web_search.url is set
     fetch_url: true           # read a specific page (pasted links)
     screenshot_page: true     # self-gating: needs webtool_url + screenshot.vision_model
+    transcribe_video: true    # yt-dlp audio -> STT for a new URL (never captions)
+    list_transcripts: true    # catalogue of stored transcripts (cheap, browsable)
+    read_transcript: true     # read one stored transcript by id, paged
     read_logs: true           # agent can read its own recent server logs (ring buffer)
     nwc_pay: true             # self-gating: active only when tools.nwc.connections has
                               # an entry for the requesting user
     lethe_search: true        # self-gating: active only when tools.lethe.url is set
+  transcribe_video:
+    sync_max_minutes: 10      # videos up to this long transcribe within the turn
+    max_minutes: 240          # hard cap; longer videos are refused
+    return_chars: 15000       # transcript characters per part handed to the model
+    # proxy: "socks5://<proxy-host>:1080"   # optional yt-dlp egress proxy
   web_search:
     # Provider switch — the tool registers only when the SELECTED provider's
     # credential is set:

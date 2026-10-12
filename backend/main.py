@@ -581,13 +581,19 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                   "(write:issue only — never code). ONLY after the user asks or "
                   "explicitly confirms: when filing on your own initiative, ask "
                   "first ('want me to file this?'). Share the returned URL."),
-    "transcribe_video": ("Transcribe a video or audio URL (YouTube etc.) from its "
-                         "ACTUAL AUDIO via speech-to-text — not captions. Short "
-                         "videos return the transcript immediately; long ones "
-                         "return status=processing and keep transcribing in the "
-                         "background — tell the user, and call again with the "
-                         "same URL on a later turn to fetch the finished "
-                         "transcript."),
+    "transcribe_video": ("Transcribe a NEW video or audio URL (YouTube etc.) "
+                         "from its ACTUAL AUDIO via speech-to-text — not "
+                         "captions. Short videos return part 1 immediately; long "
+                         "ones return status=processing and keep transcribing "
+                         "in the background — tell the user. Every result has "
+                         "an id; read further with read_transcript."),
+    "list_transcripts": ("The catalogue of transcripts the user already has: "
+                         "id, title, channel, length, date, status. Cheap — "
+                         "call it freely when a video might be relevant; "
+                         "optional query/channel filters."),
+    "read_transcript": ("Read a stored transcript by id (from list_transcripts "
+                        "or transcribe_video), paged with chunk; query jumps "
+                        "to a phrase. Never downloads anything."),
     "list_events": ("List the user's calendar events (notes tagged 'event') within "
                     "a date window, sorted by start time. Use for schedule, "
                     "obligation, and availability questions — 'what's on this "
@@ -801,17 +807,36 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
             "description": descs["transcribe_video"],
             "parameters": {"type": "object", "properties": {
                 "url": {"type": "string",
-                        "description": "video/audio URL to transcribe or read "
-                                       "(omit to search stored transcripts)"},
+                        "description": "the video/audio URL to transcribe, "
+                                       "exactly as the user gave it"}},
+                "required": ["url"]}}})
+    if avail.get("list_transcripts", True):
+        schemas.append({"type": "function", "function": {
+            "name": "list_transcripts",
+            "description": descs["list_transcripts"],
+            "parameters": {"type": "object", "properties": {
                 "query": {"type": "string",
-                          "description": "with no url: keyword search over "
-                                         "stored transcripts (titles + full "
-                                         "text); empty = list recent"},
-                "chunk": {"type": "integer",
-                          "description": "long transcripts are paged — pass "
-                                         "2, 3, … to read past part 1 "
-                                         "(responses say chunk N of M)"}},
+                          "description": "optional keywords; all must appear "
+                                         "in the title, channel or full text"},
+                "channel": {"type": "string",
+                            "description": "optional: only this channel "
+                                           "(part of its name is enough)"}},
                 "required": []}}})
+    if avail.get("read_transcript", True):
+        schemas.append({"type": "function", "function": {
+            "name": "read_transcript",
+            "description": descs["read_transcript"],
+            "parameters": {"type": "object", "properties": {
+                "id": {"type": "integer",
+                       "description": "transcript id from list_transcripts "
+                                      "or transcribe_video"},
+                "chunk": {"type": "integer",
+                          "description": "which part of a long transcript "
+                                         "(responses say Part N of M)"},
+                "query": {"type": "string",
+                          "description": "optional phrase: jump to the part "
+                                         "where it first occurs"}},
+                "required": ["id"]}}})
     # web_search is self-gating: present only when the configured provider
     # (tools.web_search.provider: brave|searxng) has its credential set.
     if avail.get("web_search", True) and web_search_provider():
@@ -1333,22 +1358,23 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
         if name == "transcribe_video":
             url = (args.get("url") or "").strip()
             if not url:
-                from db import search_transcripts
-                conn = sqlite3.connect(db_path)
-                try:
-                    found = search_transcripts(conn, args.get("query"), limit=10)
-                finally:
-                    conn.close()
-                return json.dumps({
-                    "transcripts": found, "count": len(found),
-                    "note": "call transcribe_video again with url=<one of "
-                            "these> to read its full transcript"})
+                return json.dumps({"error": "transcribe_video needs the video's "
+                                            "url; stored transcripts are read "
+                                            "with list_transcripts + "
+                                            "read_transcript"})
+            return json.dumps(agent_tools.transcribe_video(db_path, url))
+        if name == "list_transcripts":
+            return json.dumps(agent_tools.list_transcripts(
+                db_path, (args.get("query") or "").strip() or None,
+                channel=(args.get("channel") or "").strip() or None))
+        if name == "read_transcript":
             try:
                 chunk = max(1, int(args.get("chunk") or 1))
             except (TypeError, ValueError):
                 chunk = 1
-            return json.dumps(agent_tools.transcribe_video(db_path, url,
-                                                           chunk=chunk))
+            return json.dumps(agent_tools.read_transcript(
+                db_path, args.get("id"), chunk=chunk,
+                query=(args.get("query") or "").strip() or None))
         if name == "read_logs":
             lines = logbuffer.get_lines(args.get("lines") or 100,
                                         (args.get("grep") or "").strip() or None)
@@ -3187,18 +3213,12 @@ async def act_on_scratch(
         out = agent_tools.transcribe_video(db_path, text)
         if out.get("error"):
             return {"item": _finish("done", {"kind": "error", "note": out["error"]})}
-        conn = sqlite3.connect(db_path)
-        try:
-            from db import get_transcript_by_url
-            trow = get_transcript_by_url(conn, text)
-        finally:
-            conn.close()
         return {"item": _finish("done", {
             "kind": "transcript", "status": out.get("status"),
             "title": out.get("title"),
             "note": ("Transcript ready." if out.get("status") == "done"
                      else "Transcribing in the background — check transcripts.")},
-            transcript_id=(trow or {}).get("id"), llm_readable=True)}
+            transcript_id=out.get("id"), llm_readable=True)}
 
     if kind == "url":
         page = fetch_url(text)
@@ -3263,16 +3283,24 @@ async def act_on_scratch(
 
 @app.get("/api/transcripts")
 async def list_video_transcripts(
+    channel: Optional[str] = None,
+    q: Optional[str] = None,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
     """Video transcription jobs (status + metadata; text via /api/transcripts/{id}).
-    Long videos transcribe in the background — this is where they surface."""
+    Long videos transcribe in the background — this is where they surface.
+    Optional ?channel= (substring, case-insensitive) and ?q= (keywords over
+    title, channel and text; matches carry a snippet)."""
     _require_auth(passkey)
     try:
         conn = sqlite3.connect(_resolve_db_path(passkey))
         try:
-            from db import list_transcripts
-            transcripts = list_transcripts(conn)
+            if channel or q:
+                from db import search_transcripts
+                transcripts = search_transcripts(conn, q, channel=channel)
+            else:
+                from db import list_transcripts
+                transcripts = list_transcripts(conn)
         finally:
             conn.close()
         return {"transcripts": transcripts, "count": len(transcripts)}
@@ -3299,6 +3327,7 @@ async def get_video_transcript(
         if t is None:
             raise HTTPException(status_code=404,
                                 detail=f"Transcript {transcript_id} not found")
+        t.pop("video_key", None)
         return {"transcript": t}
     except HTTPException:
         raise
