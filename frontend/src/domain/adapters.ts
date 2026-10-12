@@ -312,8 +312,6 @@ export function toNoteFields(
     allDay: Boolean(api.all_day),
     location: str(api.location),
     people: strList(api.people),
-    state: str(api.state),
-    due: str(api.due),
     aliases: strList(api.aliases),
     kind: str(api.kind),
     relation: str(api.relation),
@@ -326,8 +324,6 @@ export function toNoteFields(
   };
   const meaningful =
     f.start != null ||
-    f.state != null ||
-    f.due != null ||
     f.location != null ||
     f.people.length > 0 ||
     f.aliases.length > 0 ||

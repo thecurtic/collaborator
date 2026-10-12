@@ -4,13 +4,7 @@ import { api } from '@/api/collaborator';
 import { cn } from '@/lib/utils';
 import type { NoteMeta } from '@/domain/models';
 import { parseWallClock } from './eventFields';
-import {
-  facetsOf,
-  inferProjects,
-  openCount,
-  TERMINAL_STATES,
-} from './projectInference';
-import { StateChip } from './StateChip';
+import { facetsOf, inferProjects } from './projectInference';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
@@ -27,24 +21,12 @@ function daysQuiet(notes: NoteMeta[]): number | null {
   return Math.floor((Date.now() - newest.getTime()) / 86_400_000);
 }
 
-// Sort rank inside a drill-down list: active states in vocabulary order,
-// then unknown states, then stateless (reference material) — terminal notes
-// don't rank; they collapse behind the count row.
-const ACTIVE_ORDER = ['started', 'open', 'proposed', 'paused'];
-function activeRank(state: string | null): number {
-  if (state == null) return ACTIVE_ORDER.length + 1;
-  const i = ACTIVE_ORDER.indexOf(state);
-  return i === -1 ? ACTIVE_ORDER.length : i;
-}
-
 function NoteRow({
   note,
   onOpenNote,
-  onStateChange,
 }: {
   note: NoteMeta;
   onOpenNote: (title: string) => void;
-  onStateChange: (note: NoteMeta, next: string) => void;
 }) {
   return (
     <li className="flex items-center gap-2 px-4 py-2.5">
@@ -60,14 +42,6 @@ function NoteRow({
           <span className="text-xs text-muted-foreground">{note.created}</span>
         )}
       </button>
-      {/* Blank state stays blank — status is only for stateful things. */}
-      {note.fields?.state && (
-        <StateChip
-          category="project"
-          state={note.fields.state}
-          onChange={(next) => onStateChange(note, next)}
-        />
-      )}
     </li>
   );
 }
@@ -87,7 +61,6 @@ export function ProjectsView({
   const [error, setError] = useState<string | null>(null);
   // crumbs[0] = project name, rest = drilled facets. Empty = projects list.
   const [crumbs, setCrumbs] = useState<string[]>([]);
-  const [showClosed, setShowClosed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,26 +84,6 @@ export function ProjectsView({
     () => (universe ? inferProjects(universe) : null),
     [universe],
   );
-
-  // Optimistic state change (house pattern): move locally, confirm behind.
-  const changeState = (note: NoteMeta, next: string) => {
-    setUniverse((prev) =>
-      prev
-        ? prev.map((n) =>
-            n.filename === note.filename && n.fields
-              ? { ...n, fields: { ...n.fields, state: next } }
-              : n,
-          )
-        : prev,
-    );
-    api.updateNote(note.title, { fields: { state: next } }).catch((err) => {
-      setError(errMessage(err));
-      api
-        .listNotes('project')
-        .then(setUniverse)
-        .catch(() => {});
-    });
-  };
 
   if (universe === null || inference === null) {
     return (
@@ -192,7 +145,7 @@ export function ProjectsView({
         )}
 
         {crumbs.length === 0 ? (
-          // ---- Projects list, with the roll-up as a SIGNAL (never a state).
+          // ---- Projects list: size and how long it's been quiet.
           inference.clusters.length === 0 &&
           inference.unassigned.length === 0 ? (
             <div className="py-16 text-center text-muted-foreground">
@@ -209,17 +162,12 @@ export function ProjectsView({
             <>
               <ul className="divide-y divide-border">
                 {inference.clusters.map((c) => {
-                  const open = openCount(c.notes);
                   const quiet = daysQuiet(c.notes);
-                  const stalled = open > 0 && quiet != null && quiet > 30;
                   return (
                     <li key={c.name}>
                       <button
                         type="button"
-                        onClick={() => {
-                          setCrumbs([c.name]);
-                          setShowClosed(false);
-                        }}
+                        onClick={() => setCrumbs([c.name])}
                         className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/60 active:bg-muted"
                       >
                         <FolderKanban className="h-4 w-4 shrink-0 text-primary/70" />
@@ -228,16 +176,11 @@ export function ProjectsView({
                             {c.name}
                           </span>
                           <span className="text-xs text-muted-foreground">
-                            {open} open · {c.notes.length}{' '}
+                            {c.notes.length}{' '}
                             {c.notes.length === 1 ? 'note' : 'notes'}
                             {quiet != null && quiet > 0 && ` · quiet ${quiet}d`}
                           </span>
                         </span>
-                        {stalled && (
-                          <span className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-                            stalled?
-                          </span>
-                        )}
                         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                       </button>
                     </li>
@@ -255,7 +198,6 @@ export function ProjectsView({
                         key={n.filename}
                         note={n}
                         onOpenNote={onOpenNote}
-                        onStateChange={changeState}
                       />
                     ))}
                   </ul>
@@ -278,10 +220,7 @@ export function ProjectsView({
                     <button
                       key={f.tag}
                       type="button"
-                      onClick={() => {
-                        setCrumbs([...crumbs, f.tag]);
-                        setShowClosed(false);
-                      }}
+                      onClick={() => setCrumbs([...crumbs, f.tag])}
                       className="shrink-0 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
                     >
                       {f.tag} · {f.count}
@@ -290,64 +229,19 @@ export function ProjectsView({
                 </div>
               ) : null;
             })()}
-            {(() => {
-              const active = scope
-                .filter(
-                  (n) =>
-                    !n.fields?.state || !TERMINAL_STATES.has(n.fields.state),
-                )
-                .sort(
-                  (a, b) =>
-                    activeRank(a.fields?.state ?? null) -
-                      activeRank(b.fields?.state ?? null) ||
-                    (b.created ?? '').localeCompare(a.created ?? ''),
-                );
-              const closed = scope.filter(
-                (n) => n.fields?.state && TERMINAL_STATES.has(n.fields.state),
-              );
-              return (
-                <>
-                  <ul className="divide-y divide-border">
-                    {active.map((n) => (
-                      <NoteRow
-                        key={n.filename}
-                        note={n}
-                        onOpenNote={onOpenNote}
-                        onStateChange={changeState}
-                      />
-                    ))}
-                  </ul>
-                  {closed.length > 0 && (
-                    <div className="border-t border-border">
-                      <button
-                        type="button"
-                        onClick={() => setShowClosed((s) => !s)}
-                        className="w-full px-4 py-2 text-left text-xs text-muted-foreground hover:text-foreground"
-                      >
-                        {showClosed ? 'Hide' : 'Show'} {closed.length} closed
-                      </button>
-                      {showClosed && (
-                        <ul className="divide-y divide-border">
-                          {closed.map((n) => (
-                            <NoteRow
-                              key={n.filename}
-                              note={n}
-                              onOpenNote={onOpenNote}
-                              onStateChange={changeState}
-                            />
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
-                  {active.length === 0 && closed.length === 0 && (
-                    <p className="px-4 py-6 text-sm text-muted-foreground">
-                      Nothing here at this intersection.
-                    </p>
-                  )}
-                </>
-              );
-            })()}
+            {scope.length > 0 ? (
+              <ul className="divide-y divide-border">
+                {[...scope]
+                  .sort((a, b) => (b.created ?? '').localeCompare(a.created ?? ''))
+                  .map((n) => (
+                    <NoteRow key={n.filename} note={n} onOpenNote={onOpenNote} />
+                  ))}
+              </ul>
+            ) : (
+              <p className="px-4 py-6 text-sm text-muted-foreground">
+                Nothing here at this intersection.
+              </p>
+            )}
           </>
         )}
       </div>

@@ -1,4 +1,5 @@
 import type { NoteMeta } from '@/domain/models';
+import { TYPE_TAGS } from './categories';
 
 /**
  * Project-name inference over the projects lens. Model (greenfield, agreed
@@ -10,6 +11,10 @@ import type { NoteMeta } from '@/domain/models';
  * feature) bridge partitions. So names = the set of pairwise near-disjoint
  * tags that together cover the most notes. Raw frequency fails here: a
  * facet spanning two projects can outnumber either project's name.
+ *
+ * Type tags (event, social-graph, user-profile) are never names: since
+ * 2026-10-12 events and people join projects, and a type says what a note
+ * is, not which project it belongs to.
  *
  * Deterministic, presentation-only — misfires are fixed by a future
  * pin/ignore override (backend-persisted, deferred), NEVER by retagging.
@@ -28,6 +33,8 @@ export interface ProjectInference {
 // Two tags conflict (can't both be names) when their note-sets overlap by
 // ≥20% of the smaller set. Below that, the odd mis-tag doesn't merge them.
 const CONFLICT_RATIO = 0.2;
+
+const NOT_NAMES = new Set<string>(['project', ...TYPE_TAGS]);
 
 interface Candidate {
   tag: string;
@@ -62,7 +69,7 @@ export function inferProjects(universe: NoteMeta[]): ProjectInference {
   const byTag = new Map<string, NoteMeta[]>();
   for (const note of universe) {
     for (const tag of note.tags) {
-      if (tag === 'project') continue;
+      if (NOT_NAMES.has(tag)) continue;
       const list = byTag.get(tag);
       if (list) list.push(note);
       else byTag.set(tag, [note]);
@@ -132,22 +139,4 @@ export function facetsOf(
   return [...counts.entries()]
     .map(([tag, count]) => ({ tag, count }))
     .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
-}
-
-/** States that mean "no longer moving" — collapsed in lists, closed in roll-ups. */
-export const TERMINAL_STATES = new Set([
-  'done',
-  'abandoned',
-  'finished',
-  'discarded',
-  'answered',
-  'closed',
-  'shipped',
-]);
-
-/** Open = explicitly in a non-terminal state (stateless notes are reference). */
-export function openCount(notes: NoteMeta[]): number {
-  return notes.filter(
-    (n) => n.fields?.state != null && !TERMINAL_STATES.has(n.fields.state),
-  ).length;
 }

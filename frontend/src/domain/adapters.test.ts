@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ApiRecall, ApiTurn } from '@/api/types';
+import type { ApiNoteFields, ApiRecall, ApiTurn } from '@/api/types';
 import {
   toHealth,
   toNoteDraft,
@@ -120,12 +120,12 @@ describe('toNoteDraft event fields', () => {
     });
   });
 
-  it('maps goal fields (state/due) through the shared superset', () => {
+  it('ignores state/due left on a draft from before 2026-10-12', () => {
     const d = toNoteDraft({
       ...base,
-      fields: { state: 'started', due: '2026-08-15' },
+      fields: { state: 'started', due: '2026-08-15' } as ApiNoteFields,
     });
-    expect(d.fields).toMatchObject({ state: 'started', due: '2026-08-15' });
+    expect(d.fields).toBeNull();
   });
 
   it('treats the backend\'s empty fields column as "not an event"', () => {

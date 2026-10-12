@@ -30,7 +30,6 @@ import { InboxView } from './InboxView';
 import { PeopleView } from './PeopleView';
 import { ProfileView } from './ProfileView';
 import { ProjectsView } from './ProjectsView';
-import { StateListView } from './StateListView';
 import { invalidateTagVocabulary } from './tags';
 import { TagAssist } from './TagAssist';
 import { NoteBody } from './NoteBody';
@@ -330,26 +329,6 @@ function NoteScreen({
                 category={categoryOf(note.tags)?.tag ?? null}
                 fields={note.fields}
                 onOpenNote={onOpenNote}
-                onStateChange={(next) => {
-                  // Optimistic per house style; resync on failure.
-                  setNote((n) =>
-                    n?.fields ? { ...n, fields: { ...n.fields, state: next } } : n,
-                  );
-                  api
-                    .updateNote(note.title, { fields: { state: next } })
-                    .catch((err) => {
-                      setNotice(null);
-                      setSaveError(errMessage(err));
-                      loadedTitle.current = null; // force refetch on next render
-                      api
-                        .getNote(note.title)
-                        .then((n) => {
-                          loadedTitle.current = note.title;
-                          setNote(n);
-                        })
-                        .catch(() => {});
-                    });
-                }}
               />
               <NoteBody body={note.body} onOpenNote={onOpenNote} />
               {note.backlinks.length > 0 && (
@@ -674,10 +653,6 @@ export function NotesView({
       ) : !query.trim() && lens === 'project' ? (
         <div className="min-h-0 flex-1">
           <ProjectsView onOpenNote={openNote} />
-        </div>
-      ) : !query.trim() && (lens === 'goal' || lens === 'question') ? (
-        <div className="min-h-0 flex-1">
-          <StateListView category={lens} onOpenNote={openNote} />
         </div>
       ) : !query.trim() && lens === 'social-graph' ? (
         <div className="min-h-0 flex-1">

@@ -259,8 +259,8 @@ export interface ApiSynthesisResponse {
 
 /** Vault note metadata (list/search entries; search adds `score`). */
 /**
- * Per-category typed frontmatter (1f18a9b). One flat superset — the note's
- * single category tag decides which keys are meaningful.
+ * Per-type frontmatter. One flat superset — the note's single type tag
+ * (event, social-graph, user-profile) decides which keys are meaningful.
  */
 export interface ApiNoteFields {
   start?: string | null;
@@ -268,8 +268,6 @@ export interface ApiNoteFields {
   all_day?: boolean;
   location?: string | null;
   people?: string[];
-  state?: string | null;
-  due?: string | null;
   aliases?: string[];
   kind?: string | null;
   relation?: string | null;

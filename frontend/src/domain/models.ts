@@ -281,8 +281,9 @@ export interface NoteDraft {
 }
 
 /**
- * Per-category typed frontmatter (1f18a9b) as one flat superset — the note's
- * single category decides which keys mean anything. null/[] = unset.
+ * Per-type frontmatter as one flat superset — the note's single type tag
+ * (event, social-graph, user-profile) decides which keys mean anything.
+ * null/[] = unset.
  */
 export interface NoteFields {
   // event
@@ -292,9 +293,6 @@ export interface NoteFields {
   location: string | null;
   /** Social-graph note titles — real graph edges. */
   people: string[];
-  // goal / question / project (shared state key, per-category value sets)
-  state: string | null;
-  due: string | null;
   // social-graph
   aliases: string[];
   kind: string | null;

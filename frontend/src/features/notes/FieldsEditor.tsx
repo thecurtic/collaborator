@@ -1,15 +1,14 @@
 import { CalendarDays, MapPin, Users } from 'lucide-react';
 import type { NoteFields, NoteFieldsPatch } from '@/domain/models';
-import { CATEGORY_STATES, PROFILE_AREAS } from './categories';
+import { PROFILE_AREAS } from './categories';
 import {
   formatEventRange,
   toDateInput,
   toDateTimeLocalInput,
 } from './eventFields';
-import { StateChip } from './StateChip';
 
 /**
- * Shared per-category frontmatter editing (1f18a9b), used by the note editor
+ * Shared per-type frontmatter editing (1f18a9b), used by the note editor
  * and the drafts inbox. Working state is a flat string map (FieldsDraft):
  * booleans as ''/'1', lists comma-joined — trivial to diff and to bind to
  * inputs. draftToPatch converts back to the wire shape, emitting only
@@ -21,20 +20,16 @@ const INPUT_CLS =
   'mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 const LABEL_CLS = 'text-xs text-muted-foreground';
 
-/** Keys the editor manages for a category (hub adds the USER-only facts). */
+/** Keys the editor manages for a type (hub adds the USER-only facts). */
 function keysFor(category: string | null, isUserHub: boolean): string[] {
   const base =
     category === 'event'
       ? ['all_day', 'start', 'end', 'location', 'people']
-      : category === 'goal'
-        ? ['state', 'due']
-        : category === 'question' || category === 'project'
-          ? ['state']
-          : category === 'social-graph'
-            ? ['kind', 'relation', 'birthday', 'aliases']
-            : category === 'user-profile'
-              ? ['area']
-              : [];
+      : category === 'social-graph'
+        ? ['kind', 'relation', 'birthday', 'aliases']
+        : category === 'user-profile'
+          ? ['area']
+          : [];
   return isUserHub
     ? [...base, 'name', 'dob', 'resides_in', 'timezone']
     : base;
@@ -61,8 +56,6 @@ export function fieldsToDraft(
       : '',
     location: f?.location ?? '',
     people: (f?.people ?? []).join(', '),
-    state: f?.state ?? '',
-    due: f?.due ? toDateInput(f.due) : '',
     kind: f?.kind ?? '',
     relation: f?.relation ?? '',
     birthday: f?.birthday ?? '',
@@ -109,8 +102,6 @@ const EMPTY_FIELDS: NoteFields = {
   allDay: false,
   location: null,
   people: [],
-  state: null,
-  due: null,
   aliases: [],
   kind: null,
   relation: null,
@@ -136,8 +127,6 @@ export function draftToFields(
   if ('all_day' in d) f.allDay = d.all_day === '1';
   if ('location' in d) f.location = d.location || null;
   if ('people' in d) f.people = splitList(d.people);
-  if ('state' in d) f.state = d.state || null;
-  if ('due' in d) f.due = d.due || null;
   if ('kind' in d) f.kind = d.kind || null;
   if ('relation' in d) f.relation = d.relation || null;
   if ('birthday' in d) f.birthday = d.birthday || null;
@@ -211,7 +200,7 @@ function SelectField({
   );
 }
 
-/** The typed inputs for one category's fields (nothing for memory/decision). */
+/** The typed inputs for one type's fields (nothing for untyped notes). */
 export function FieldsEditor({
   category,
   draft,
@@ -276,18 +265,6 @@ export function FieldsEditor({
             placeholder="Sarah Chen, Robert Chen"
           />
         </>
-      )}
-      {CATEGORY_STATES[category ?? ''] && (
-        <SelectField
-          label="State"
-          value={draft.state}
-          options={CATEGORY_STATES[category ?? '']}
-          onChange={set('state')}
-          allowEmpty="(default)"
-        />
-      )}
-      {category === 'goal' && (
-        <TextField label="Due" type="date" value={draft.due} onChange={set('due')} />
       )}
       {category === 'social-graph' && (
         <>
@@ -355,20 +332,17 @@ export function FieldsEditor({
 }
 
 /**
- * Read-mode fields block for note/draft views. Compact, category-aware;
+ * Read-mode fields block for note/draft views. Compact, type-aware;
  * renders nothing when there's nothing to show.
  */
 export function FieldsSummary({
   category,
   fields,
   onOpenNote,
-  onStateChange,
 }: {
   category: string | null;
   fields: NoteFields | null;
   onOpenNote?: (title: string) => void;
-  /** Wire to make the state chip interactive (optimistic PATCH upstream). */
-  onStateChange?: (next: string) => void;
 }) {
   if (!fields || !category) return null;
   const rows: React.ReactNode[] = [];
@@ -417,22 +391,6 @@ export function FieldsSummary({
         </div>,
       );
     }
-  }
-  if (CATEGORY_STATES[category]) {
-    rows.push(
-      <div key="state" className="flex items-center gap-2">
-        <StateChip
-          category={category}
-          state={fields.state}
-          onChange={onStateChange}
-        />
-        {category === 'goal' && fields.due && (
-          <span className="text-xs text-muted-foreground">
-            due {fields.due}
-          </span>
-        )}
-      </div>,
-    );
   }
   if (category === 'social-graph') {
     const facts = [

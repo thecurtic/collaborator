@@ -26,7 +26,6 @@ import {
   FieldsSummary,
   type FieldsDraft,
 } from './FieldsEditor';
-import { StateChip } from './StateChip';
 import { lineDiff } from './lineDiff';
 import { NoteBody } from './NoteBody';
 
@@ -532,16 +531,6 @@ export function InboxView({
                         {formatEventRange(d.fields)}
                       </span>
                     )}
-                    {categoryOf(d.tags)?.tag === 'goal' && d.fields && (
-                      <span className="mt-0.5 flex items-center gap-1.5">
-                        <StateChip category="goal" state={d.fields.state} />
-                        {d.fields.due && (
-                          <span className="text-xs text-muted-foreground">
-                            due {d.fields.due}
-                          </span>
-                        )}
-                      </span>
-                    )}
                     <span className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">
                       {d.kind === 'edit' ? (d.reason ?? d.body) : d.body}
                     </span>
@@ -558,7 +547,7 @@ export function InboxView({
                           possible duplicate
                         </span>
                       )}
-                      {/* Reserved category tag → prominent badge (5b3e491);
+                      {/* Type tag → prominent badge (5b3e491);
                           remaining tags keep the plain pills. */}
                       {categoryOf(d.tags) && (
                         <span className="rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground">

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { NoteMeta } from '@/domain/models';
-import { facetsOf, inferProjects, openCount } from './projectInference';
+import { facetsOf, inferProjects } from './projectInference';
 
 let seq = 0;
-function note(tags: string[], state: string | null = null): NoteMeta {
+function note(tags: string[]): NoteMeta {
   seq += 1;
   return {
     filename: `n${seq}.md`,
@@ -13,26 +13,7 @@ function note(tags: string[], state: string | null = null): NoteMeta {
     sourceTurns: [],
     links: [],
     score: null,
-    fields: state
-      ? {
-          start: null,
-          end: null,
-          allDay: false,
-          location: null,
-          people: [],
-          state,
-          due: null,
-          aliases: [],
-          kind: null,
-          relation: null,
-          birthday: null,
-          area: null,
-          name: null,
-          dob: null,
-          residesIn: null,
-          timezone: null,
-        }
-      : null,
+    fields: null,
   };
 }
 
@@ -77,6 +58,35 @@ describe('inferProjects', () => {
     expect(names).toContain('collaborator');
   });
 
+  it('type tags are never names: events and people join their project', () => {
+    // Every event is in garden, so `event` alone would look like a name
+    // nested in it; people span both projects.
+    const universe = [
+      ...times(3, () => note(['garden'])),
+      ...times(3, () => note(['event', 'garden'])),
+      note(['social-graph', 'garden']),
+      ...times(2, () => note(['social-graph', 'homelab'])),
+      ...times(2, () => note(['homelab'])),
+    ];
+    const { clusters, unassigned } = inferProjects(universe);
+    expect(clusters.map((c) => c.name)).toEqual(['garden', 'homelab']);
+    expect(clusters[0].notes).toHaveLength(7);
+    expect(clusters[1].notes).toHaveLength(4);
+    expect(unassigned).toHaveLength(0);
+    // Inside the project, `event` is a facet to drill by.
+    expect(facetsOf(clusters[0].notes, ['garden']).map((f) => f.tag)).toEqual([
+      'event',
+      'social-graph',
+    ]);
+  });
+
+  it('an event with no name tag is unassigned, not a project called event', () => {
+    const universe = [...times(3, () => note(['event'])), note(['garden'])];
+    const { clusters, unassigned } = inferProjects(universe);
+    expect(clusters.map((c) => c.name)).toEqual(['garden']);
+    expect(unassigned).toHaveLength(3);
+  });
+
   it('notes with only the project tag land in unassigned', () => {
     const universe = [
       ...times(4, () => note(['collaborator'])),
@@ -102,17 +112,5 @@ describe('facetsOf', () => {
     expect(facetsOf(notes, ['collaborator', 'bug']).map((f) => f.tag)).toEqual(
       ['feature', 'voice'],
     );
-  });
-});
-
-describe('openCount', () => {
-  it('counts only explicitly non-terminal states', () => {
-    const notes = [
-      note(['x'], 'started'),
-      note(['x'], 'proposed'),
-      note(['x'], 'done'),
-      note(['x']), // stateless = reference material, not "open"
-    ];
-    expect(openCount(notes)).toBe(2);
   });
 });
