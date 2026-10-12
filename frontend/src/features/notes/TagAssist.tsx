@@ -11,14 +11,24 @@ export function TagAssist({
   tagsText,
   originalTags,
   onComplete,
+  extraVocab,
 }: {
   tagsText: string;
   /** Tags the note/draft already had — never warned about. */
   originalTags: string[];
   /** Replace the in-progress token with this completion. */
   onComplete: (nextTagsText: string) => void;
+  /** Tags in use outside the vault (e.g. chat tags), merged into the vocabulary. */
+  extraVocab?: string[];
 }) {
-  const [vocab, setVocab] = useState<string[]>([]);
+  const [noteVocab, setVocab] = useState<string[]>([]);
+  const vocab = useMemo(
+    () =>
+      extraVocab?.length
+        ? [...new Set([...noteVocab, ...extraVocab])].sort()
+        : noteVocab,
+    [noteVocab, extraVocab],
+  );
 
   useEffect(() => {
     let cancelled = false;

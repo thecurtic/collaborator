@@ -1,4 +1,5 @@
 import {
+  MoreHorizontal,
   NotebookPen,
   Pencil,
   RefreshCw,
@@ -28,6 +29,8 @@ interface RootListProps {
   onRegenerateTitle?: (rootId: number) => void;
   /** Delete this conversation and everything in it (permanent, no confirm). */
   onDelete?: (rootId: number) => void;
+  /** Open the three-dots card (summary + tags) for this chat. */
+  onOpenCard: (root: TreeNode) => void;
 }
 
 /** Count all turns in a subtree (shown as light row metadata). */
@@ -48,43 +51,73 @@ function Row({
   root,
   onOpen,
   onMenu,
+  onCard,
 }: {
   root: TreeNode;
   onOpen: () => void;
   onMenu: () => void;
+  onCard: () => void;
 }) {
   // Tap opens the chat; tap-and-hold (or right-click) opens the action menu.
   const press = useLongPress(onMenu, { onClick: onOpen });
   const count = turnCount(root);
   const isSeed = root.state === 'seed';
   return (
-    <button
-      type="button"
-      {...press}
-      title="Hold for options"
-      className="flex w-full select-none items-center gap-3 px-4 py-3.5 text-left [-webkit-touch-callout:none] hover:bg-muted/60 active:bg-muted"
-    >
-      {isSeed ? (
-        <Sprout className="h-4 w-4 shrink-0 text-primary/70" />
-      ) : (
-        <TreePine className="h-4 w-4 shrink-0 text-primary/70" />
-      )}
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-foreground">
-          {rootLabel(root)}
+    <div className="flex items-center hover:bg-muted/60">
+      <button
+        type="button"
+        {...press}
+        title="Hold for options"
+        className="flex min-w-0 flex-1 select-none items-center gap-3 py-3.5 pl-4 text-left [-webkit-touch-callout:none] active:bg-muted"
+      >
+        {isSeed ? (
+          <Sprout className="h-4 w-4 shrink-0 text-primary/70" />
+        ) : (
+          <TreePine className="h-4 w-4 shrink-0 text-primary/70" />
+        )}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium text-foreground">
+            {rootLabel(root)}
+          </span>
+          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="shrink-0">
+              {count} {count === 1 ? 'turn' : 'turns'}
+            </span>
+            {/* An untagged chat visibly lacks tags: loose, not lost. */}
+            {root.chatTags.length === 0 ? (
+              <span className="shrink-0 italic opacity-70">· untagged</span>
+            ) : (
+              <span className="flex min-w-0 gap-1 overflow-hidden">
+                {root.chatTags.map((t) => (
+                  <span
+                    key={t}
+                    className="shrink-0 rounded bg-accent px-1.5 py-px text-[10px] text-accent-foreground"
+                  >
+                    {t}
+                  </span>
+                ))}
+              </span>
+            )}
+          </span>
         </span>
-        <span className="block text-xs text-muted-foreground">
-          {count} {count === 1 ? 'turn' : 'turns'}
-        </span>
-      </span>
-    </button>
+      </button>
+      <button
+        type="button"
+        aria-label={`About ${rootLabel(root)}`}
+        onClick={onCard}
+        className="flex shrink-0 items-center self-stretch px-4 text-muted-foreground hover:text-foreground"
+      >
+        <MoreHorizontal className="h-5 w-5" />
+      </button>
+    </div>
   );
 }
 
 /**
  * A tappable list of conversation roots (Conversations tab and Chats/seeds
- * tab), sorted by most recent activity. Row actions (rename / promote /
- * synthesize) live behind tap-and-hold, keeping rows clean.
+ * tab), sorted by most recent activity. Each row shows its chat tags (or
+ * that it has none) and a three-dots control for the chat card; row actions
+ * (rename / promote / synthesize) live behind tap-and-hold.
  */
 export function RootList({
   roots,
@@ -96,6 +129,7 @@ export function RootList({
   onSynthesize,
   onRegenerateTitle,
   onDelete,
+  onOpenCard,
 }: RootListProps) {
   const [menuRoot, setMenuRoot] = useState<TreeNode | null>(null);
   const [renaming, setRenaming] = useState<TreeNode | null>(null);
@@ -164,6 +198,7 @@ export function RootList({
                 root={root}
                 onOpen={() => onOpen(root)}
                 onMenu={() => setMenuRoot(root)}
+                onCard={() => onOpenCard(root)}
               />
             </li>
           ))}

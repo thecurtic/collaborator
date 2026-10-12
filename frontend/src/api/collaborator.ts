@@ -1,5 +1,6 @@
 import type {
   BranchInput,
+  ChatCard,
   ConversationTree,
   HealthStatus,
   Note,
@@ -32,6 +33,7 @@ import {
   toPromptInfo,
   toRecallBlock,
   toScratchItem,
+  toChatCard,
   toTree,
   toTurnsPage,
 } from '@/domain/adapters';
@@ -57,6 +59,7 @@ import type {
   ApiSynthesisResponse,
   ApiTranscriptResponse,
   ApiTranscriptsResponse,
+  ApiChatCard,
   ApiTree,
   ApiTtsVoices,
   ApiTurnsResponse,
@@ -338,6 +341,17 @@ export interface CollaboratorApi {
    */
   setTurnState(turnId: number, state: 'seed' | 'tree'): Promise<void>;
 
+  // --- Chats: chat-level tags + the three-dots card (any turn id in a chat) ---
+  /** The card: the chat's tags and its cached summary (null until generated). */
+  getChat(turnId: number): Promise<ChatCard>;
+  /** Replace the chat's tags (full list; [] clears). Non-empty promotes a seed. */
+  setChatTags(turnId: number, tags: string[]): Promise<ChatCard>;
+  /**
+   * Generate the summary (and tag proposals) from the branch through
+   * `turnId` to its latest leaf. 502 = generation failed.
+   */
+  summarizeChat(turnId: number): Promise<ChatCard>;
+
   /** Short-lived single-use ticket for WS auth (fetch right before opening). */
   getWsTicket(): Promise<string>;
 
@@ -615,6 +629,27 @@ class HttpCollaboratorApi implements CollaboratorApi {
       method: 'PATCH',
       body: JSON.stringify({ state }),
     });
+  }
+
+  async getChat(turnId: number): Promise<ChatCard> {
+    return toChatCard(await request<ApiChatCard>(`/api/chats/${turnId}`));
+  }
+
+  async setChatTags(turnId: number, tags: string[]): Promise<ChatCard> {
+    return toChatCard(
+      await request<ApiChatCard>(`/api/chats/${turnId}/tags`, {
+        method: 'PUT',
+        body: JSON.stringify({ tags }),
+      }),
+    );
+  }
+
+  async summarizeChat(turnId: number): Promise<ChatCard> {
+    return toChatCard(
+      await request<ApiChatCard>(`/api/chats/${turnId}/summary`, {
+        method: 'POST',
+      }),
+    );
   }
 
   async getWsTicket(): Promise<string> {

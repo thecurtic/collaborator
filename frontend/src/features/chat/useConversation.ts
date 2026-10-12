@@ -18,6 +18,7 @@ import { foldToolEvent } from './toolActivity';
 import {
   removeNode,
   renameNode,
+  setChatTags,
   setNodeTitle,
   setSubtreeState,
 } from './treeEdits';
@@ -386,6 +387,7 @@ export function useConversation(reloadSignal: number) {
       const isRoot = parentId === VIRTUAL_ROOT;
       const keepName = u.name; // conversation name (root) or branch name
       const keepState = isRoot ? u.state : null;
+      const keepChatTags = isRoot ? u.chatTags : [];
 
       setError(null);
       try {
@@ -423,19 +425,25 @@ export function useConversation(reloadSignal: number) {
             ),
       );
 
-      // Restore the name onto the re-created root/branch-root (the new user
-      // turn = parent of the streamed assistant turn in the fresh index).
-      // Runs on 'stopped' too — the partial exchange was persisted.
-      if (outcome !== 'failed' && keepName && leafRef.current != null) {
+      // Restore the name (and a root's chat tags) onto the re-created
+      // root/branch-root (the new user turn = parent of the streamed
+      // assistant turn in the fresh index). Runs on 'stopped' too — the
+      // partial exchange was persisted. Both were set on the old root, so
+      // the chat was already promoted; restoring them changes nothing else.
+      const restore = keepName || keepChatTags.length > 0;
+      if (outcome !== 'failed' && restore && leafRef.current != null) {
         const fresh = indexRef.current;
         const newUserId = fresh.parentOf.get(leafRef.current);
         if (newUserId != null && newUserId !== VIRTUAL_ROOT) {
           try {
-            // Direct call (not renameTurn) — must not trigger seed promotion.
-            await api.renameTurn(newUserId, keepName);
+            // Direct calls (not renameTurn) — no optimistic local edits.
+            if (keepName) await api.renameTurn(newUserId, keepName);
+            if (keepChatTags.length > 0) {
+              await api.setChatTags(newUserId, keepChatTags);
+            }
             await load();
           } catch {
-            /* name restore is best-effort */
+            /* restore is best-effort */
           }
         }
       }
@@ -550,6 +558,18 @@ export function useConversation(reloadSignal: number) {
     renameTurn,
     reload: load,
     clearError: useCallback(() => setError(null), []),
+    /**
+     * Apply a chat's saved tags locally (the PUT response is the truth).
+     * Tagging promotes a seed server-side; mirror it so the chat moves lists.
+     */
+    setChatTagsLocal: useCallback(
+      (rootId: number, tags: string[]) => {
+        let next = setChatTags(treeRef.current, rootId, tags);
+        if (tags.length > 0) next = setSubtreeState(next, rootId, 'tree');
+        applyTree(next);
+      },
+      [applyTree],
+    ),
     /** Apply a regenerated LLM title locally (response = source of truth). */
     setTitleLocal: useCallback(
       (rootId: number, title: string) =>

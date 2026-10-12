@@ -66,6 +66,8 @@ export interface TreeNode {
   name: string | null;
   /** LLM-generated title (roots, all states). `name` always wins. */
   title: string | null;
+  /** Chat-level tags (roots only): organize the chat; never feed recall. */
+  chatTags: string[];
   /** Conversation stage (see ConversationState). Meaningful on roots. */
   state: ConversationState;
   /** Recall block that this turn triggered (user turns only), or null. */
@@ -78,6 +80,20 @@ export interface TreeNode {
 /** Display label for a conversation root: user name → LLM title → preview. */
 export function rootLabel(node: TreeNode): string {
   return node.name ?? node.title ?? node.preview ?? 'Untitled';
+}
+
+/** The three-dots card about one chat: its tags and on-demand summary. */
+export interface ChatCard {
+  rootId: number;
+  tags: string[];
+  summary: {
+    text: string;
+    /** Tags the summary suggested — offered, never applied. */
+    proposedTags: string[];
+    generatedAt: string | null;
+    /** The chat has grown since the summary was generated. */
+    stale: boolean;
+  } | null;
 }
 
 export interface ConversationTree {

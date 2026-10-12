@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ApiNoteFields, ApiRecall, ApiTurn } from '@/api/types';
 import {
+  toChatCard,
   toHealth,
   toNoteDraft,
   toNoteMeta,
   toRecallBlock,
+  toTreeNode,
   toTurn,
 } from './adapters';
 
@@ -187,6 +189,49 @@ describe('toHealth capabilities', () => {
       sttStream: true,
       ttsStream: true,
       phrases: false,
+    });
+  });
+});
+
+describe('chat tags and the chat card', () => {
+  const apiNode = {
+    id: 3,
+    role: 'user' as const,
+    content: 'hi',
+    preview: 'hi',
+    parent_turn_id: null,
+    children: [],
+  };
+
+  it('maps chat_tags onto tree roots, defaulting to none', () => {
+    expect(
+      toTreeNode({ ...apiNode, chat_tags: ['project', 'garden'] } as never)
+        .chatTags,
+    ).toEqual(['project', 'garden']);
+    expect(toTreeNode(apiNode as never).chatTags).toEqual([]);
+  });
+
+  it('maps the card, summary optional', () => {
+    expect(toChatCard({ root_id: 3, tags: ['garden'], summary: null })).toEqual(
+      { rootId: 3, tags: ['garden'], summary: null },
+    );
+    expect(
+      toChatCard({
+        root_id: 3,
+        tags: [],
+        summary: {
+          text: 'Beds planned.',
+          proposed_tags: ['soil'],
+          turns: 4,
+          generated_at: '2026-10-12T21:00:00+00:00',
+          stale: true,
+        },
+      }).summary,
+    ).toEqual({
+      text: 'Beds planned.',
+      proposedTags: ['soil'],
+      generatedAt: '2026-10-12T21:00:00+00:00',
+      stale: true,
     });
   });
 });

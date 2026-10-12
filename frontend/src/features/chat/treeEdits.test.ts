@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ConversationTree, TreeNode } from '@/domain/models';
-import { removeNode, renameNode, setSubtreeState } from './treeEdits';
+import {
+  removeNode,
+  renameNode,
+  setChatTags,
+  setSubtreeState,
+} from './treeEdits';
 
 function node(id: number, children: TreeNode[] = []): TreeNode {
   return {
@@ -15,6 +20,7 @@ function node(id: number, children: TreeNode[] = []): TreeNode {
     branched: false,
     name: null,
     title: null,
+    chatTags: [],
     state: 'seed',
     recall: null,
     tools: [],
@@ -84,5 +90,17 @@ describe('setSubtreeState', () => {
     expect(root.children[0].state).toBe('tree');
     expect(root.children[0].children[0].state).toBe('tree');
     expect(t.roots[1].state).toBe('seed');
+  });
+});
+
+describe('setChatTags', () => {
+  it('replaces the root\'s chat tags without touching other nodes', () => {
+    const before = tree();
+    const t = setChatTags(before, 1, ['project', 'garden']);
+    expect(t.roots[0].chatTags).toEqual(['project', 'garden']);
+    expect(t.roots[0].children[0].chatTags).toEqual([]);
+    expect(t.roots[1].chatTags).toEqual([]);
+    expect(before.roots[0].chatTags).toEqual([]); // input not mutated
+    expect(setChatTags(t, 1, []).roots[0].chatTags).toEqual([]);
   });
 });

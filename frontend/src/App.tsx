@@ -3,6 +3,7 @@ import {
   ChevronLeft,
   List,
   Loader2,
+  MoreHorizontal,
   NotebookPen,
   Pencil,
   Plus,
@@ -34,6 +35,7 @@ import { useLongPress } from '@/lib/useLongPress';
 import { cleanUrlsInText } from '@/lib/urlClean';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
+import { ChatCardSheet } from '@/features/chat/ChatCardSheet';
 import { RootList } from '@/features/chat/RootList';
 import { TreeMap } from '@/features/chat/TreeMap';
 import { useConversation } from '@/features/chat/useConversation';
@@ -134,6 +136,11 @@ function AppShell() {
   // Tap-and-hold on the chat title → conversation actions.
   const [titleMenuOpen, setTitleMenuOpen] = useState(false);
   const [titleRenameOpen, setTitleRenameOpen] = useState(false);
+  // The three-dots chat card: from a list row (root) or the open chat (leaf).
+  const [chatCard, setChatCard] = useState<{
+    turnId: number;
+    label: string;
+  } | null>(null);
   // A pending branch is shared so a call can fork from it too (not just typing).
   const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
   // What the next call does before its first listen (typed draft / read a
@@ -293,6 +300,13 @@ function AppShell() {
   );
 
   const activeRoot = convo.path[0]?.node ?? null;
+  // Every tag on a chat, for the card's completion + near-miss checks.
+  const chatTagVocabulary = useMemo(
+    () => [...new Set(convo.tree.roots.flatMap((r) => r.chatTags))].sort(),
+    [convo.tree],
+  );
+  const openChatCard = (root: TreeNode) =>
+    setChatCard({ turnId: root.id, label: rootLabel(root) });
 
   const openRoot = (root: TreeNode) => {
     convo.selectPathTo(root.id); // path continues to the tip via main-line defaults
@@ -439,6 +453,23 @@ function AppShell() {
               >
                 {chatTitle}
               </button>
+              {activeRoot && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="About this chat"
+                  onClick={() =>
+                    setChatCard({
+                      // The active leaf: the card summarizes the branch in view.
+                      turnId: convo.activeLeafId ?? activeRoot.id,
+                      label: rootLabel(activeRoot),
+                    })
+                  }
+                  className="h-8 w-8 shrink-0 text-muted-foreground"
+                >
+                  <MoreHorizontal className="h-5 w-5" />
+                </Button>
+              )}
             </>
           ) : (
             <div className="flex min-w-0 flex-1 items-center px-2">
@@ -570,6 +601,14 @@ function AppShell() {
         actions={titleActions}
         onClose={() => setTitleMenuOpen(false)}
       />
+      <ChatCardSheet
+        open={chatCard !== null}
+        turnId={chatCard?.turnId ?? null}
+        label={chatCard?.label ?? ''}
+        vocabulary={chatTagVocabulary}
+        onTagsSaved={convo.setChatTagsLocal}
+        onClose={() => setChatCard(null)}
+      />
       <RenameSheet
         open={titleRenameOpen}
         initial={activeRoot?.name ?? ''}
@@ -684,6 +723,7 @@ function AppShell() {
                   onSynthesize={startSynthesis}
                   onRegenerateTitle={regenerateTitle}
                   onDelete={handleDeleteSubtree}
+                  onOpenCard={openChatCard}
                 />
               </div>
             </div>
@@ -708,6 +748,7 @@ function AppShell() {
                 onPromote={(id) => void convo.promote(id)}
                 onRegenerateTitle={regenerateTitle}
                 onDelete={handleDeleteSubtree}
+                onOpenCard={openChatCard}
               />
             </div>
             {/* Floating pill, sitting just above the tab bar. */}

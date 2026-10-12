@@ -23,6 +23,7 @@ function node(id: number, children: TreeNode[] = [], branched = false): TreeNode
     branched,
     name: null,
     title: null,
+    chatTags: [],
     state: 'tree',
     recall: null,
     tools: [],

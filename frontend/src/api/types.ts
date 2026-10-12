@@ -141,6 +141,8 @@ export interface ApiTreeNode {
   name?: string | null;
   /** LLM-generated title (roots, all states). User-set `name` wins. */
   title?: string | null;
+  /** Chat-level tags (roots only); distinct from per-turn recall tags. */
+  chat_tags?: string[];
   /** Conversation stage: "seed" (provisional chat) or "tree" (promoted). */
   state?: string;
   /** Persisted tool activity for this (assistant) turn, when tools ran. */
@@ -431,4 +433,18 @@ export interface ApiNoteUpdateResponse {
 /** Standard error envelope ({ "error": "..." }). */
 export interface ApiError {
   error: string;
+}
+
+/** The three-dots chat card (GET/PUT/POST /api/chats/{turn_id}…). */
+export interface ApiChatCard {
+  root_id: number;
+  tags: string[];
+  summary: {
+    text: string;
+    proposed_tags?: string[];
+    turns?: number;
+    generated_at?: string;
+    stale?: boolean;
+  } | null;
+  promoted?: boolean;
 }

@@ -1,4 +1,5 @@
 import type {
+  ApiChatCard,
   ApiHealth,
   ApiModelsResponse,
   ApiNoteFields,
@@ -18,6 +19,7 @@ import type {
   ApiTurnsResponse,
 } from '@/api/types';
 import type {
+  ChatCard,
   ConversationTree,
   DeviceSession,
   HealthStatus,
@@ -127,6 +129,9 @@ export function toTreeNode(api: ApiTreeNode): TreeNode {
     branched: api.branched === true,
     name: typeof api.name === 'string' ? api.name : null,
     title: typeof api.title === 'string' && api.title ? api.title : null,
+    chatTags: Array.isArray(api.chat_tags)
+      ? api.chat_tags.filter((t): t is string => typeof t === 'string')
+      : [],
     // Unknown/absent state → treat as an established conversation.
     state: api.state === 'seed' ? 'seed' : 'tree',
     recall: api.recall ? toRecallBlock(api.recall) : null,
@@ -381,5 +386,21 @@ export function toNote(api: ApiNoteResponse['note']): Note {
     backlinks: (api.backlinks ?? [])
       .map((b) => (typeof b === 'string' ? b : b.title))
       .filter(Boolean),
+  };
+}
+
+export function toChatCard(api: ApiChatCard): ChatCard {
+  const s = api.summary;
+  return {
+    rootId: api.root_id,
+    tags: api.tags ?? [],
+    summary: s
+      ? {
+          text: s.text,
+          proposedTags: s.proposed_tags ?? [],
+          generatedAt: s.generated_at ?? null,
+          stale: s.stale === true,
+        }
+      : null,
   };
 }

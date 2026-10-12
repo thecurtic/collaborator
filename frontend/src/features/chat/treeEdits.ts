@@ -122,3 +122,12 @@ export function setSubtreeState(
   });
   return mapNode(tree, id, stamp);
 }
+
+/** PUT /api/chats/{id}/tags — the chat's tags, on its root node. */
+export function setChatTags(
+  tree: ConversationTree,
+  rootId: number,
+  tags: string[],
+): ConversationTree {
+  return mapNode(tree, rootId, (n) => ({ ...n, chatTags: [...tags] }));
+}
