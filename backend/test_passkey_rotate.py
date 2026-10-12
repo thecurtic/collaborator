@@ -96,3 +96,12 @@ def test_rotated_row_never_verifies_by_legacy_sha(monkeypatch):
     assert new
     monkeypatch.setattr(auth, "_hasher", None)
     assert auth.user_hash_for_passkey(old) is None
+
+
+def test_create_works_when_auth_directory_is_missing():
+    """Fresh install: the authentication directory does not exist yet."""
+    cfg = config.get_config()["authentication"]
+    cfg["passkeys_db_path"] = os.path.join(tempfile.mkdtemp(), "deeper", "passkeys.db")
+    auth._schema_ready = False
+    pk = passkey_cli.create_passkey()
+    assert auth.user_hash_for_passkey(pk)

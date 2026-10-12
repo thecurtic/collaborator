@@ -52,7 +52,11 @@ _schema_ready = False
 def get_auth_db():
     """Connection to the auth DB, with the schema ensured once per process."""
     global _schema_ready
-    conn = sqlite3.connect(_get_passkeys_db_path())
+    path = _get_passkeys_db_path()
+    # SQLite creates the file but not its directory; a fresh checkout has
+    # neither (the data directory is gitignored).
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    conn = sqlite3.connect(path)
     if not _schema_ready:
         ensure_auth_schema(conn)
         _schema_ready = True

@@ -40,8 +40,11 @@ def _get_passkeys_db_path() -> str:
 
 def get_db_connection():
     """Connection to the passkeys DB (path resolved at call time so a config
-    change, e.g. in tests, is honoured)."""
-    return sqlite3.connect(_get_passkeys_db_path())
+    change, e.g. in tests, is honoured). Creates the directory on a fresh
+    install; SQLite only creates the file."""
+    path = _get_passkeys_db_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return sqlite3.connect(path)
 
 
 def hash_passkey(passkey: str) -> tuple:
