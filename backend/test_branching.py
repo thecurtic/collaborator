@@ -242,7 +242,8 @@ def test_messages_continue_from_active_leaf():
 
 
 def test_state_seed_promote_and_filter():
-    """New chats are seeds; continuations/branches inherit; promote flips the subtree."""
+    """New chats are seeds; continuations inherit; branching promotes (a
+    deliberate act, UX doc 2026-10-12); the promote endpoint flips a subtree."""
     main, db = _fresh_env()
     from starlette.testclient import TestClient
     import json as _json
@@ -260,8 +261,7 @@ def test_state_seed_promote_and_filter():
 
     # Continuation inherits seed.
     d2 = done(c.post("/api/messages", json={"message": "more", "parent_turn_id": d1["id"]}))
-    # A branch also inherits seed.
-    done(c.post(f"/api/branches/{d1['id']}", json={"message": "branchy"}))
+    d3 = done(c.post("/api/messages", json={"message": "again", "parent_turn_id": d2["id"]}))
 
     # Filter: this seed shows under ?state=seed, not ?state=tree.
     assert any(r["id"] == root for r in c.get("/api/tree?state=seed").json()["roots"])
@@ -269,7 +269,7 @@ def test_state_seed_promote_and_filter():
 
     # Promote the whole subtree seed -> tree.
     pr = c.patch(f"/api/turns/{root}/state", json={"state": "tree"})
-    assert pr.status_code == 200 and len(pr.json()["updated_turn_ids"]) >= 4  # root+reply+cont+branch...
+    assert pr.status_code == 200 and len(pr.json()["updated_turn_ids"]) >= 6  # 3 exchanges
     tree_roots = c.get("/api/tree?state=tree").json()["roots"]
     assert any(r["id"] == root and r["state"] == "tree" for r in tree_roots)
     # descendants promoted too
@@ -280,7 +280,14 @@ def test_state_seed_promote_and_filter():
     acc = all_nodes(tree_roots, {})
     assert all(n["state"] == "tree" for n in acc.values())
     assert c.patch("/api/turns/999999/state", json={"state": "tree"}).status_code == 404
-    print("✓ state: new=seed, inherit, promote subtree, filter, 404")
+
+    # Branching a seed promotes it, the new branch included.
+    s1 = done(c.post("/api/messages", json={"message": "another chat"}))
+    done(c.post(f"/api/branches/{s1['id']}", json={"message": "branchy"}))
+    acc = all_nodes([r for r in c.get("/api/tree").json()["roots"]
+                     if r["id"] == s1["user_turn_id"]], {})
+    assert len(acc) == 4 and all(n["state"] == "tree" for n in acc.values())
+    print("✓ state: new=seed, inherit, promote subtree, branch promotes, filter, 404")
 
 
 def test_turn_name_endpoint_and_tree():

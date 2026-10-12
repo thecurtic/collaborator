@@ -284,6 +284,15 @@ def _migrate_turns_branching(conn) -> None:
         # JSON {lat, lon, accuracy, ts} — populated ONLY when location.store is
         # enabled (togglable; ephemeral-by-default is the privacy default).
         cursor.execute("ALTER TABLE turns ADD COLUMN location TEXT")
+    if "chat_tags" not in existing:
+        # Chat-level tags, ROOT turns only (UX doc: the root is stable across
+        # promotion and branching). JSON list. Separate from per-turn `tags`,
+        # which feed recall boosts; chat tags organize and don't (2026-10-12).
+        cursor.execute("ALTER TABLE turns ADD COLUMN chat_tags TEXT")
+    if "summary" not in existing:
+        # The chat card's on-demand summary, ROOT turns only. JSON {text,
+        # proposed_tags, turns (tree size at generation), generated_at}.
+        cursor.execute("ALTER TABLE turns ADD COLUMN summary TEXT")
     conn.commit()
 
     # When parent_turn_id was just introduced, link pre-existing turns into one
@@ -546,6 +555,11 @@ def get_turn_tree(db, committed_only: bool = True) -> List[dict]:
     ).fetchall():
         if tid in nodes:
             nodes[tid]["title"] = title
+    for (tid, raw) in cursor.execute(
+        "SELECT id, chat_tags FROM turns WHERE chat_tags IS NOT NULL"
+    ).fetchall():
+        if tid in nodes:
+            nodes[tid]["chat_tags"] = _parse_tags(raw)
 
     roots: List[dict] = []
     for node in nodes.values():  # insertion order == ascending id
@@ -612,6 +626,15 @@ def delete_turn(db, turn_id: int, subtree: bool = False) -> Optional[dict]:
     cursor.execute(
         "UPDATE turns SET parent_turn_id = ? WHERE parent_turn_id = ?", (parent_id, turn_id)
     )
+    if parent_id is None and reparented:
+        # A root went: its children are roots now, and the chat's tags go
+        # with them rather than vanishing with the row.
+        (raw,) = cursor.execute(
+            "SELECT chat_tags FROM turns WHERE id = ?", (turn_id,)).fetchone()
+        if raw:
+            cursor.executemany(
+                "UPDATE turns SET chat_tags = ? WHERE id = ? AND chat_tags IS NULL",
+                [(raw, cid) for cid in reparented])
     cursor.execute("DELETE FROM turns WHERE id = ?", (turn_id,))
     db.commit()
     return {
@@ -870,6 +893,49 @@ def update_turn_name(db, turn_id: int, name: Optional[str]):
     cursor.execute("UPDATE turns SET name = ? WHERE id = ?", (value, turn_id))
     db.commit()
     return cursor.rowcount > 0, value
+
+
+# --- Chat-level state (ROOT turns only): tags + the card's summary -------------
+
+def get_chat_tags(db, root_id: int) -> List[str]:
+    row = db.cursor().execute(
+        "SELECT chat_tags FROM turns WHERE id = ?", (root_id,)).fetchone()
+    return _parse_tags(row[0]) if row else []
+
+
+def set_chat_tags(db, root_id: int, tags: List[str]) -> List[str]:
+    """Replace a chat's tags (caller normalizes). Empty list clears."""
+    db.cursor().execute("UPDATE turns SET chat_tags = ? WHERE id = ?",
+                        (_json.dumps(tags) if tags else None, root_id))
+    db.commit()
+    return list(tags)
+
+
+def get_chat_summary(db, root_id: int) -> Optional[dict]:
+    row = db.cursor().execute(
+        "SELECT summary FROM turns WHERE id = ?", (root_id,)).fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        parsed = _json.loads(row[0])
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def set_chat_summary(db, root_id: int, summary: dict) -> None:
+    db.cursor().execute("UPDATE turns SET summary = ? WHERE id = ?",
+                        (_json.dumps(summary), root_id))
+    db.commit()
+
+
+def all_chat_tags(db) -> List[str]:
+    """Every tag worn by any chat (for the shared tag vocabulary)."""
+    out: List[str] = []
+    for (raw,) in db.cursor().execute(
+            "SELECT chat_tags FROM turns WHERE chat_tags IS NOT NULL").fetchall():
+        out.extend(_parse_tags(raw))
+    return out
 
 
 def set_turn_recall(db, turn_id: int, content: str, sources: List[dict]) -> None:

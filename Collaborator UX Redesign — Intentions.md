@@ -374,4 +374,4 @@ Tapping an item opens it or takes me to its destination. For anything the feed d
 - [x] Where a push lands: a `@pm`-tagged commit on main of the project's repository, through a repo-scoped Gitea token, behind the push button as the human gate.
 - [x] Wallet: LNbits on my LND node, pay and receive, copied from the broker; NWC kept dormant; sandbox gets its own wallet.
 - [ ] Which box Collaborator runs on once it needs Tor or a VPN to reach the broker. The DITTA tool doesn't care, but the move is real work.
-- [ ] Whether chat tags feed recall the way turn tags do.
+- [x] Whether chat tags feed recall the way turn tags do. Not yet (2026-10-12): chat tags organize only. They're stored apart from turn tags, so recall can scope by them later (most likely by project, once project views exist) without a data migration.

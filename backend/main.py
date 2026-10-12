@@ -26,12 +26,13 @@ from db import (
     create_note_draft, get_note_draft, list_note_drafts, update_note_draft,
     set_note_draft_status, stamp_note_draft_provenance,
     set_turn_tool_activity, set_turn_title, get_turn_title_state, count_tree_turns,
+    get_chat_tags, set_chat_tags, get_chat_summary, set_chat_summary, all_chat_tags,
 )
 from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
     get_embedding, embed_texts, synthesize_recall, get_available_models,
     generate_with_tools, synthesize, synthesize_notes, web_search, web_search_provider, fetch_url,
-    screenshot_page, generate_title,
+    screenshot_page, generate_title, generate_chat_summary,
     get_model_context_tokens, estimate_tokens, get_models_detail,
     resolve_prompt_layer, DEFAULT_PARAGRAPH_STYLE, DEFAULT_VOICE_STYLE,
     DEFAULT_TOOLS_GUIDANCE, DEFAULT_RECALL_SYNTHESIS_PROMPT,
@@ -178,6 +179,10 @@ class StateRequest(BaseModel):
     state: str
 
 
+class ChatTagsRequest(BaseModel):
+    tags: List[str] = []
+
+
 class NoteDraftCreate(BaseModel):
     title: str
     body: str
@@ -294,6 +299,81 @@ def _maybe_update_title(db_path: str, leaf_turn_id: int, force: bool = False):
         return root_id, None
     finally:
         conn.close()
+
+
+def _promote_chat(conn, turn_id: int) -> bool:
+    """Promote the chat containing turn_id from seed to tree. The UX doc's
+    rule: a chat is promoted by a deliberate act (naming, tagging, branching,
+    synthesizing notes); the state flag is the cache those acts set. Returns
+    True when it changed."""
+    root_id = _find_root_id(conn, turn_id)
+    root = get_turn_by_id(conn, root_id)
+    if root is None or root.get("state") != "seed":
+        return False
+    update_subtree_state(conn, root_id, "tree")
+    return True
+
+
+_MAX_CHAT_TAGS = 12
+
+
+def _normalize_chat_tags(tags: List[str]):
+    """(normalized, error). Lowercase-hyphenated, deduped, order kept. Type
+    tags are rejected: a chat is never an event, person or profile note."""
+    out = []
+    for t in tags or []:
+        n = _normalize_tag(t)
+        if n and n not in out:
+            out.append(n)
+    typed = [t for t in out if t in TYPE_TAGS]
+    if typed:
+        return [], (f"{', '.join(typed)} {'is a note type' if len(typed) == 1 else 'are note types'}"
+                    ", not a chat tag")
+    if len(out) > _MAX_CHAT_TAGS:
+        return [], f"a chat carries at most {_MAX_CHAT_TAGS} tags"
+    return out, None
+
+
+def _tag_vocabulary(conn, limit: int = 80) -> List[str]:
+    """Tags in use across notes and chats, most used first (the shared
+    vocabulary summary proposals are steered toward)."""
+    from collections import Counter
+    counts = Counter()
+    try:
+        for note in notes_index.list_notes(conn):
+            counts.update(_normalize_tag(t) for t in note.get("tags") or [])
+    except sqlite3.OperationalError:
+        pass                                  # no notes index yet
+    counts.update(_normalize_tag(t) for t in all_chat_tags(conn))
+    return [t for t, _ in counts.most_common()
+            if t and t not in TYPE_TAGS][:limit]
+
+
+def _latest_leaf(conn, turn_id: int) -> int:
+    """The most recent committed turn at or below turn_id. Children always
+    have larger ids than their parent, so the max id is a leaf: from a root
+    (the chat list's only handle) this is the branch last worked on."""
+    row = conn.cursor().execute(
+        """
+        WITH RECURSIVE sub(id) AS (
+            SELECT id FROM turns WHERE id = ?
+            UNION ALL
+            SELECT t.id FROM turns t JOIN sub ON t.parent_turn_id = sub.id
+        )
+        SELECT MAX(turns.id) FROM sub JOIN turns ON turns.id = sub.id
+        WHERE turns.committed = 1
+        """, (turn_id,)).fetchone()
+    return row[0] if row and row[0] is not None else turn_id
+
+
+def _chat_card(conn, root_id: int) -> dict:
+    """The three-dots card's data: tags + cached summary (+ staleness)."""
+    summary = get_chat_summary(conn, root_id)
+    if summary:
+        summary = dict(summary)
+        summary["stale"] = count_tree_turns(conn, root_id) > (summary.get("turns") or 0)
+    return {"root_id": root_id, "tags": get_chat_tags(conn, root_id),
+            "summary": summary}
 
 
 def _effective_context_turns(value: Optional[int]) -> int:
@@ -2130,7 +2210,10 @@ async def create_branch(
             context_list = get_ancestor_chain(conn, parent_turn_id, limit=ctx_turns)
             context_list, _dropped = _trim_context_to_token_budget(
                 context_list, request.message)
-            branch_state = parent.get("state") or "seed"   # a branch inherits the stage
+            # Branching is a deliberate act: it promotes a seed chat, and the
+            # new branch joins the promoted tree.
+            _promote_chat(conn, parent_turn_id)
+            branch_state = "tree"
         finally:
             conn.close()
 
@@ -2273,6 +2356,8 @@ async def synthesize_tree_notes(
         drafts = []
         conn = sqlite3.connect(db_path)
         try:
+            # Synthesizing notes is a deliberate act: it promotes a seed chat.
+            _promote_chat(conn, tree_id)
             for n in notes:
                 # Safety net: flag near-duplicates that slipped past the model.
                 dupes = _find_duplicate_notes(conn, n["title"], n["body"])
@@ -3540,11 +3625,120 @@ async def patch_turn_name(
         conn = sqlite3.connect(db_path)
         try:
             found, value = update_turn_name(conn, turn_id, request.name)
+            # Naming is a deliberate act: it promotes a seed chat.
+            promoted = bool(found and value) and _promote_chat(conn, turn_id)
         finally:
             conn.close()
         if not found:
             raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
-        return {"turn_id": turn_id, "name": value}
+        return {"turn_id": turn_id, "name": value, "promoted": promoted}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Chats: chat-level tags + the three-dots card ------------------------------
+# Any turn id in a chat resolves to its root, where chat state lives.
+
+@app.get("/api/chats/{turn_id}")
+async def get_chat(
+    turn_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """The chat card: the chat's tags and its cached summary (null until one
+    is generated; `stale` once the chat has grown since)."""
+    _require_auth(passkey)
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            if get_turn_by_id(conn, turn_id) is None:
+                raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
+            return _chat_card(conn, _find_root_id(conn, turn_id))
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/chats/{turn_id}/tags")
+async def put_chat_tags(
+    turn_id: int,
+    request: ChatTagsRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Replace the chat's tags (full list; [] clears). Tagging is a deliberate
+    act: a non-empty list promotes a seed chat."""
+    _require_auth(passkey)
+    tags, err = _normalize_chat_tags(request.tags)
+    if err:
+        raise HTTPException(status_code=422, detail=err)
+    try:
+        conn = sqlite3.connect(_resolve_db_path(passkey))
+        try:
+            if get_turn_by_id(conn, turn_id) is None:
+                raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
+            root_id = _find_root_id(conn, turn_id)
+            set_chat_tags(conn, root_id, tags)
+            promoted = bool(tags) and _promote_chat(conn, root_id)
+            return {**_chat_card(conn, root_id), "promoted": promoted}
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/chats/{turn_id}/summary")
+async def generate_chat_card_summary(
+    turn_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Generate (or regenerate) the chat's summary from the branch through
+    turn_id to its most recent leaf (pass the active leaf, or the root for the
+    branch last worked on) and propose tags for it. Proposals are
+    never applied; the client offers them for the user to accept. 502 when
+    generation fails."""
+    _require_auth(passkey)
+    try:
+        db_path = _resolve_db_path(passkey)
+        conn = sqlite3.connect(db_path)
+        try:
+            if get_turn_by_id(conn, turn_id) is None:
+                raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
+            root_id = _find_root_id(conn, turn_id)
+            chain = get_ancestor_chain(conn, _latest_leaf(conn, turn_id), limit=None)
+            vocabulary = _tag_vocabulary(conn)
+            current = set(get_chat_tags(conn, root_id))
+        finally:
+            conn.close()
+        try:
+            result = await asyncio.to_thread(generate_chat_summary, chain, vocabulary)
+        except Exception as e:
+            # Transport details (hosts, ports) go to the log, not the UI.
+            print(f"Warning: chat summary failed: {e}")
+            raise HTTPException(status_code=502, detail="Summary generation failed "
+                                "— the model may be unreachable; try again")
+        if not result.get("summary"):
+            raise HTTPException(status_code=502, detail="Summary generation returned nothing")
+        import datetime as _dt
+        proposed, _ = _normalize_chat_tags(
+            [t for t in result.get("tags") or [] if _normalize_tag(t) not in TYPE_TAGS])
+        proposed = [t for t in proposed if t not in current][:4]
+        conn = sqlite3.connect(db_path)
+        try:
+            set_chat_summary(conn, root_id, {
+                "text": result["summary"], "proposed_tags": proposed,
+                "turns": count_tree_turns(conn, root_id),
+                "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(
+                    timespec="seconds"),
+            })
+            return _chat_card(conn, root_id)
+        finally:
+            conn.close()
     except HTTPException:
         raise
     except Exception as e:

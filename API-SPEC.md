@@ -394,7 +394,10 @@ parent it branched from. `preview` is a single-line label.
 - `name` (string | null): a user-set display name for the turn (used to name a
   conversation/branch by naming its root turn). `null` = unnamed. Set via
   `PATCH /api/turns/{turn_id}/name` with `{ "name": "..." }` (empty/whitespace clears
-  it; returns `{ "turn_id", "name" }`; `404` if the turn doesn't exist).
+  it; returns `{ "turn_id", "name", "promoted" }`; `404` if the turn doesn't exist).
+  A non-empty name promotes a seed chat (see §9).
+- `chat_tags` (string[], present only on ROOT turns that have any): the **chat's
+  tags** — see §9a. Distinct from `tags`, the per-turn recall tags.
 - `title` (string, present only on ROOT turns that have one): the **auto-generated
   conversation title** — LLM-generated from the conversation after each exchange
   (lazily: regenerated once the tree grows by `titles.regenerate_after_turns`, default
@@ -519,10 +522,49 @@ New chats are created as **`seed`** (see `state` on `POST /api/messages`); promo
 to **`tree`** when they become real conversations. Filter the tree by stage with
 `GET /api/tree?state=seed` (new-chats list) / `GET /api/tree?state=tree` (main map).
 
-> **Upgrade triggers are the frontend's call.** Typical choices: a conscious user
-> "upgrade" action, or automatically when a seed chat is branched from. The backend
-> just provides this endpoint — call it whenever your UX decides a seed has become a
-> real conversation.
+**Promotion is derived from deliberate acts** (UX doc, 2026-10-12): the backend
+promotes a seed chat itself when it is **named** (`PATCH /api/turns/{id}/name`,
+non-empty), **tagged** (`PUT /api/chats/{id}/tags`, non-empty), **branched**
+(`POST /api/branches/{id}`; the new branch is born `tree`), or **synthesized**
+(`POST /api/notes/synthesize/{id}`). The state flag is the cache those acts set.
+This endpoint remains for explicit changes (including demotion).
+
+---
+
+### 9a. Chats: tags and the card
+
+Chat-level state lives on the chat's ROOT turn; every endpoint here takes any
+turn id in the chat and resolves it to the root. Chat tags organize (the chat
+list, the card, project membership); they do **not** feed recall.
+
+**`GET /api/chats/{turn_id}`** → the three-dots card:
+```json
+{ "root_id": 12, "tags": ["project", "garden"],
+  "summary": { "text": "Planning raised beds; layout settled.",
+               "proposed_tags": ["soil-mix"], "turns": 8,
+               "generated_at": "2026-10-12T21:40:00+00:00", "stale": false } }
+```
+`summary` is `null` until one is generated; `stale` is `true` once the chat has
+more committed turns than when it was generated. `404` for an unknown turn.
+
+**`PUT /api/chats/{turn_id}/tags`** `{ "tags": ["Project", "garden"] }` →
+replaces the chat's tags (full list; `[]` clears) and returns the card plus
+`"promoted"`. Tags are normalized like note tags (lowercase-hyphenated, deduped,
+order kept); at most 12. `422` for a type tag (`event`, `social-graph`,
+`user-profile` — note types, never chat tags) or too many tags.
+
+**`POST /api/chats/{turn_id}/summary`** → generates (or regenerates) the summary
+from the branch through `turn_id` to its most recent leaf (pass the active leaf
+inside a chat; from a list, the root gives the branch last worked on) with
+`inference.utility_model`, caches it on the root and returns the card. It also
+proposes up to 4 tags, steered toward tags already used on notes and chats so a
+project's name isn't forked; proposals exclude tags the chat already wears and
+type tags, and are **never applied** — the client offers them. Generation is on
+demand only, never per turn. `502` when generation fails or returns nothing
+(nothing is stored). Prompt: `chat-summary-prompt.md`; config: `chat_summary`.
+
+A root deleted on its own (`DELETE /api/messages/{id}`, no subtree) hands its
+chat tags to the children that become roots.
 
 ---
 
@@ -820,7 +862,8 @@ interface Turn {
   created_at: string;     // ISO 8601 format
   model_name?: string | null;
   token_count?: number | null;
-  tags?: string | null;
+  tags?: string | null;             // per-turn recall tags
+  chat_tags?: string[];             // tree roots only: the chat's tags (§9a)
   parent_turn_id?: number | null;   // fork point (null = root); chains form the tree
   paragraph_index?: number | null;  // which paragraph of the parent this branched from
   paragraphs?: string[];            // assistant turns only: content split on blank lines

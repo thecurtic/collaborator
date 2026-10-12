@@ -279,6 +279,15 @@ def load_config() -> dict:
             "model": None,
             "prompt_file": "title-prompt.md",  # editable/auditable, like other layers
         },
+        "chat_summary": {
+            # The three-dots chat card's summary: generated on demand (never
+            # after every turn) by the utility model, cached on the root, and
+            # flagged stale once the chat has grown since. Also proposes tags.
+            "temperature": 0.3,
+            "max_tokens": 768,   # reasoning models spend this on thinking first
+            "timeout": 60,
+            "prompt_file": "chat-summary-prompt.md",
+        },
         "tools": {
             "enabled": False,          # master switch; false = plain chat, no tools
             "status_notes": True,      # emit a short "what it's doing" per tool step

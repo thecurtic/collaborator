@@ -180,6 +180,15 @@ titles:
   timeout: 30
   prompt_file: "title-prompt.md"
 
+# The chat card's summary (three dots on a chat): generated on demand by
+# inference.utility_model, cached on the chat, marked stale once it grows.
+# Generating it also proposes tags, which are only applied when accepted.
+chat_summary:
+  temperature: 0.3
+  max_tokens: 768             # reasoning models spend this on thinking first
+  timeout: 60
+  prompt_file: "chat-summary-prompt.md"
+
 # Tool-calling. When enabled, the model drives retrieval/synthesis by calling tools
 # (recall is a set of tools) and streams status notes for what it's doing. Requires a
 # tool-capable chat model in LM Studio (qwen3-coder-next works). Off by default.

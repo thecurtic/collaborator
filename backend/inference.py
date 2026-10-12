@@ -992,6 +992,75 @@ def generate_title(turns: List[Dict]) -> str:
     return title[:80].rstrip(" .")
 
 
+# --- Chat card summary (on demand, utility model) ------------------------------
+
+DEFAULT_CHAT_SUMMARY_PROMPT = (
+    "You summarize one conversation for its card in a chat list. Reply with ONLY "
+    'a JSON object: {"summary": "...", "tags": ["..."]}. The summary is 1-3 plain '
+    "sentences on what the conversation is about and where it got to. tags are "
+    "1-4 lowercase-hyphenated tags for organizing it; prefer tags from the "
+    "existing list when one fits, and invent one only when none does."
+)
+
+
+def generate_chat_summary(turns: List[Dict],
+                          vocabulary: Optional[List[str]] = None) -> Dict:
+    """One short LLM call: {summary, tags} for the three-dots chat card.
+
+    Utility model (app state, not the user's vault). `vocabulary` is the tags
+    already in use, so proposals reuse a project's name instead of forking it.
+    Config: chat_summary {prompt_file/prompt_text, temperature, max_tokens,
+    timeout}. Returns {"summary": "", "tags": []} on empty output; raises on
+    transport failure.
+    """
+    import json
+
+    scfg = _get_config().get("chat_summary", {}) or {}
+    prompt = _load_prompt_layer(scfg, "prompt_file", "prompt_text",
+                                DEFAULT_CHAT_SUMMARY_PROMPT)
+    # Same sampling as titles: the opening defines the subject, the end shows
+    # where it went.
+    if len(turns) > 16:
+        sampled = turns[:4] + [{"role": "...", "content":
+                                f"[{len(turns) - 16} turns omitted]"}] + turns[-12:]
+    else:
+        sampled = turns
+    excerpt = "\n".join(
+        f"{t.get('role', '?')}: {(t.get('content') or '')[:600]}"
+        for t in sampled)[:9000]
+    if vocabulary:
+        excerpt += "\n\nExisting tags: " + ", ".join(vocabulary)
+    payload = _build_payload(
+        [{"role": "system", "content": prompt},
+         {"role": "user", "content": excerpt}], stream=False)
+    payload["temperature"] = scfg.get("temperature", 0.3)
+    payload["max_tokens"] = scfg.get("max_tokens", 768)   # thinking headroom
+    payload["model"] = _get_utility_model()
+
+    response = requests.post(
+        f"{_get_endpoint_url()}/chat/completions",
+        json=payload, timeout=scfg.get("timeout", 60),
+    )
+    response.raise_for_status()
+    text = _extract_message_text(response.json(), "chat summary").strip()
+    parsed = None
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            parsed = json.loads(text[start:end + 1])
+        except Exception:
+            parsed = None
+    if not isinstance(parsed, dict):
+        # No JSON: a model that ignored the format still gave a summary.
+        return {"summary": " ".join(text.split())[:600], "tags": []}
+    tags = parsed.get("tags") or []
+    return {
+        "summary": " ".join(str(parsed.get("summary") or "").split())[:600],
+        "tags": [str(t) for t in tags if isinstance(t, (str, int))][:8]
+                if isinstance(tags, list) else [],
+    }
+
+
 # --- Notes synthesis (tree -> atomic note drafts) ------------------------------
 
 _NOTES_SCHEMA = {
