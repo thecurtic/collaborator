@@ -26,10 +26,11 @@ Create the backend environment and your passkey:
 ```bash
 python3 -m venv backend/.venv
 backend/.venv/bin/pip install -r backend/requirements.txt
-cd backend && ../backend/.venv/bin/python data/passkey.py create && cd ..
+cd backend && .venv/bin/python data/passkey.py create && cd ..
 ```
 
-Set `authentication.enabled: true` in `config.yaml` once you have a passkey.
+Authentication is on by default; without a passkey every request is refused,
+so this step is not optional.
 
 Install the backend as a service (edit `User=` and the paths first):
 
@@ -82,10 +83,10 @@ database and the notes vault. Back that directory up, plus `config.yaml` and
 
 ```bash
 cd backend
-../backend/.venv/bin/python data/passkey.py create
-../backend/.venv/bin/python data/passkey.py list
-../backend/.venv/bin/python data/passkey.py rotate <old-hash>   # new passkey, same data
-../backend/.venv/bin/python data/passkey.py revoke <hash>
+.venv/bin/python data/passkey.py create
+.venv/bin/python data/passkey.py list
+.venv/bin/python data/passkey.py rotate <old-hash>   # new passkey, same data
+.venv/bin/python data/passkey.py revoke <hash>
 ```
 
 `rotate` issues a new passkey for an existing identity, moves nothing on disk,

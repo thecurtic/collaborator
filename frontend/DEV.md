@@ -103,8 +103,9 @@ npm run preview   # serves the built app (with SW) on http://localhost:4173
 
 ## Passkey authentication
 
-- **Auth is OFF by default** (`authentication.enabled: false` in
-  `../config.yaml`): no passkey needed, all requests share one DB.
+- **Auth is ON by default.** Create a passkey (below) or, for a throwaway
+  local setup, set `authentication.enabled: false` in `../config.yaml`: then no
+  passkey is needed and all requests share one anonymous account.
 - With auth on, the passkey is **never stored client-side**. The lock screen
   exchanges it via `POST /api/auth/login` for a device session: browsers get
   an httpOnly cookie, the Android shell stores the token and sends
@@ -114,8 +115,8 @@ npm run preview   # serves the built app (with SW) on http://localhost:4173
 
 To exercise the flow locally:
 
-1. Create a passkey: `cd ../backend && ../backend/.venv/bin/python data/passkey.py create`.
-2. Set `authentication.enabled: true` in `../config.yaml` and restart the backend.
+1. Create a passkey: `cd ../backend && .venv/bin/python data/passkey.py create`.
+2. Restart the backend if it was already running.
 3. Load <http://localhost:3000>, enter the passkey.
 
 ## Smoke tests

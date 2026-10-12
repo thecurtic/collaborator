@@ -5,11 +5,13 @@ inference over your own chats, notes, people, events and transcripts. Nothing
 leaves your machines unless you send it.
 
 - **Chat** with a local model (any OpenAI-compatible endpoint, e.g. LM Studio),
-  with tool use: web search, page fetch, YouTube transcription, calendar,
-  notes, Lightning payments.
-- **Memory you can see and edit.** Conversations are trees you can branch;
-  recall is a visible block you can correct; ideas worth keeping become
-  atomic markdown notes in a plain vault (Obsidian-compatible).
+  with tool use: web search, page fetch and screenshots, YouTube
+  transcription, calendar, notes, read-only access to a Gitea or GitHub repo,
+  Lightning payments. Every tool is opt-in through `config.yaml`.
+- **Memory you can see.** Conversations are trees you can branch; recall
+  (off by default) shows the remembered context as a visible block above the
+  reply; ideas worth keeping become atomic markdown notes in a plain vault
+  (Obsidian-compatible), always through a draft you approve.
 - **Voice**: calls with streaming transcription and spoken replies, on-device
   or on your server.
 - **Scratch**: a cross-device inbox for links, photos and files.
@@ -25,8 +27,10 @@ docs/        known issues and design notes
 *.md         design documents and the prompt files the backend loads
 ```
 
-The prompt files at the root (`system-prompt.md`, `tools-spec.md`, …) are
-loaded by the backend at runtime and are meant to be edited.
+The prompt files at the root (`system-prompt.md`, `tools-spec.md`, the
+synthesis and style prompts) are read by the backend at runtime, most of them
+fresh on every turn, and are meant to be edited. `config.yaml` names which
+file plays which role.
 
 ## Quick start
 
@@ -36,7 +40,7 @@ Backend:
 cp config.yaml.example config.yaml      # edit inference.endpoint_url at least
 python3 -m venv backend/.venv
 backend/.venv/bin/pip install -r backend/requirements.txt
-cd backend && ../backend/.venv/bin/uvicorn main:app --port 8001
+cd backend && .venv/bin/uvicorn main:app --port 8001
 ```
 
 Frontend (in a second terminal):
@@ -47,12 +51,15 @@ npm install
 npm run dev                             # http://localhost:3000, proxies /api to :8001
 ```
 
-Authentication is off by default. To turn it on, set `authentication.enabled`
-in `config.yaml` and create a passkey:
+Authentication is on by default, so create a passkey before the first login
+(it prints once; the identity hash it also prints names your data directory):
 
 ```bash
-cd backend && ../backend/.venv/bin/python data/passkey.py create
+cd backend && .venv/bin/python data/passkey.py create
 ```
+
+For a throwaway local setup you can instead set `authentication.enabled: false`
+in `config.yaml`, which runs a single anonymous account with no lock screen.
 
 See [DEPLOY.md](DEPLOY.md) for a server install and [frontend/DEV.md](frontend/DEV.md)
 for the frontend dev loop, PWA testing and the Android shell.

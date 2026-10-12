@@ -33,20 +33,36 @@ inference:
 # Memory settings
 memory:
   default_context_window: 20
-  db_path: "/home/chat/collaborator/backend/data/conversations.db"
+  # Without authentication this single DB is used; with it, each user gets
+  # users/<identity-hash>/conversations.db next to it. Relative to the repo root.
+  db_path: "backend/data/conversations.db"
 
 # Server settings
 server:
   backend_host: "0.0.0.0"
-  backend_port: 8000
+  backend_port: 8001
   cors_origins:
-    - "http://<frontend-tailnet-ip>:3000"  # Replace with your frontend's tailnet IP
-    - "http://localhost:3000"  # Development only, remove for production
+    - "https://collaborator.example.com"  # your public origin
+    - "http://localhost:3000"             # Vite dev server; remove for production
+
+# Authentication: ON by default. Create a passkey first
+# (cd backend && .venv/bin/python data/passkey.py create) or every request is
+# refused. Set enabled: false only for a throwaway local setup (one anonymous
+# account, no lock screen).
+authentication:
+  enabled: true
+  passkeys_db_path: "backend/data/authentication/passkeys.db"
+  users_dir: "backend/data/users"
+  session_idle_days: 30        # a device logs out after this long unused
+  session_absolute_days: 90    # ...and after this long regardless
+  lockout_threshold: 5         # failed passkey attempts before backoff kicks in
+  lockout_base_seconds: 60
+  lockout_max_seconds: 3600
 
 # System prompt configuration
 system_prompt:
-  text: "You are Collaborator, a helpful assistant."
-  file_path: null  # Alternative to text - path to prompt template file
+  text: "You are Collaborator, a helpful assistant."   # used only when file_path is null
+  file_path: "system-prompt.md"   # the editable prompt in the repo root
   # Auditable prompt layers appended to the base prompt, each its own markdown file
   # (read fresh each turn, so edits apply without a restart). Defaults shown.
   paragraph_file: "paragraph-style.md"   # always appended: one-idea-per-block for branching
