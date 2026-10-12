@@ -135,7 +135,11 @@ no repository field.
   Validation rejects them on every note, and the index no longer reads them.
 - Existing frontmatter is **removed, not hidden**: existing vaults are
   migrated by stripping top-level `state` and `due` from every note, leaving
-  the tags, every other key and the body untouched.
+  the tags, every other key and the body untouched. Run
+  `backend/data/migrate_notes.py` once (`--dry-run` first to see the list;
+  re-running is harmless). It lists each removed value, refreshes the index
+  rows of the notes it changed, and leaves a note with unreadable
+  frontmatter alone, reporting it instead.
 
 Every note of every type passes through the drafts review queue — the agent
 proposes, the user approves. The agent can never silently update its model of the

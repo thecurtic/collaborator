@@ -82,6 +82,18 @@ User data lives under `backend/data/users/<identity-hash>/`: the SQLite
 database and the notes vault. Back that directory up, plus `config.yaml` and
 `backend/data/authentication/passkeys.db`.
 
+## Note migrations
+
+Some releases change the notes format (`NOTES-FORMAT.md` dates each change).
+When one needs existing vaults rewritten, run its migration once after
+deploying. Each is safe to re-run, and `--dry-run` shows what would change.
+
+```bash
+cd backend
+.venv/bin/python data/migrate_notes.py --dry-run   # 2026-10-12: strip state/due
+.venv/bin/python data/migrate_notes.py
+```
+
 ## Passkeys
 
 ```bash

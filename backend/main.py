@@ -13,7 +13,7 @@ from typing import List, Optional
 from starlette.responses import FileResponse, Response, StreamingResponse
 
 from pydantic import BaseModel
-from config import get_config, resolve_path
+from config import get_config, resolve_path, vault_dir_for
 from data.agents_md import load_agents_md
 from db import (
     init_db, create_turn, get_recent_turns, get_turn_by_id, delete_turn,
@@ -1310,29 +1310,10 @@ def _resolve_db_path(passkey: Optional[str]) -> str:
 
 
 def _resolve_vault_dir(db_path: str) -> str:
-    """Resolve the notes vault directory (approved notes only, per NOTES-FORMAT.md).
-
-    Vaults are ALWAYS per-user — notes never cross passkeys, same isolation as the
-    conversation DBs. notes.vault_dir relocates where vaults live, it never merges
-    them: under auth each user's vault is <vault_dir>/<user-hash>; without auth
-    (single anonymous user) vault_dir is the vault itself. When unset, the vault
-    sits next to the conversation DB (users/{hash}/notes, else backend/data/notes).
-    """
-    configured = config.get("notes", {}).get("vault_dir")
-    root = None
-    if configured:
-        root = configured if os.path.isabs(configured) else resolve_path(configured)
-
-    if auth_enabled:
-        # db_path is .../users/{hash}/conversations.db — the hash names the user.
-        user_hash = os.path.basename(os.path.dirname(db_path))
-        if root:
-            return os.path.join(root, user_hash)
-        return os.path.join(os.path.dirname(db_path), "notes")
-
-    if root:
-        return root
-    return os.path.join(os.path.dirname(db_path), "notes")
+    """Resolve the notes vault directory (approved notes only, per NOTES-FORMAT.md);
+    see config.vault_dir_for, which the vault migration CLI shares."""
+    return vault_dir_for(db_path, config.get("notes", {}).get("vault_dir"),
+                         auth_enabled)
 
 
 def _find_duplicate_notes(conn, title: str, body: str) -> List[dict]:

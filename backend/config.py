@@ -16,6 +16,7 @@ a startup warning nags while it exists.)
 
 import os
 import yaml
+from typing import Optional
 
 
 def get_project_root() -> str:
@@ -45,6 +46,29 @@ def resolve_path(path: str) -> str:
     if os.path.isabs(path):
         return path
     return os.path.join(get_project_root(), path)
+
+
+def vault_dir_for(db_path: str, configured: Optional[str],
+                  auth_enabled: bool) -> str:
+    """The notes vault that belongs to a conversation DB (NOTES-FORMAT.md).
+
+    Vaults are ALWAYS per-user — notes never cross passkeys, same isolation as
+    the conversation DBs. notes.vault_dir (`configured`) relocates where vaults
+    live, it never merges them: under auth each user's vault is
+    <vault_dir>/<user-hash>; without auth (single anonymous user) vault_dir is
+    the vault itself. When unset, the vault sits next to the conversation DB
+    (users/{hash}/notes, else backend/data/notes).
+    """
+    root = resolve_path(configured) if configured else None
+    if auth_enabled:
+        # db_path is .../users/{hash}/conversations.db — the hash names the user.
+        user_hash = os.path.basename(os.path.dirname(db_path))
+        if root:
+            return os.path.join(root, user_hash)
+        return os.path.join(os.path.dirname(db_path), "notes")
+    if root:
+        return root
+    return os.path.join(os.path.dirname(db_path), "notes")
 
 
 def load_config() -> dict:
