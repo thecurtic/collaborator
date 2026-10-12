@@ -6,8 +6,10 @@ import {
   FileVideo,
   Loader2,
   RefreshCw,
+  Search,
   Trash2,
   TriangleAlert,
+  X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
@@ -24,6 +26,19 @@ function fmtDuration(s: number | null): string | null {
   const m = Math.floor(s / 60);
   const sec = Math.round(s % 60);
   return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
+
+/** SQLite's UTC "YYYY-MM-DD HH:MM:SS" → a short local date. */
+function fmtDate(sqlUtc: string | null): string | null {
+  if (!sqlUtc) return null;
+  const d = new Date(`${sqlUtc.replace(' ', 'T')}Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  });
 }
 
 /** One finished/failed/running video-transcription job, opened from the list. */
@@ -124,6 +139,11 @@ function TranscriptDetail({
                   <span> · {fmtDuration(item.durationS)}</span>
                 )}
               </p>
+              {item.channel && (
+                <p className="mb-3 -mt-2 text-xs text-muted-foreground">
+                  {item.channel}
+                </p>
+              )}
               {item.status === 'processing' && (
                 <p className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -131,10 +151,17 @@ function TranscriptDetail({
                 </p>
               )}
               {item.status === 'error' && (
-                <p className="flex items-center gap-2 text-sm text-destructive">
-                  <TriangleAlert className="h-4 w-4" />
-                  Transcription failed.
-                </p>
+                <div className="text-sm text-destructive">
+                  <p className="flex items-center gap-2">
+                    <TriangleAlert className="h-4 w-4" />
+                    Transcription failed.
+                  </p>
+                  {item.error && (
+                    <p className="mt-1 break-words text-xs opacity-80">
+                      {item.error}
+                    </p>
+                  )}
+                </div>
               )}
               {item.text && (
                 <p className="whitespace-pre-wrap text-sm leading-relaxed">
@@ -152,22 +179,37 @@ function TranscriptDetail({
 /**
  * Background video-transcription jobs (b23d8ea): long videos transcribe
  * server-side; this list shows progress and the finished text. The model can
- * also fetch results itself — this screen is for the human.
+ * also fetch results itself — this screen is for the human. Each row keeps
+ * the transcript's own shape (title, channel, length, date); a search box
+ * matches title, channel and full text, and tapping a channel filters by it.
  */
 export function TranscriptsView({ onBack }: { onBack: () => void }) {
   const [items, setItems] = useState<Transcript[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [query, setQuery] = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [channel, setChannel] = useState<string | null>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(query), 300);
+    return () => clearTimeout(t);
+  }, [query]);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      setItems(await api.listTranscripts());
+      setItems(
+        await api.listTranscripts({
+          channel: channel ?? undefined,
+          q: debounced,
+        }),
+      );
     } catch (err) {
       setError(errMessage(err));
       setItems([]);
     }
-  }, []);
+  }, [channel, debounced]);
 
   // Optimistic delete (house style): remove, restore in place on failure.
   const remove = (t: Transcript) => {
@@ -225,11 +267,47 @@ export function TranscriptsView({ onBack }: { onBack: () => void }) {
           <RefreshCw className="h-4 w-4" />
         </Button>
       </div>
+      <div className="space-y-2 border-b border-border px-4 py-2">
+        <label className="flex items-center gap-2 rounded-md border border-input bg-background px-2.5">
+          <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search titles, channels and text"
+            aria-label="Search transcripts"
+            className="min-h-[2.25rem] min-w-0 flex-1 bg-transparent text-base text-foreground outline-none sm:text-sm"
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => setQuery('')}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </label>
+        {channel && (
+          <button
+            type="button"
+            onClick={() => setChannel(null)}
+            className="flex items-center gap-1 rounded-full bg-accent px-2.5 py-0.5 text-xs text-accent-foreground"
+          >
+            Channel: {channel}
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
       <div className="flex-1 overflow-y-auto overscroll-contain">
         {error && <p className="px-4 py-3 text-sm text-destructive">{error}</p>}
         {items === null ? (
           <p className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+          </p>
+        ) : items.length === 0 && (channel || debounced.trim()) ? (
+          <p className="px-4 py-10 text-center text-sm text-muted-foreground">
+            No transcripts match.
           </p>
         ) : items.length === 0 ? (
           <div className="py-16 text-center text-muted-foreground">
@@ -256,16 +334,44 @@ export function TranscriptsView({ onBack }: { onBack: () => void }) {
                     <span className="block truncate text-sm font-medium text-foreground">
                       {t.title ?? t.url}
                     </span>
-                    <span className="block text-xs text-muted-foreground">
-                      {[
-                        fmtDuration(t.durationS),
-                        t.chars != null
-                          ? `${Math.round(t.chars / 1000)}k chars`
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
+                    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                      {t.channel && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          title={`Only ${t.channel}`}
+                          onClick={(e) => {
+                            e.stopPropagation(); // the row opens the detail
+                            setChannel(t.channel);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.stopPropagation();
+                              setChannel(t.channel);
+                            }
+                          }}
+                          className="min-w-0 truncate font-medium text-foreground/80 underline-offset-2 hover:underline"
+                        >
+                          {t.channel}
+                        </span>
+                      )}
+                      <span className="shrink-0">
+                        {[
+                          // Leading dot only when a channel precedes it.
+                          ...(t.channel ? [''] : []),
+                          fmtDuration(t.durationS),
+                          fmtDate(t.createdAt),
+                        ]
+                          .filter((x): x is string => x != null)
+                          .join(' · ')
+                          .trim()}
+                      </span>
                     </span>
+                    {t.snippet && (
+                      <span className="mt-0.5 line-clamp-2 block text-xs italic text-muted-foreground">
+                        …{t.snippet}…
+                      </span>
+                    )}
                   </span>
                   <span
                     className={cn(

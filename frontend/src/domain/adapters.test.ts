@@ -6,6 +6,7 @@ import {
   toNoteDraft,
   toNoteMeta,
   toRecallBlock,
+  toTranscript,
   toTreeNode,
   toTurn,
 } from './adapters';
@@ -232,6 +233,27 @@ describe('chat tags and the chat card', () => {
       proposedTags: ['soil'],
       generatedAt: '2026-10-12T21:00:00+00:00',
       stale: true,
+    });
+  });
+});
+
+describe('toTranscript', () => {
+  it('maps channel, error and snippet, tolerating their absence', () => {
+    const base = {
+      id: 7,
+      url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      status: 'error' as const,
+      created_at: '2026-10-12 21:00:00',
+    };
+    expect(
+      toTranscript({ ...base, channel: 'Garden Answers', error: 'Private video',
+                     snippet: 'compost' }),
+    ).toMatchObject({ channel: 'Garden Answers', error: 'Private video',
+                      snippet: 'compost' });
+    expect(toTranscript(base)).toMatchObject({
+      channel: null,
+      error: null,
+      snippet: null,
     });
   });
 });

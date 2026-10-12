@@ -251,12 +251,15 @@ export function toTranscript(api: ApiTranscript): Transcript {
     id: api.id,
     url: typeof api.url === 'string' ? api.url : '',
     title: api.title ?? null,
+    channel: typeof api.channel === 'string' && api.channel ? api.channel : null,
     durationS: typeof api.duration_s === 'number' ? api.duration_s : null,
     status:
       api.status === 'done' || api.status === 'error'
         ? api.status
         : 'processing',
+    error: typeof api.error === 'string' && api.error ? api.error : null,
     chars: typeof api.chars === 'number' ? api.chars : null,
+    snippet: typeof api.snippet === 'string' && api.snippet ? api.snippet : null,
     createdAt: api.created_at,
     finishedAt: api.finished_at ?? null,
     text: typeof api.text === 'string' ? api.text : null,

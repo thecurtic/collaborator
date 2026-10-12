@@ -212,9 +212,15 @@ export interface Transcript {
   id: number;
   url: string;
   title: string | null;
+  /** The video's channel/uploader (null for pre-2026-10-12 transcripts). */
+  channel: string | null;
   durationS: number | null;
   status: 'processing' | 'done' | 'error';
+  /** Why it failed (status 'error' only). */
+  error: string | null;
   chars: number | null;
+  /** Text around the first search hit (filtered listings only). */
+  snippet: string | null;
   createdAt: string;
   finishedAt: string | null;
   /** Full text — present only when fetched by id. */

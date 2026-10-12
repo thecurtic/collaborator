@@ -396,9 +396,12 @@ export interface ApiTranscript {
   id: number;
   url: string;
   title?: string | null;
+  channel?: string | null;
   duration_s?: number | null;
   status: 'processing' | 'done' | 'error';
+  error?: string | null;
   chars?: number | null;
+  snippet?: string;
   created_at: string;
   finished_at?: string | null;
   /** Full text — only on GET /api/transcripts/{id}. */

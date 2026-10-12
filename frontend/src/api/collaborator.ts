@@ -497,8 +497,12 @@ export interface CollaboratorApi {
   setScratchReadable(id: number, readable: boolean): Promise<ScratchItem>;
   deleteScratch(id: number): Promise<void>;
 
-  /** Background video-transcription jobs (b23d8ea), newest first. */
-  listTranscripts(): Promise<Transcript[]>;
+  /**
+   * Background video-transcription jobs (b23d8ea), newest first. Optional
+   * filters: `channel` (substring) and `q` (keywords over title, channel and
+   * full text; matches carry a snippet).
+   */
+  listTranscripts(filter?: { channel?: string; q?: string }): Promise<Transcript[]>;
   /** One job including its full text. */
   getTranscript(id: number): Promise<Transcript>;
   /** Delete a stored transcript (row only; the source video is remote). */
@@ -942,8 +946,17 @@ class HttpCollaboratorApi implements CollaboratorApi {
     await request<unknown>(`/api/transcripts/${id}`, { method: 'DELETE' });
   }
 
-  async listTranscripts(): Promise<Transcript[]> {
-    const res = await request<ApiTranscriptsResponse>('/api/transcripts');
+  async listTranscripts(filter?: {
+    channel?: string;
+    q?: string;
+  }): Promise<Transcript[]> {
+    const params = new URLSearchParams();
+    if (filter?.channel) params.set('channel', filter.channel);
+    if (filter?.q?.trim()) params.set('q', filter.q.trim());
+    const qs = params.toString();
+    const res = await request<ApiTranscriptsResponse>(
+      `/api/transcripts${qs ? `?${qs}` : ''}`,
+    );
     return (res.transcripts ?? []).map(toTranscript);
   }
 
