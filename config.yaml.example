@@ -32,7 +32,12 @@ inference:
 
 # Memory settings
 memory:
-  default_context_window: 20
+  default_context_window: 20   # prior turns offered to the model per message
+  # Tokens of conversation history per prompt; the oldest turns are dropped
+  # past it, and a single oversized turn keeps its end. The model's own
+  # context window (detected from LM Studio) always applies as well.
+  # Omit or null for no cap beyond the model.
+  # context_budget_tokens: 16000
   # Without authentication this single DB is used; with it, each user gets
   # users/<identity-hash>/conversations.db next to it. Relative to the repo root.
   db_path: "backend/data/conversations.db"

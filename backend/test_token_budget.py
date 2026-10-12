@@ -59,27 +59,41 @@ def test_trim_keeps_newest_within_budget(monkeypatch):
     monkeypatch.setattr(main, "get_model_context_tokens", lambda *a, **k: 200000)
     kept, dropped = main._trim_context_to_token_budget(turns, "q")
     assert dropped == 0 and len(kept) == 5
-    # Even the newest too big -> empty context, never a crash.
-    monkeypatch.setattr(main, "get_model_context_tokens", lambda *a, **k: 6000)
-    kept, dropped = main._trim_context_to_token_budget(
-        [dict(long_turn, id=9)], "q")
+    # Newest alone too big -> its END survives, cut to the budget and marked.
+    # Budget = 6000*0.8 - 2048 - 3000 - 1 < 0 here, so use 8000 (~1351).
+    monkeypatch.setattr(main, "get_model_context_tokens", lambda *a, **k: 8000)
+    big = {"id": 9, "role": "assistant", "content": "a" * 20000 + "THE END"}
+    kept, dropped = main._trim_context_to_token_budget([big], "q")
+    assert dropped == 0 and len(kept) == 1
+    assert kept[0]["content"].startswith(main._TRIMMED_MARKER)
+    assert kept[0]["content"].endswith("THE END")
+    assert inference.estimate_tokens(kept[0]["content"]) <= 1352
+    assert big["content"].startswith("a")                   # input untouched
+    # No room at all (window smaller than the reserves) -> empty, no crash.
+    monkeypatch.setattr(main, "get_model_context_tokens", lambda *a, **k: 4000)
+    kept, dropped = main._trim_context_to_token_budget([big], "q")
     assert kept == [] and dropped == 1
-    print("✓ trim: oldest dropped first, roomy = untouched, oversized = empty")
+    print("✓ trim: oldest dropped first, roomy = untouched, oversized = tail kept")
 
 
-def test_config_override_beats_detection(monkeypatch):
-    called = {"n": 0}
-    def detect(*a, **k):
-        called["n"] += 1
-        return 999999
-    monkeypatch.setattr(main, "get_model_context_tokens", detect)
+def test_history_budget_caps_history(monkeypatch):
+    """memory.context_budget_tokens is tokens of HISTORY (2026-10-12): with
+    16000 set and a roomy model, ~16000 tokens of turns come through."""
+    monkeypatch.setattr(main, "get_model_context_tokens", lambda *a, **k: 128000)
     mcfg = config.get_config()["memory"]
-    monkeypatch.setitem(mcfg, "context_budget_tokens", 10000)
-    long_turn = {"role": "user", "content": "x" * 8000}
+    monkeypatch.setitem(mcfg, "context_budget_tokens", 16000)
+    turn = {"role": "user", "content": "x" * 8000}           # ~2001 tokens
     kept, dropped = main._trim_context_to_token_budget(
-        [dict(long_turn, id=i) for i in range(5)], "q")
-    assert dropped == 4 and called["n"] == 0        # override used, no detection
-    print("✓ memory.context_budget_tokens overrides auto-detection")
+        [dict(turn, id=i) for i in range(20)], "q")
+    assert len(kept) == 7 and dropped == 13                # 7 × 2001 ≤ 16000
+    assert [t["id"] for t in kept] == list(range(13, 20))
+
+    # The model's own window still wins when it is the smaller limit.
+    monkeypatch.setattr(main, "get_model_context_tokens", lambda *a, **k: 10000)
+    kept, dropped = main._trim_context_to_token_budget(
+        [dict(turn, id=i) for i in range(20)], "q")
+    assert len(kept) == 1
+    print("✓ context_budget_tokens caps history; the model window still applies")
 
 
 def test_send_message_applies_trim(monkeypatch):

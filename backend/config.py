@@ -84,10 +84,11 @@ def load_config() -> dict:
         },
         "memory": {
             "default_context_window": 20,
-            # Token budget for the whole prompt. None = auto-detect the active
-            # model's context from LM Studio (/api/v0/models), falling back to
-            # a conservative 30k. Turns select the window; tokens trim it so a
-            # few very long turns can't blow past the model's context.
+            # Tokens of conversation HISTORY per prompt (prior turns only).
+            # None = no cap beyond the model: the active model's context is
+            # auto-detected from LM Studio (/api/v0/models), falling back to
+            # 30k, and always applies. Turns select the window; tokens trim it
+            # so a few very long turns can't blow past the model's context.
             "context_budget_tokens": None,
             "db_path": resolve_path("backend/data/conversations.db")
         },

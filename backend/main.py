@@ -311,30 +311,46 @@ _CONTEXT_USE_FRACTION = 0.8
 _FALLBACK_CONTEXT_TOKENS = 30000
 
 
+# Prepended to a turn cut down to fit: the model sees that text is missing.
+_TRIMMED_MARKER = "[…earlier part of this turn trimmed to fit the context budget]\n"
+
+
 def _trim_context_to_token_budget(context_list: List[dict], message: str):
-    """Drop OLDEST context turns until the estimated prompt fits the model.
+    """Drop OLDEST context turns until the history fits its token budget.
 
     Turns are the unit the user reasons in (branching, context resets); tokens
-    are what the model dies by. The turns window picks the candidates; this
-    budget keeps them inside the context of the ACTIVE model — detected live
-    from LM Studio, overridable via memory.context_budget_tokens. Returns
-    (trimmed_list, dropped_count).
+    are what the model dies by. The turns window picks the candidates; the
+    budget is the smaller of two limits: memory.context_budget_tokens (tokens
+    of HISTORY, when set) and what the ACTIVE model's window leaves after the
+    output reserve and prompt overhead (detected live from LM Studio). When
+    even the newest turn is too big, its END is kept, cut to the budget —
+    history never silently vanishes. Returns (trimmed_list, dropped_count).
     """
     if not context_list:
         return context_list, 0
     mcfg = config.get("memory", {}) or {}
-    ctx_tokens = (mcfg.get("context_budget_tokens")
-                  or get_model_context_tokens()
-                  or _FALLBACK_CONTEXT_TOKENS)
+    ctx_tokens = get_model_context_tokens() or _FALLBACK_CONTEXT_TOKENS
     max_out = config.get("inference", {}).get("max_tokens", 2048)
     budget = (int(ctx_tokens * _CONTEXT_USE_FRACTION) - max_out
               - _PROMPT_OVERHEAD_TOKENS - estimate_tokens(message))
+    history_cap = mcfg.get("context_budget_tokens")
+    if history_cap:
+        budget = min(budget, int(history_cap))
     if budget <= 0:
+        print(f"Warning: no room for conversation history (model context "
+              f"~{ctx_tokens} tokens, output reserve {max_out}); "
+              f"dropped all {len(context_list)} context turn(s)")
         return [], len(context_list)
     kept, total = [], 0
     for turn in reversed(context_list):          # newest first
         t = estimate_tokens(turn.get("content"))
         if total + t > budget:
+            room = budget - total - estimate_tokens(_TRIMMED_MARKER)
+            if not kept and room > 0:
+                content = turn.get("content") or ""
+                kept.append(dict(turn, content=_TRIMMED_MARKER
+                                 + content[-room * 4:]))
+                total = budget
             break
         kept.append(turn)
         total += t
