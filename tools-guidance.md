@@ -36,6 +36,7 @@ Every proposal is a PENDING draft the user reviews; the queue is the filter and 
 | "I'm going with X because Y" — the Y is the point | decision |
 | Uncertainty, open thread, "I wonder…" | question |
 | Appointment, meeting, deadline with a date | event — start (+ end/all_day/location), ISO, dates resolved against today; the people involved in the `people` field (social-graph titles) |
+| Something that repeats ("every Monday", "first of the month") | ONE event note with `repeat`; changes to a single date are propose_edit with `occurrence` |
 | A salient moment worth remembering | memory |
 | Belongs to a project the user is running | add project + that project's existing name tag (exactly one name; works on events and people too) |
 | A lasting fact or perception about the user | user-profile — for substantial areas propose a satellite note with `area` (work/interests/…) linked from the matching USER.md section, or propose_edit the section itself |

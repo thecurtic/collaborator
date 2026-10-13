@@ -971,6 +971,26 @@ content changed on disk (these count as changed in the feed; first-time adds
 don't).
 
 
+### 19. Events and recurrence
+
+Event notes (`event` tag) may carry `repeat` and `exceptions` frontmatter
+(NOTES-FORMAT.md, Recurrence), written like any typed field through propose
+tools, draft edits or `PATCH /api/notes/{title}` `fields` (validated; `""`
+clears).
+
+**Calendar windows expand.** `GET /api/notes/search?tag=event&from=&to=` (and
+the model's `list_events`) return each **occurrence** of a recurring event in
+the window as its own result: `event_start`/`event_end` for that occurrence,
+`occurrence` (its original date), `recurring: true`, `moved` (true when an
+exception gave it a new time). Cancelled occurrences and ones replaced by a
+one-off note are left out (the one-off lists itself). One-off events carry
+`recurring: false`. Occurrences are never stored.
+
+**`GET /api/events.ics`** writes a series as ONE VEVENT with `RRULE`,
+cancelled/replaced dates as `EXDATE`, and each moved occurrence as an override
+VEVENT with the same UID and `RECURRENCE-ID`.
+
+
 ## Data Models
 
 ### Turn

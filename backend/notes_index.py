@@ -29,7 +29,7 @@ _COLS = ", ".join(NOTES_INDEX_COLUMNS)
 
 # Per-type frontmatter keys mirrored into the generic `fields` JSON column —
 # one column, so the whitelist can grow without index migrations.
-INDEXED_FIELD_KEYS = ("location", "people", "aliases", "kind",
+INDEXED_FIELD_KEYS = ("location", "people", "repeat", "exceptions", "aliases", "kind",
                       "relation", "birthday", "area",
                       "name", "dob", "resides_in", "timezone")
 
@@ -60,6 +60,18 @@ def _norm_when(value):
         return value.isoformat()
     s = str(value).strip()
     return s or None
+
+
+def _plain(value):
+    """YAML structures -> JSON-safe ones (dates/datetimes to ISO strings)."""
+    import datetime as _dt
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain(v) for v in value]
+    if isinstance(value, (_dt.date, _dt.datetime)):
+        return _norm_when(value)
+    return value
 
 
 def parse_note_file(path: str) -> dict:
@@ -110,6 +122,10 @@ def parse_note_file(path: str) -> dict:
             if not isinstance(value, list):
                 value = [str(value)]
             fields[key] = [str(v) for v in value if str(v).strip()]
+        elif key in ("repeat", "exceptions"):
+            # Structured (recurrence rule / per-occurrence overrides); YAML
+            # hands back dates as date objects, the JSON column wants strings.
+            fields[key] = _plain(value)
         else:
             fields[key] = _norm_when(value) if key == "dob" else str(value)
 
@@ -515,32 +531,57 @@ def graph_neighborhood(conn, title: str, depth: int = 1, max_nodes: int = 40):
             "truncated": truncated}
 
 
-def list_events(conn, window_start: str = None, window_end: str = None):
+def list_events(conn, window_start: str = None, window_end: str = None,
+                expand: bool = True):
     """Notes tagged 'event' with a start, optionally within an inclusive window.
 
     window_start/window_end are ISO dates (YYYY-MM-DD) or datetimes; an event
     overlaps the window if any part of its [start, end-or-start] span does.
     Comparison is on local wall-clock strings (offsets ignored) — fine for a
     single-user, single-timezone corpus. Sorted by start.
+
+    Recurring events (frontmatter `repeat`, NOTES-FORMAT.md) are EXPANDED into
+    their occurrences inside the window: each comes back as its own entry with
+    event_start/event_end for that occurrence plus `occurrence` (the original
+    date), `recurring: True` and `moved`. Nothing about occurrences is stored.
+    With expand=False, or no window to expand into, a series is returned once
+    as the note itself (`recurring: True`, no `occurrence`) — the ICS export
+    writes it as one VEVENT with RRULE.
     """
+    import recurrence
+
+    def _cmp(value, end_of_day):
+        if len(value) > 10:
+            return value[:16]
+        return value + ("T23:59" if end_of_day else "T00:00")
+
+    ws = _cmp(window_start, False) if window_start else None
+    we = _cmp(window_end, True) if window_end else None
     events = []
     for row in conn.cursor().execute(f"SELECT {_COLS} FROM notes_index").fetchall():
         note = _row_to_note(row)
         if not note.get("event_start") or not _note_has_tag(note, "event"):
             continue
+        rule = (note.get("fields") or {}).get("repeat")
+        if isinstance(rule, dict) and rule.get("freq"):
+            if not expand or not (window_start and window_end):
+                events.append({**note, "recurring": True})
+                continue
+            for occ in recurrence.expand(
+                    note["event_start"], note.get("event_end"), rule,
+                    (note.get("fields") or {}).get("exceptions"),
+                    window_start, window_end):
+                events.append({**note, "event_start": occ["start"],
+                               "event_end": occ["end"], "occurrence": occ["date"],
+                               "recurring": True, "moved": occ["moved"]})
+            continue
         start = note["event_start"]
         end = note.get("event_end") or start
-        s_cmp = start[:16] if len(start) > 10 else start + "T00:00"
-        e_cmp = end[:16] if len(end) > 10 else end + "T23:59"
-        if window_start:
-            ws = window_start[:16] if len(window_start) > 10 else window_start + "T00:00"
-            if e_cmp < ws:
-                continue
-        if window_end:
-            we = window_end[:16] if len(window_end) > 10 else window_end + "T23:59"
-            if s_cmp > we:
-                continue
-        events.append(note)
+        if ws and _cmp(end, True) < ws:
+            continue
+        if we and _cmp(start, False) > we:
+            continue
+        events.append({**note, "recurring": False})
     events.sort(key=lambda n: (n["event_start"], n["title"]))
     return events
 

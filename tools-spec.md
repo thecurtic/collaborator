@@ -253,7 +253,10 @@ start (ISO 8601, resolved to a real date — never "next Tuesday") plus
 end/all_day/location/people (people = social-graph note titles; they become graph
 edges); social-graph takes aliases/kind/relation/birthday; user-profile
 satellites take area (the USER.md section they extend — also [[link]] them from
-that section via propose_edit on USER). No other note has fields: there is no
+that section via propose_edit on USER). A repeating event is ONE note with a
+`repeat` rule (freq daily/weekly/monthly/yearly, optional interval, by_day for
+weekly, by_month_day for monthly, until OR count) — never one note per
+occurrence; its start/end are the first occurrence. No other note has fields: there is no
 state or due date — a deadline or an outcome goes in the body. After calling,
 tell the user the draft is awaiting review.
 
@@ -270,7 +273,10 @@ questions: "what's on this week?", "what are my obligations?", "am I free
 Thursday afternoon?". Today is {today}: resolve relative ranges ("this week",
 "tomorrow", "next month") against THIS date before calling. Defaults: from =
 today, to = 14 days out. Returns each event's title, start/end, all_day flag,
-tags, wikilinks (people/projects involved), and description.
+tags, wikilinks (people/projects involved), and description. Recurring events
+come back as their individual occurrences in the window, each marked
+recurring with its `occurrence` (original date) and its `repeat` rule — you
+never compute a calendar yourself.
 
 ## propose_edit
 Propose changes to an EXISTING atomic note: its title, body, tags, fields, or any
@@ -286,6 +292,14 @@ reason so the user understands the intent during review. To edit several notes, 
 this once per note — each becomes its own draft in the same inbox. Body edits are full
 replacements in the user's first-person voice, following the same note rules as
 propose_note. After calling it, tell the user the edit draft(s) await their review.
+
+Recurring events: decide "this one or all of them" from what the user said. ALL
+of them: pass a new `repeat` and/or start/end as usual — that rewrites the series.
+THIS ONE: pass `occurrence` (the occurrence's original date, from list_events)
+plus exactly one of cancel_occurrence=true, a new start (and end) for that one
+date, or occurrence_note (the title of a one-off event note that replaces it —
+propose that note too, linking back to the series). The series and its other
+occurrences stay as they are. If it's unclear which they mean, ask.
 
 ## nwc_pay
 Spend from the user's own Lightning wallet (their Zeus/LDK node, connected via

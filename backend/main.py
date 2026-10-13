@@ -45,6 +45,7 @@ import agent_tools
 import auth
 import notes_index
 import feed
+import recurrence
 import nwc
 import scratch
 import voice
@@ -889,6 +890,21 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                             "description": "true for date-only events"},
                 "location": {"type": "string",
                              "description": "event only: where it happens"},
+                "repeat": {"type": "object",
+                           "description": "events only: a recurrence rule — "
+                                          "freq daily|weekly|monthly|yearly, "
+                                          "optional interval, by_day [MO..SU] "
+                                          "(weekly), by_month_day (monthly), "
+                                          "until (ISO date) OR count; start/end "
+                                          "are the FIRST occurrence",
+                           "properties": {
+                               "freq": {"type": "string",
+                                        "enum": ["daily", "weekly", "monthly", "yearly"]},
+                               "interval": {"type": "integer"},
+                               "by_day": {"type": "array", "items": {"type": "string"}},
+                               "by_month_day": {"type": "integer"},
+                               "until": {"type": "string"},
+                               "count": {"type": "integer"}}},
                 "people": {"type": "array", "items": {"type": "string"},
                            "description": "event only: social-graph note titles "
                                           "of people involved (become graph "
@@ -933,6 +949,34 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 "location": {"type": "string", "description": "events only"},
                 "people": {"type": "array", "items": {"type": "string"},
                            "description": "events only: full replacement list"},
+                "repeat": {"type": "object",
+                           "description": "events only — ALL occurrences: the new recurrence rule; "
+                                          "freq daily|weekly|monthly|yearly, "
+                                          "optional interval, by_day [MO..SU] "
+                                          "(weekly), by_month_day (monthly), "
+                                          "until (ISO date) OR count; start/end "
+                                          "are the FIRST occurrence",
+                           "properties": {
+                               "freq": {"type": "string",
+                                        "enum": ["daily", "weekly", "monthly", "yearly"]},
+                               "interval": {"type": "integer"},
+                               "by_day": {"type": "array", "items": {"type": "string"}},
+                               "by_month_day": {"type": "integer"},
+                               "until": {"type": "string"},
+                               "count": {"type": "integer"}}},
+                "occurrence": {"type": "string",
+                               "description": "recurring events only — THIS ONE: "
+                                              "the occurrence's original date "
+                                              "(YYYY-MM-DD). With cancel_occurrence, "
+                                              "a new start/end, or occurrence_note; "
+                                              "the series itself is unchanged"},
+                "cancel_occurrence": {"type": "boolean",
+                                      "description": "with occurrence: cancel that "
+                                                     "one occurrence"},
+                "occurrence_note": {"type": "string",
+                                    "description": "with occurrence: title of a "
+                                                   "one-off event note that "
+                                                   "replaces that occurrence"},
                 "aliases": {"type": "array", "items": {"type": "string"},
                             "description": "social-graph only: full replacement"},
                 "kind": {"type": "string", "enum": ["person", "org"]},
@@ -1221,6 +1265,10 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 tags = args.get("tags")
                 tags = ([str(t) for t in tags] if isinstance(tags, list)
                         else (note.get("tags") or []))
+                if (args.get("occurrence") or "").strip():
+                    args, oerr = _occurrence_edit_args(args, parsed)
+                    if oerr:
+                        return json.dumps({"error": oerr})
                 fields, ferr = _normalize_note_fields(args, tags=tags,
                                                       title=new_title)
                 if ferr:
@@ -1336,6 +1384,14 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                                    "tags": e["tags"],
                                    "links": e["links"],
                                    "description": (e.get("body") or "")[:300],
+                                   # Recurring: this is one derived occurrence;
+                                   # "occurrence" is its original date (pass it
+                                   # to propose_edit for "this one").
+                                   **({"recurring": True,
+                                       "occurrence": e.get("occurrence"),
+                                       "moved": e.get("moved", False),
+                                       "repeat": (e.get("fields") or {}).get("repeat")}
+                                      if e.get("recurring") else {}),
                                } for e in events]})
         if name == "graph_notes":
             try:
@@ -1498,7 +1554,8 @@ TYPE_TAGS = {"event", "social-graph", "user-profile"}
 # Per-type field whitelist (beyond app-managed created/tags/source_turns).
 # The USER note (title "USER", the profile hub) has its own additional set.
 TYPE_FIELDS = {
-    "event": {"start", "end", "all_day", "location", "people"},
+    "event": {"start", "end", "all_day", "location", "people", "repeat",
+              "exceptions"},
     "social-graph": {"aliases", "kind", "relation", "birthday"},
     "user-profile": {"area"},
 }
@@ -1558,6 +1615,21 @@ def _normalize_note_fields(args: dict, tags: Optional[List[str]] = None,
             return []
         return [str(v).strip()[:item_cap] for v in value if str(v).strip()][:cap]
 
+    for key in ("repeat", "exceptions"):
+        if key not in args or args.get(key) is None:
+            continue
+        if key not in allowed:
+            return {}, (f"field '{key}' applies only to notes tagged 'event'")
+        if args[key] in ("", [], {}):
+            fields[key] = ""                  # explicit clear
+            continue
+        if key == "repeat":
+            rule, rerr = recurrence.validate_repeat(args[key])
+        else:
+            rule, rerr = recurrence.validate_exceptions(args[key], _when_error)
+        if rerr:
+            return {}, rerr
+        fields[key] = rule
     for key in ("location", "people", "aliases", "kind",
                 "relation", "birthday", "area", "name", "dob", "resides_in",
                 "timezone"):
@@ -1604,6 +1676,50 @@ def _normalize_note_fields(args: dict, tags: Optional[List[str]] = None,
         else:   # location, relation, name, resides_in — free strings
             fields[key] = _clean_str(key)
     return fields, None
+
+
+def _occurrence_edit_args(args: dict, parsed: dict):
+    """"This one" (UX doc, Events): an edit naming one occurrence of a
+    recurring event becomes an exception on that date — cancelled, moved to
+    a new start/end, or replaced by a one-off note — and leaves the rule
+    alone. Returns (args with the merged exceptions list, error)."""
+    front = parsed.get("front") or {}
+    if not isinstance(front.get("repeat"), dict):
+        return args, "occurrence applies only to a recurring event (one with repeat)"
+    date = str(args.get("occurrence")).strip()[:10]
+    try:
+        import datetime as _dt
+        _dt.date.fromisoformat(date)
+    except ValueError:
+        return args, "occurrence must be the occurrence's original date (YYYY-MM-DD)"
+    entry = {"date": date}
+    if args.get("cancel_occurrence"):
+        entry["cancelled"] = True
+    elif (args.get("occurrence_note") or "").strip():
+        entry["note"] = args["occurrence_note"].strip()
+    elif args.get("start"):
+        entry["start"] = str(args["start"]).strip()
+        if args.get("end"):
+            entry["end"] = str(args["end"]).strip()
+    else:
+        return args, ("with occurrence, pass cancel_occurrence, a new start "
+                      "(and end), or occurrence_note")
+    existing = notes_index._plain(front.get("exceptions") or [])
+    merged = [e for e in existing if isinstance(e, dict)
+              and str(e.get("date"))[:10] != date] + [entry]
+    out = {k: v for k, v in args.items()
+           if k not in ("start", "end", "all_day", "occurrence",
+                        "cancel_occurrence", "occurrence_note")}
+    out["exceptions"] = merged
+    return out, None
+
+
+def _when_error(key: str, value: str) -> Optional[str]:
+    """The ISO rule for an event time (start/end), as a message or None."""
+    if _EVENT_DATE_RE.match(value) or _EVENT_DT_RE.match(value):
+        return None
+    return (f"{key} must be ISO 8601 — YYYY-MM-DD or YYYY-MM-DDTHH:MM; "
+            f"got {value!r}")
 
 
 def _normalize_event_fields(args: dict):
@@ -1667,7 +1783,7 @@ def _finalize_event_fields(fields: dict) -> dict:
 
 
 # Frontmatter serialization order for whitelisted fields (stable, readable).
-_FIELD_ORDER = ["start", "end", "all_day", "location", "people",
+_FIELD_ORDER = ["start", "end", "all_day", "repeat", "exceptions", "location", "people",
                 "aliases", "kind", "relation", "birthday", "area",
                 "name", "dob", "resides_in", "timezone"]
 
@@ -2722,6 +2838,21 @@ def _ics_datetime(value: str) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _ics_occurrence(date: str, series_start: str, all_day: bool) -> str:
+    """An occurrence's ORIGINAL start in ICS form: its date at the series'
+    time of day (EXDATE / RECURRENCE-ID point at it)."""
+    if all_day:
+        return date.replace("-", "")
+    import recurrence as _r
+    t = _r._parse_when(series_start)[0].strftime("%H:%M")
+    return _ics_datetime(_r._fmt(_datetime_from(date, t), False))
+
+
+def _datetime_from(date: str, hhmm: str):
+    from datetime import datetime
+    return datetime.fromisoformat(f"{date}T{hhmm}")
+
+
 def _events_to_ics(events: List[dict]) -> str:
     """Render event notes as a standard iCalendar (RFC 5545) document."""
     import hashlib
@@ -2750,7 +2881,28 @@ def _events_to_ics(events: List[dict]) -> str:
         body = (e.get("body") or "").strip()
         if body:
             lines.append("DESCRIPTION:" + _ics_escape(body[:800]))
+        rule = (e.get("fields") or {}).get("repeat") if e.get("recurring") else None
+        overrides = []
+        if isinstance(rule, dict) and rule.get("freq"):
+            # One VEVENT per series: the rule, cancelled/replaced dates as
+            # EXDATE, and each moved occurrence as an override (RECURRENCE-ID).
+            lines.append("RRULE:" + recurrence.to_rrule(rule))
+            all_day = bool(e.get("event_all_day") or len(start) == 10)
+            for exc in (e.get("fields") or {}).get("exceptions") or []:
+                orig = _ics_occurrence(exc["date"], start, all_day)
+                if exc.get("cancelled") or exc.get("note"):
+                    lines.append(("EXDATE;VALUE=DATE:" if all_day else "EXDATE:") + orig)
+                elif exc.get("start"):
+                    overrides.append((orig, exc))
         lines.append("END:VEVENT")
+        for orig, exc in overrides:
+            lines += ["BEGIN:VEVENT", f"UID:{uid}@collaborator", f"DTSTAMP:{stamp}",
+                      "SUMMARY:" + _ics_escape(e["title"]),
+                      f"RECURRENCE-ID:{orig}",
+                      f"DTSTART:{_ics_datetime(exc['start'])}"]
+            if exc.get("end"):
+                lines.append(f"DTEND:{_ics_datetime(exc['end'])}")
+            lines.append("END:VEVENT")
     lines.append("END:VCALENDAR")
 
     folded = []
@@ -2774,7 +2926,8 @@ async def export_events_ics(
     try:
         conn = sqlite3.connect(_resolve_db_path(passkey))
         try:
-            events = notes_index.list_events(conn, from_, to)
+            # Series stay whole (RRULE), never expanded into the file.
+            events = notes_index.list_events(conn, from_, to, expand=False)
         finally:
             conn.close()
         return Response(

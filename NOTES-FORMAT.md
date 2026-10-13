@@ -230,6 +230,13 @@ Rules:
 - The index invariant unchanged: nothing about occurrences is stored
   index-only. Dropping the index and re-expanding from the files yields the
   same calendar.
+- Built 2026-10-13. The model's typed tools carry it: `repeat` on propose_note
+  and propose_edit (all of them), and on propose_edit `occurrence` (the
+  original date) with `cancel_occurrence`, a replacement `start`/`end`, or
+  `occurrence_note` (this one), which the app turns into the exception entry.
+  A rule on the 29th–31st skips months without that day, as RFC 5545 does;
+  an occurrence keeps the series' wall-clock time with its own date's UTC
+  offset, so it doesn't drift an hour across DST.
 
 ### Body
 
