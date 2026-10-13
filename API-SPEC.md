@@ -986,6 +986,23 @@ exception gave it a new time). Cancelled occurrences and ones replaced by a
 one-off note are left out (the one-off lists itself). One-off events carry
 `recurring: false`. Occurrences are never stored.
 
+**`POST /api/events/import`** `{ "ics": "<file text>", "filename": "work.ics" }` →
+each event becomes a **pending draft** (tag `event`, typed fields incl.
+`repeat` from RRULE and cancelled `exceptions` from EXDATE), reviewed in the
+drafts inbox like any proposal:
+```json
+{ "run_id": "ics-1a2b3c4d5e6f", "drafts": [ { "id": 41, "title": "Book club" } ],
+  "skipped": [ { "title": "Book club", "reason": "a changed occurrence of a repeating event (…)" } ],
+  "notes": [ { "title": "Last Friday drinks", "note": "its repeat rule uses parts this calendar can't hold (…)" } ] }
+```
+Times convert to this server's local wall-clock (UTC `Z`, `TZID` and
+floating times). Events already in the calendar (same title and start) are
+skipped, so re-importing a file doesn't duplicate. Overrides (`RECURRENCE-ID`)
+and rules the format can't hold are reported, not dropped silently. `413` over
+2 MB; `422` if it isn't an iCalendar file. A `.ics` sent to Scratch
+(`POST /api/scratch/media`, then the act gesture) does the same, with the
+proposals on the Scratch card.
+
 **`GET /api/events.ics`** writes a series as ONE VEVENT with `RRULE`,
 cancelled/replaced dates as `EXDATE`, and each moved occurrence as an override
 VEVENT with the same UID and `RECURRENCE-ID`.

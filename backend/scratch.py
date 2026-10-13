@@ -80,7 +80,8 @@ def media_dir(db_path: str) -> str:
 _EXT_BY_MIME = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
                 "image/gif": ".gif", "audio/webm": ".webm", "audio/ogg": ".ogg",
                 "audio/mp4": ".m4a", "audio/wav": ".wav", "audio/mpeg": ".mp3",
-                "video/mp4": ".mp4", "video/webm": ".webm"}
+                "video/mp4": ".mp4", "video/webm": ".webm",
+                "text/calendar": ".ics"}
 
 
 def save_media(db_path: str, data: bytes, mime: Optional[str],
