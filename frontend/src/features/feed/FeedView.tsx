@@ -111,9 +111,14 @@ function Row({
  */
 export function FeedView({
   onOpen,
+  pendingDrafts = 0,
+  onOpenInbox,
 }: {
   /** Navigate to an item (the app shell knows where each type lives). */
   onOpen: (item: FeedItem) => void;
+  /** Pending drafts, for the inbox shortcut (the drafts inbox lives here now). */
+  pendingDrafts?: number;
+  onOpenInbox?: () => void;
 }) {
   const [feed, setFeed] = useState<Feed | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -146,6 +151,15 @@ export function FeedView({
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
         <h2 className="text-2xl font-semibold">Feed</h2>
+        <div className="flex items-center gap-1">
+        {onOpenInbox && (
+          <Button variant="ghost" size="sm" onClick={onOpenInbox}
+                  aria-label={`Drafts inbox (${pendingDrafts} pending)`}
+                  className="h-8 gap-1.5 px-2 text-xs text-muted-foreground">
+            <Inbox className="h-4 w-4" />
+            {pendingDrafts > 0 ? pendingDrafts : 'Inbox'}
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"
@@ -155,6 +169,7 @@ export function FeedView({
         >
           <RefreshCw className="h-4 w-4" />
         </Button>
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {error && <p className="px-4 py-3 text-sm text-destructive">{error}</p>}

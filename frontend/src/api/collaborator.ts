@@ -350,6 +350,13 @@ export interface CollaboratorApi {
    */
   setTurnState(turnId: number, state: 'seed' | 'tree'): Promise<void>;
 
+  // --- Projects: name overrides (pin a tag as a name / ignore it) ---
+  getProjectOverrides(): Promise<{ pinned: string[]; ignored: string[] }>;
+  setProjectOverrides(o: { pinned: string[]; ignored: string[] }): Promise<{
+    pinned: string[];
+    ignored: string[];
+  }>;
+
   // --- Warm feed ---
   getFeed(limit?: number): Promise<Feed>;
   /** Record that the user opened an item (best-effort; never throws). */
@@ -670,6 +677,20 @@ class HttpCollaboratorApi implements CollaboratorApi {
     await request<unknown>(`/api/turns/${turnId}/state`, {
       method: 'PATCH',
       body: JSON.stringify({ state }),
+    });
+  }
+
+  async getProjectOverrides(): Promise<{ pinned: string[]; ignored: string[] }> {
+    return request('/api/projects/overrides');
+  }
+
+  async setProjectOverrides(o: {
+    pinned: string[];
+    ignored: string[];
+  }): Promise<{ pinned: string[]; ignored: string[] }> {
+    return request('/api/projects/overrides', {
+      method: 'PUT',
+      body: JSON.stringify(o),
     });
   }
 

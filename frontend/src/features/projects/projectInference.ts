@@ -1,8 +1,22 @@
-import type { NoteMeta } from '@/domain/models';
-import { TYPE_TAGS } from './categories';
+import { TYPE_TAGS } from '@/features/notes/categories';
+
+/** Anything that can belong to a project: a note, a chat. */
+export interface ProjectItem {
+  /** Unique across kinds, e.g. note:<filename>, chat:<root id>. */
+  key: string;
+  tags: string[];
+}
+
+/** Manual corrections (UX doc): never retag, override instead. */
+export interface NameOverrides {
+  /** Always project names. */
+  pinned: string[];
+  /** Never project names. */
+  ignored: string[];
+}
 
 /**
- * Project-name inference over the projects lens. Model (greenfield, agreed
+ * Project-name inference over everything tagged `project` (notes and chats). Model (greenfield, agreed
  * 2026-08-17): every member note is tagged `project`; the project's NAME is
  * one of its other tags — inferred, never declared. Facets are the rest.
  *
@@ -19,15 +33,15 @@ import { TYPE_TAGS } from './categories';
  * Deterministic, presentation-only — misfires are fixed by a future
  * pin/ignore override (backend-persisted, deferred), NEVER by retagging.
  */
-export interface ProjectCluster {
+export interface ProjectCluster<T extends ProjectItem = ProjectItem> {
   name: string;
-  notes: NoteMeta[];
+  items: T[];
 }
 
-export interface ProjectInference {
-  clusters: ProjectCluster[];
-  /** Notes tagged `project` carrying no accepted name tag. */
-  unassigned: NoteMeta[];
+export interface ProjectInference<T extends ProjectItem = ProjectItem> {
+  clusters: ProjectCluster<T>[];
+  /** Items tagged `project` carrying no accepted name tag. */
+  unassigned: T[];
 }
 
 // Two tags conflict (can't both be names) when their note-sets overlap by
@@ -36,28 +50,34 @@ const CONFLICT_RATIO = 0.2;
 
 const NOT_NAMES = new Set<string>(['project', ...TYPE_TAGS]);
 
-interface Candidate {
+interface Candidate<T extends ProjectItem> {
   tag: string;
-  notes: NoteMeta[];
+  items: T[];
   keys: Set<string>;
 }
 
-function overlapRatio(a: Candidate, b: Candidate): number {
+function overlapRatio<T extends ProjectItem>(a: Candidate<T>, b: Candidate<T>): number {
   let shared = 0;
   const [small, large] = a.keys.size <= b.keys.size ? [a, b] : [b, a];
   for (const k of small.keys) if (large.keys.has(k)) shared++;
   return shared / small.keys.size;
 }
 
-/** Greedy pack: accept size-ordered candidates that conflict with nothing. */
-function pack(
-  ordered: Candidate[],
+/** Greedy pack: accept size-ordered candidates that conflict with nothing;
+ * pinned names are accepted first, unconditionally. */
+function pack<T extends ProjectItem>(
+  ordered: Candidate<T>[],
   banned: string | null,
-): { names: Candidate[]; coverage: number } {
-  const names: Candidate[] = [];
+  pinned: Set<string>,
+): { names: Candidate<T>[]; coverage: number } {
+  const names: Candidate<T>[] = [];
   const covered = new Set<string>();
+  for (const c of ordered.filter((x) => pinned.has(x.tag))) {
+    names.push(c);
+    for (const k of c.keys) covered.add(k);
+  }
   for (const c of ordered) {
-    if (c.tag === banned) continue;
+    if (pinned.has(c.tag) || c.tag === banned) continue;
     if (names.some((n) => overlapRatio(c, n) >= CONFLICT_RATIO)) continue;
     names.push(c);
     for (const k of c.keys) covered.add(k);
@@ -65,58 +85,67 @@ function pack(
   return { names, coverage: covered.size };
 }
 
-export function inferProjects(universe: NoteMeta[]): ProjectInference {
-  const byTag = new Map<string, NoteMeta[]>();
-  for (const note of universe) {
-    for (const tag of note.tags) {
-      if (NOT_NAMES.has(tag)) continue;
+export function inferProjects<T extends ProjectItem>(
+  universe: T[],
+  overrides: NameOverrides = { pinned: [], ignored: [] },
+): ProjectInference<T> {
+  const pinned = new Set(overrides.pinned);
+  const ignored = new Set(overrides.ignored);
+  const byTag = new Map<string, T[]>();
+  for (const item of universe) {
+    for (const tag of item.tags) {
+      if (NOT_NAMES.has(tag) || ignored.has(tag)) continue;
       const list = byTag.get(tag);
-      if (list) list.push(note);
-      else byTag.set(tag, [note]);
+      if (list) list.push(item);
+      else byTag.set(tag, [item]);
     }
   }
-  const ordered: Candidate[] = [...byTag.entries()]
-    .map(([tag, notes]) => ({
+  const ordered: Candidate<T>[] = [...byTag.entries()]
+    .map(([tag, items]) => ({
       tag,
-      notes,
-      keys: new Set(notes.map((n) => n.filename)),
+      items,
+      keys: new Set(items.map((n) => n.key)),
     }))
-    .sort((a, b) => b.notes.length - a.notes.length || a.tag.localeCompare(b.tag));
+    .sort((a, b) => b.items.length - a.items.length || a.tag.localeCompare(b.tag));
 
   // Leave-one-out search: plain greedy loses when a bridging facet is the
   // single biggest tag (it gets accepted first and blocks the real names).
   // Re-packing with each of the top candidates banned finds the partition
   // with the best total coverage instead. O(K·n²) at personal scale.
-  let best = pack(ordered, null);
+  let best = pack(ordered, null, pinned);
   for (const c of ordered.slice(0, 10)) {
-    const alt = pack(ordered, c.tag);
-    if (alt.coverage > best.coverage) best = alt;
+    if (pinned.has(c.tag)) continue;
+    const alt = pack(ordered, c.tag, pinned);
+    // Equal coverage: the finer partition wins — a tag that covers exactly
+    // what several names cover between them is a kind tag spanning them.
+    if (alt.coverage > best.coverage ||
+        (alt.coverage === best.coverage && alt.names.length > best.names.length)) {
+      best = alt;
+    }
   }
 
   const rank = new Map(best.names.map((c, i) => [c.tag, i]));
-  const size = new Map(best.names.map((c) => [c.tag, c.notes.length]));
-  const byName = new Map<string, NoteMeta[]>(
-    best.names.map((c) => [c.tag, []]),
-  );
-  const unassigned: NoteMeta[] = [];
-  for (const note of universe) {
-    // Near-disjoint means multiple names on one note is rare — prefer the
+  const size = new Map(best.names.map((c) => [c.tag, c.items.length]));
+  const byName = new Map<string, T[]>(best.names.map((c) => [c.tag, []]));
+  const unassigned: T[] = [];
+  for (const item of universe) {
+    // Near-disjoint means multiple names on one item is rare — prefer the
     // larger project, deterministically.
-    const names = note.tags
+    const names = item.tags
       .filter((t) => rank.has(t))
       .sort(
         (a, b) =>
           (size.get(b) ?? 0) - (size.get(a) ?? 0) || a.localeCompare(b),
       );
-    if (names.length === 0) unassigned.push(note);
-    else byName.get(names[0])?.push(note);
+    if (names.length === 0) unassigned.push(item);
+    else byName.get(names[0])?.push(item);
   }
 
   return {
     clusters: best.names
-      .map((c) => ({ name: c.tag, notes: byName.get(c.tag) ?? [] }))
-      .filter((c) => c.notes.length > 0)
-      .sort((a, b) => b.notes.length - a.notes.length),
+      .map((c) => ({ name: c.tag, items: byName.get(c.tag) ?? [] }))
+      .filter((c) => c.items.length > 0)
+      .sort((a, b) => b.items.length - a.items.length),
     unassigned,
   };
 }
@@ -126,12 +155,12 @@ export function inferProjects(universe: NoteMeta[]): ProjectInference {
  * excluded ones (project name + already-drilled), by frequency.
  */
 export function facetsOf(
-  notes: NoteMeta[],
+  items: ProjectItem[],
   exclude: string[],
 ): { tag: string; count: number }[] {
   const skip = new Set(['project', ...exclude]);
   const counts = new Map<string, number>();
-  for (const n of notes) {
+  for (const n of items) {
     for (const t of n.tags) {
       if (!skip.has(t)) counts.set(t, (counts.get(t) ?? 0) + 1);
     }

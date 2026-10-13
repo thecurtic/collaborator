@@ -1,10 +1,12 @@
 import {
   BookOpen,
+  FileText,
   FileVideo,
   Globe,
   LogOut,
   Menu,
   Settings as SettingsIcon,
+  Users,
 } from 'lucide-react';
 import { useState, type ComponentType, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
@@ -41,12 +43,16 @@ export function AppMenu({
   onOpenReferences,
   onOpenWebSearch,
   onOpenTranscripts,
+  onOpenNotes,
+  onOpenPeople,
   onSignOut,
 }: {
   onOpenSettings: () => void;
   onOpenReferences: () => void;
   onOpenWebSearch: () => void;
   onOpenTranscripts: () => void;
+  onOpenNotes: () => void;
+  onOpenPeople: () => void;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -85,17 +91,25 @@ export function AppMenu({
             tabIndex={-1}
             className="absolute right-0 top-full z-50 mt-1 w-52 rounded-xl border border-border bg-card py-1 shadow-lg outline-none"
           >
-            <MenuItem icon={SettingsIcon} onClick={() => pick(onOpenSettings)}>
-              Settings
+            {/* The archives consulted on purpose (UX doc, Destinations). */}
+            <MenuItem icon={FileText} onClick={() => pick(onOpenNotes)}>
+              Notes
+            </MenuItem>
+            <MenuItem icon={Users} onClick={() => pick(onOpenPeople)}>
+              People
+            </MenuItem>
+            <MenuItem icon={FileVideo} onClick={() => pick(onOpenTranscripts)}>
+              Transcripts
+            </MenuItem>
+            <div className="my-1 border-t border-border" />
+            <MenuItem icon={Globe} onClick={() => pick(onOpenWebSearch)}>
+              Web Search
             </MenuItem>
             <MenuItem icon={BookOpen} onClick={() => pick(onOpenReferences)}>
               References
             </MenuItem>
-            <MenuItem icon={Globe} onClick={() => pick(onOpenWebSearch)}>
-              Web Search
-            </MenuItem>
-            <MenuItem icon={FileVideo} onClick={() => pick(onOpenTranscripts)}>
-              Transcripts
+            <MenuItem icon={SettingsIcon} onClick={() => pick(onOpenSettings)}>
+              Settings
             </MenuItem>
             <div className="my-1 border-t border-border" />
             <MenuItem icon={LogOut} onClick={() => pick(onSignOut)}>

@@ -1,26 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { NoteMeta } from '@/domain/models';
-import { facetsOf, inferProjects } from './projectInference';
+import { facetsOf, inferProjects, type ProjectItem } from './projectInference';
 
 let seq = 0;
-function note(tags: string[]): NoteMeta {
+function note(tags: string[]): ProjectItem {
   seq += 1;
-  return {
-    filename: `n${seq}.md`,
-    title: `n${seq}`,
-    created: '2026-08-01',
-    tags: ['project', ...tags],
-    sourceTurns: [],
-    links: [],
-    score: null,
-    fields: null,
-    occurrence: null,
-    recurring: false,
-    moved: false,
-  };
+  return { key: `note:n${seq}`, tags: ['project', ...tags] };
 }
 
-const times = (n: number, make: () => NoteMeta) =>
+const times = (n: number, make: () => ProjectItem) =>
   Array.from({ length: n }, make);
 
 describe('inferProjects', () => {
@@ -32,7 +19,7 @@ describe('inferProjects', () => {
     ];
     const { clusters, unassigned } = inferProjects(universe);
     expect(clusters.map((c) => c.name)).toEqual(['collaborator']);
-    expect(clusters[0].notes).toHaveLength(12);
+    expect(clusters[0].items).toHaveLength(12);
     expect(unassigned).toHaveLength(0);
   });
 
@@ -46,8 +33,8 @@ describe('inferProjects', () => {
     ];
     const { clusters, unassigned } = inferProjects(universe);
     expect(clusters.map((c) => c.name)).toEqual(['collaborator', 'homelab']);
-    expect(clusters[0].notes).toHaveLength(30);
-    expect(clusters[1].notes).toHaveLength(20);
+    expect(clusters[0].items).toHaveLength(30);
+    expect(clusters[1].items).toHaveLength(20);
     expect(unassigned).toHaveLength(0);
   });
 
@@ -73,11 +60,11 @@ describe('inferProjects', () => {
     ];
     const { clusters, unassigned } = inferProjects(universe);
     expect(clusters.map((c) => c.name)).toEqual(['garden', 'homelab']);
-    expect(clusters[0].notes).toHaveLength(7);
-    expect(clusters[1].notes).toHaveLength(4);
+    expect(clusters[0].items).toHaveLength(7);
+    expect(clusters[1].items).toHaveLength(4);
     expect(unassigned).toHaveLength(0);
     // Inside the project, `event` is a facet to drill by.
-    expect(facetsOf(clusters[0].notes, ['garden']).map((f) => f.tag)).toEqual([
+    expect(facetsOf(clusters[0].items, ['garden']).map((f) => f.tag)).toEqual([
       'event',
       'social-graph',
     ]);
@@ -115,5 +102,41 @@ describe('facetsOf', () => {
     expect(facetsOf(notes, ['collaborator', 'bug']).map((f) => f.tag)).toEqual(
       ['feature', 'voice'],
     );
+  });
+});
+
+describe('overrides and chats', () => {
+  it('an ignored tag is never a name; a pinned one always is', () => {
+    // `urgent` sits on project notes that carry no name, never beside one,
+    // so it behaves exactly like a name.
+    const universe = [
+      ...times(4, () => note(['garden'])),
+      ...times(2, () => note(['urgent'])),
+      ...times(2, () => note(['homelab'])),
+    ];
+    const before = inferProjects(universe).clusters.map((c) => c.name);
+    expect(before).toContain('urgent');
+    const after = inferProjects(universe, { pinned: [], ignored: ['urgent'] });
+    expect(after.clusters.map((c) => c.name)).not.toContain('urgent');
+    expect(after.unassigned).toHaveLength(2);
+
+    // `bug` spans projects (never a name) unless pinned.
+    const withBug = [...times(3, () => note(['garden', 'bug'])), ...times(3, () => note(['homelab', 'bug']))];
+    expect(inferProjects(withBug).clusters.map((c) => c.name)).not.toContain('bug');
+    expect(inferProjects(withBug, { pinned: ['bug'], ignored: [] }).clusters.map((c) => c.name))
+      .toContain('bug');
+  });
+
+  it('chats and notes cluster together by key', () => {
+    const chat = (tags: string[], id: number): ProjectItem =>
+      ({ key: `chat:${id}`, tags: ['project', ...tags] });
+    const { clusters } = inferProjects([
+      ...times(2, () => note(['garden'])),
+      chat(['garden'], 1),
+      chat(['garden', 'bug'], 2),
+    ]);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].items.map((i) => i.key.split(':')[0]).sort())
+      .toEqual(['chat', 'chat', 'note', 'note']);
   });
 });

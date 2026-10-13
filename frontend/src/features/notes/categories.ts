@@ -7,9 +7,9 @@
 export const TYPE_TAGS = ['event', 'social-graph', 'user-profile'] as const;
 
 /**
- * Notes lenses: the person and profile types plus `project`. Events have
- * their own destination (Calendar); goal, decision, question and memory are
- * plain tags with no lens of their own (UX doc).
+ * Notes lenses: the person and profile types. Events and projects have
+ * their own destinations (Calendar, Projects); goal, decision, question and
+ * memory are plain tags with no lens of their own (UX doc).
  */
 export interface NoteCategory {
   tag: string;
@@ -19,7 +19,6 @@ export interface NoteCategory {
 export const NOTE_CATEGORIES: NoteCategory[] = [
   { tag: 'user-profile', label: 'Profile' },
   { tag: 'social-graph', label: 'People' },
-  { tag: 'project', label: 'Projects' },
 ];
 
 /** USER.md fixed section headings, lowercased = valid `area` values. */

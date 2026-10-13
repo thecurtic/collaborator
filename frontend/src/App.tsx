@@ -1,8 +1,8 @@
 import {
-  Brain,
   CalendarDays,
   ChevronLeft,
   Flame,
+  FolderKanban,
   Loader2,
   MoreHorizontal,
   NotebookPen,
@@ -39,6 +39,7 @@ import { ChatView } from '@/features/chat/ChatView';
 import { CalendarView } from '@/features/calendar/CalendarView';
 import { ChatCardSheet } from '@/features/chat/ChatCardSheet';
 import { FeedView } from '@/features/feed/FeedView';
+import { ProjectsView } from '@/features/projects/ProjectsView';
 import { RootList } from '@/features/chat/RootList';
 import { TreeMap } from '@/features/chat/TreeMap';
 import { useConversation } from '@/features/chat/useConversation';
@@ -64,12 +65,12 @@ export default function App() {
 }
 
 /**
- * Home tabs: feed (default — the warm feed is the front door) · chats (every
- * chat; Conversations and the tree map behind a control) · scratch
- * (notes-to-self, centre) · calendar · mind (vault, until its lenses move to
- * the menu).
+ * Home tabs (UX doc, Destinations): feed (default — the front door) · chats
+ * (every chat; Conversations and the tree map behind a control) · scratch
+ * (centre) · calendar · projects. Notes, People and Transcripts are archives
+ * consulted on purpose, so they live in the menu as pushed screens.
  */
-type Tab = 'feed' | 'chats' | 'scratch' | 'calendar' | 'mind';
+type Tab = 'feed' | 'chats' | 'scratch' | 'calendar' | 'projects';
 
 /** One backgrounded synthesis run (at most one at a time). */
 interface SynthState {
@@ -135,6 +136,10 @@ function AppShell() {
   // References (prompt viewer), Web Search, and Transcripts push over
   // whatever is showing.
   const [referencesOpen, setReferencesOpen] = useState(false);
+  // Notes (the vault: list, graph, people, profile, drafts inbox) — a pushed
+  // screen from the menu; `notesLens` opens it on a lens (People).
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [notesLens, setNotesLens] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [transcriptsOpen, setTranscriptsOpen] = useState(false);
   // A transcript to open straight away (from a notification's deep link).
@@ -235,12 +240,27 @@ function AppShell() {
     setTranscriptsOpen(true);
   }, [gate]);
 
-  /** Open the Mind tab on the inbox, optionally filtered to one run. */
-  const openInbox = useCallback((runId: string | null) => {
+  /** Open the Notes screen, optionally on a lens. */
+  const openNotes = useCallback((lens: string | null = null) => {
     setChatOpen(false);
-    setTab('mind');
-    setInboxRequest((prev) => ({ runId, nonce: (prev?.nonce ?? 0) + 1 }));
+    setReferencesOpen(false);
+    setSearchOpen(false);
+    setTranscriptsOpen(false);
+    setNotesLens(lens);
+    setNotesOpen(true);
   }, []);
+
+  /** Open the drafts inbox (in Notes), optionally filtered to one run. */
+  const openInbox = useCallback((runId: string | null) => {
+    openNotes();
+    setInboxRequest((prev) => ({ runId, nonce: (prev?.nonce ?? 0) + 1 }));
+  }, [openNotes]);
+
+  /** Open one vault note by title. */
+  const openNoteByTitle = useCallback((title: string) => {
+    openNotes();
+    setNoteRequest((prev) => ({ title, nonce: (prev?.nonce ?? 0) + 1 }));
+  }, [openNotes]);
 
   /** Kick off a synthesis run in the background (it can take minutes). */
   const startSynthesis = useCallback(
@@ -346,8 +366,7 @@ function AppShell() {
       setChatOpen(true);
       void api.touchFeedItem(item.key);
     } else if ((item.type === 'note' || item.type === 'event') && r.title) {
-      setTab('mind');
-      setNoteRequest((prev) => ({ title: r.title!, nonce: (prev?.nonce ?? 0) + 1 }));
+      openNoteByTitle(r.title);
     } else if (item.type === 'approval') {
       openInbox(r.runId ?? null);
     } else if (item.type === 'transcript' && r.transcriptId != null) {
@@ -450,7 +469,7 @@ function AppShell() {
     <div className="flex h-full flex-col">
       <header className="pt-safe px-safe border-b border-border">
         <div className="flex items-center gap-2 px-2 py-3">
-          {referencesOpen || searchOpen || transcriptsOpen ? (
+          {referencesOpen || searchOpen || transcriptsOpen || notesOpen ? (
             <>
               <Button
                 variant="ghost"
@@ -461,7 +480,9 @@ function AppShell() {
                     ? setSearchOpen(false)
                     : transcriptsOpen
                       ? setTranscriptsOpen(false)
-                      : setReferencesOpen(false)
+                      : notesOpen
+                        ? setNotesOpen(false)
+                        : setReferencesOpen(false)
                 }
                 className="h-8 w-8 shrink-0"
               >
@@ -472,7 +493,9 @@ function AppShell() {
                   ? 'Web Search'
                   : transcriptsOpen
                     ? 'Transcripts'
-                    : 'References'}
+                    : notesOpen
+                      ? notesLens === 'social-graph' ? 'People' : 'Notes'
+                      : 'References'}
               </span>
             </>
           ) : chatOpen ? (
@@ -537,8 +560,11 @@ function AppShell() {
               onOpenTranscripts={() => {
                 setReferencesOpen(false);
                 setSearchOpen(false);
+                setNotesOpen(false);
                 setTranscriptsOpen(true);
               }}
+              onOpenNotes={() => openNotes(null)}
+              onOpenPeople={() => openNotes('social-graph')}
               onSignOut={() => {
                 setReferencesOpen(false);
                 setSearchOpen(false);
@@ -674,6 +700,20 @@ function AppShell() {
           <WebSearchView onStartChat={startChatWithDraft} />
         ) : referencesOpen ? (
           <ReferencesView />
+        ) : notesOpen ? (
+          <NotesView
+            key={notesLens ?? 'notes'}
+            pendingCount={pendingDrafts}
+            inboxRequest={inboxRequest}
+            noteRequest={noteRequest}
+            initialLens={notesLens}
+            onBadgeRefresh={() => void refreshDrafts()}
+            onOpenTurn={(turnId) => {
+              setNotesOpen(false);
+              convo.selectPathTo(turnId);
+              setChatOpen(true);
+            }}
+          />
         ) : transcriptsOpen ? (
           <TranscriptsView
             initialId={transcriptFocus}
@@ -712,17 +752,16 @@ function AppShell() {
             onConversationGone={() => setChatOpen(false)}
           />
         ) : tab === 'feed' ? (
-          <FeedView onOpen={openFeedItem} />
-        ) : tab === 'mind' ? (
-          <NotesView
-            pendingCount={pendingDrafts}
-            inboxRequest={inboxRequest}
-            noteRequest={noteRequest}
-            onBadgeRefresh={() => void refreshDrafts()}
-            onOpenTurn={(turnId) => {
-              convo.selectPathTo(turnId);
-              setChatOpen(true);
-            }}
+          <FeedView
+            onOpen={openFeedItem}
+            pendingDrafts={pendingDrafts}
+            onOpenInbox={() => openInbox(null)}
+          />
+        ) : tab === 'projects' ? (
+          <ProjectsView
+            roots={convo.tree.roots}
+            onOpenNote={openNoteByTitle}
+            onOpenChat={openRoot}
           />
         ) : convo.loading ? (
           <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
@@ -731,10 +770,7 @@ function AppShell() {
           </div>
         ) : tab === 'calendar' ? (
           <CalendarView
-            onOpenNote={(title) => {
-              setTab('mind');
-              setNoteRequest((prev) => ({ title, nonce: (prev?.nonce ?? 0) + 1 }));
-            }}
+            onOpenNote={openNoteByTitle}
             onReviewImport={(runId) => openInbox(runId)}
           />
         ) : tab === 'scratch' ? (
@@ -829,7 +865,7 @@ function AppShell() {
       </main>
 
       {/* Errors on tab screens (the chat screen shows its own strip). */}
-      {!chatOpen && !referencesOpen && !searchOpen && !transcriptsOpen && gate === 'open' && convo.error && (
+      {!chatOpen && !referencesOpen && !searchOpen && !transcriptsOpen && !notesOpen && gate === 'open' && convo.error && (
         <div className="flex items-start gap-2 border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           <p className="max-h-24 min-w-0 flex-1 overflow-y-auto break-words">
             {convo.error}
@@ -853,13 +889,14 @@ function AppShell() {
       )}
 
       {/* Bottom tabs — hidden while a pushed screen (chat/references/search) is open. */}
-      {!chatOpen && !referencesOpen && !searchOpen && !transcriptsOpen && gate === 'open' && (
+      {!chatOpen && !referencesOpen && !searchOpen && !transcriptsOpen && !notesOpen && gate === 'open' && (
         <nav className="pb-safe px-safe border-t border-border" aria-label="Main">
           <div className="mx-auto flex max-w-3xl">
             <TabButton
               icon={Flame}
               label="Feed"
               active={tab === 'feed'}
+              badge={pendingDrafts}
               onClick={() => setTab('feed')}
             />
             <TabButton
@@ -881,11 +918,10 @@ function AppShell() {
               onClick={() => setTab('calendar')}
             />
             <TabButton
-              icon={Brain}
-              label="Mind"
-              active={tab === 'mind'}
-              badge={pendingDrafts}
-              onClick={() => setTab('mind')}
+              icon={FolderKanban}
+              label="Projects"
+              active={tab === 'projects'}
+              onClick={() => setTab('projects')}
             />
           </div>
         </nav>

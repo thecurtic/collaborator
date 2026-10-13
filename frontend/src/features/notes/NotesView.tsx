@@ -28,7 +28,6 @@ import { GraphView } from './GraphView';
 import { InboxView } from './InboxView';
 import { PeopleView } from './PeopleView';
 import { ProfileView } from './ProfileView';
-import { ProjectsView } from './ProjectsView';
 import { invalidateTagVocabulary } from './tags';
 import { TagAssist } from './TagAssist';
 import { NoteBody } from './NoteBody';
@@ -46,6 +45,8 @@ interface NotesViewProps {
   inboxRequest: { runId: string | null; nonce: number } | null;
   /** Deep link to one note (the warm feed); bump nonce to re-trigger. */
   noteRequest?: { title: string; nonce: number } | null;
+  /** Open on this lens (the menu's People entry) instead of the picker. */
+  initialLens?: string | null;
   /** Refresh the app-level pending-drafts badge. */
   onBadgeRefresh: () => void;
   /** Jump to a turn in the conversation (source links). */
@@ -379,6 +380,7 @@ export function NotesView({
   pendingCount,
   inboxRequest,
   noteRequest = null,
+  initialLens = null,
   onBadgeRefresh,
   onOpenTurn,
 }: NotesViewProps) {
@@ -388,7 +390,7 @@ export function NotesView({
   // The active lens. Mind's first page IS the lens picker (2026-08-17):
   // null = picker; 'all' = whole vault; otherwise a category tag whose lens
   // renders its own view. The old chip row is retired.
-  const [lens, setLens] = useState<string | null>(null);
+  const [lens, setLens] = useState<string | null>(initialLens);
   const [notes, setNotes] = useState<NoteMeta[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reindexing, setReindexing] = useState(false);
@@ -516,7 +518,7 @@ export function NotesView({
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <h2 className="text-2xl font-semibold">Mind</h2>
+        <h2 className="text-2xl font-semibold">Notes</h2>
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"
@@ -650,10 +652,6 @@ export function NotesView({
               );
             })}
           </ul>
-        </div>
-      ) : !query.trim() && lens === 'project' ? (
-        <div className="min-h-0 flex-1">
-          <ProjectsView onOpenNote={openNote} />
         </div>
       ) : !query.trim() && lens === 'social-graph' ? (
         <div className="min-h-0 flex-1">
