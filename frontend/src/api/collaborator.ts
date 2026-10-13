@@ -1,6 +1,7 @@
 import type {
   BranchInput,
   ChatCard,
+  Feed,
   NotificationSettings,
   ConversationTree,
   HealthStatus,
@@ -35,6 +36,7 @@ import {
   toRecallBlock,
   toScratchItem,
   toChatCard,
+  toFeed,
   toNotificationSettings,
   toTree,
   toTurnsPage,
@@ -62,6 +64,7 @@ import type {
   ApiTranscriptResponse,
   ApiTranscriptsResponse,
   ApiChatCard,
+  ApiFeed,
   ApiNotificationSettings,
   ApiTree,
   ApiTtsVoices,
@@ -343,6 +346,12 @@ export interface CollaboratorApi {
    * it on the conversation's root to promote the whole chat (seed → tree).
    */
   setTurnState(turnId: number, state: 'seed' | 'tree'): Promise<void>;
+
+  // --- Warm feed ---
+  getFeed(limit?: number): Promise<Feed>;
+  /** Record that the user opened an item (best-effort; never throws). */
+  touchFeedItem(key: string): Promise<void>;
+  pinFeedItem(key: string, pinned: boolean): Promise<void>;
 
   // --- Notifications: the settings list + delivery test ---
   getNotificationSettings(): Promise<NotificationSettings>;
@@ -642,6 +651,28 @@ class HttpCollaboratorApi implements CollaboratorApi {
     await request<unknown>(`/api/turns/${turnId}/state`, {
       method: 'PATCH',
       body: JSON.stringify({ state }),
+    });
+  }
+
+  async getFeed(limit = 50): Promise<Feed> {
+    return toFeed(await request<ApiFeed>(`/api/feed?limit=${limit}`));
+  }
+
+  async touchFeedItem(key: string): Promise<void> {
+    try {
+      await request<unknown>('/api/feed/touch', {
+        method: 'POST',
+        body: JSON.stringify({ key }),
+      });
+    } catch {
+      /* warmth is a convenience; never let it break navigation */
+    }
+  }
+
+  async pinFeedItem(key: string, pinned: boolean): Promise<void> {
+    await request<unknown>('/api/feed/pin', {
+      method: 'POST',
+      body: JSON.stringify({ key, pinned }),
     });
   }
 

@@ -1,5 +1,7 @@
 import type {
   ApiChatCard,
+  ApiFeed,
+  ApiFeedItem,
   ApiHealth,
   ApiNotificationSettings,
   ApiModelsResponse,
@@ -21,6 +23,8 @@ import type {
 } from '@/api/types';
 import type {
   ChatCard,
+  Feed,
+  FeedItem,
   ConversationTree,
   DeviceSession,
   HealthStatus,
@@ -421,5 +425,43 @@ export function toNotificationSettings(
       enabled: k.enabled === true,
     })),
     ntfyConfigured: api.delivery?.ntfy === true,
+  };
+}
+
+const FEED_TYPES = new Set([
+  'chat', 'note', 'event', 'approval', 'transcript', 'merged',
+]);
+
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' ? v : undefined;
+}
+
+export function toFeedItem(api: ApiFeedItem): FeedItem {
+  const r = api.ref ?? {};
+  return {
+    key: api.key,
+    type: (FEED_TYPES.has(api.type) ? api.type : 'note') as FeedItem['type'],
+    title: api.title,
+    subtitle: api.subtitle ?? null,
+    warmth: api.warmth ?? null,
+    tags: api.tags ?? [],
+    pinned: api.pinned === true,
+    ref: {
+      rootId: num(r.root_id),
+      leafId: num(r.leaf_id),
+      title: typeof r.title === 'string' ? r.title : undefined,
+      start: typeof r.start === 'string' ? r.start : undefined,
+      draftId: num(r.draft_id),
+      runId: typeof r.run_id === 'string' ? r.run_id : null,
+      transcriptId: num(r.transcript_id),
+      project: typeof r.project === 'string' ? r.project : null,
+    },
+  };
+}
+
+export function toFeed(api: ApiFeed): Feed {
+  return {
+    pinned: (api.pinned ?? []).map(toFeedItem),
+    items: (api.items ?? []).map(toFeedItem),
   };
 }

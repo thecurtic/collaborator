@@ -55,6 +55,10 @@ function TranscriptDetail({
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    void api.touchFeedItem(`transcript:${id}`); // opened = touched (warm feed)
+  }, [id]);
+
+  useEffect(() => {
     let cancelled = false;
     api
       .getTranscript(id)

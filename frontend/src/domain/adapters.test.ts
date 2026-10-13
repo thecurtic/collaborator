@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ApiNoteFields, ApiRecall, ApiTurn } from '@/api/types';
 import {
   toChatCard,
+  toFeed,
   toHealth,
   toNotificationSettings,
   toNoteDraft,
@@ -274,5 +275,21 @@ describe('toNotificationSettings', () => {
                 description: 'd', enabled: false }],
       ntfyConfigured: true,
     });
+  });
+});
+
+describe('toFeed', () => {
+  it('maps items and refs; unknown types fall back to note', () => {
+    const f = toFeed({
+      pinned: [{ key: 'chat:3', type: 'chat', title: 'Beds', warmth: null,
+                 pinned: true, ref: { root_id: 3, leaf_id: 9 } }],
+      items: [{ key: 'transcript:7', type: 'transcript', title: 'T',
+                warmth: '2026-10-13T09:00:00.000000Z',
+                ref: { transcript_id: 7, status: 'done' } },
+              { key: 'x:1', type: 'mystery' as never, title: 'X', warmth: null }],
+    });
+    expect(f.pinned[0]).toMatchObject({ pinned: true, ref: { rootId: 3, leafId: 9 } });
+    expect(f.items[0].ref.transcriptId).toBe(7);
+    expect(f.items[1].type).toBe('note');
   });
 });

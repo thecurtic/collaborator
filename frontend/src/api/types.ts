@@ -463,3 +463,20 @@ export interface ApiNotificationSettings {
   }[];
   delivery: { ntfy: boolean };
 }
+
+/** GET /api/feed — one warm-feed item. */
+export interface ApiFeedItem {
+  key: string;
+  type: 'chat' | 'note' | 'event' | 'approval' | 'transcript' | 'merged';
+  title: string;
+  subtitle?: string | null;
+  warmth: string | null;
+  tags?: string[];
+  pinned?: boolean;
+  ref?: Record<string, unknown>;
+}
+
+export interface ApiFeed {
+  pinned: ApiFeedItem[];
+  items: ApiFeedItem[];
+}

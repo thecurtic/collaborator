@@ -478,3 +478,40 @@ export interface NotificationSettings {
   /** Phone delivery (self-hosted ntfy) is configured on the server. */
   ntfyConfigured: boolean;
 }
+
+/** What a warm-feed item is (UX doc, Feed). */
+export type FeedItemType =
+  | 'chat'
+  | 'note'
+  | 'event'
+  | 'approval'
+  | 'transcript'
+  | 'merged';
+
+export interface FeedItem {
+  /** Stable id, e.g. chat:12 — used for touch and pin. */
+  key: string;
+  type: FeedItemType;
+  title: string;
+  subtitle: string | null;
+  /** Later of touched and changed (ISO UTC); null = not yet warm. */
+  warmth: string | null;
+  tags: string[];
+  pinned: boolean;
+  /** Where tapping goes: rootId/leafId, title, draftId/runId, transcriptId. */
+  ref: {
+    rootId?: number;
+    leafId?: number;
+    title?: string;
+    start?: string;
+    draftId?: number;
+    runId?: string | null;
+    transcriptId?: number;
+    project?: string | null;
+  };
+}
+
+export interface Feed {
+  pinned: FeedItem[];
+  items: FeedItem[];
+}

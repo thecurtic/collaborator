@@ -45,6 +45,8 @@ interface NotesViewProps {
   pendingCount: number;
   /** Deep link into the inbox (bump nonce to re-trigger with a new runId). */
   inboxRequest: { runId: string | null; nonce: number } | null;
+  /** Deep link to one note (the warm feed); bump nonce to re-trigger. */
+  noteRequest?: { title: string; nonce: number } | null;
   /** Refresh the app-level pending-drafts badge. */
   onBadgeRefresh: () => void;
   /** Jump to a turn in the conversation (source links). */
@@ -377,6 +379,7 @@ function NoteScreen({
 export function NotesView({
   pendingCount,
   inboxRequest,
+  noteRequest = null,
   onBadgeRefresh,
   onOpenTurn,
 }: NotesViewProps) {
@@ -397,6 +400,9 @@ export function NotesView({
   useEffect(() => {
     if (inboxRequest) setScreen({ kind: 'inbox', runId: inboxRequest.runId });
   }, [inboxRequest]);
+  useEffect(() => {
+    if (noteRequest) setScreen({ kind: 'note', title: noteRequest.title });
+  }, [noteRequest]);
 
   // Load the full list, or search (debounced) when there's a query.
   useEffect(() => {

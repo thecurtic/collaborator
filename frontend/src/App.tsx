@@ -1,6 +1,7 @@
 import {
   Brain,
   ChevronLeft,
+  Flame,
   List,
   Loader2,
   MoreHorizontal,
@@ -36,12 +37,13 @@ import { cleanUrlsInText } from '@/lib/urlClean';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
 import { ChatCardSheet } from '@/features/chat/ChatCardSheet';
+import { FeedView } from '@/features/feed/FeedView';
 import { RootList } from '@/features/chat/RootList';
 import { TreeMap } from '@/features/chat/TreeMap';
 import { useConversation } from '@/features/chat/useConversation';
 import type { BranchTarget } from '@/features/chat/branchTarget';
 import type { CallIntro } from '@/features/chat/callIntro';
-import { rootLabel, type TreeNode } from '@/domain/models';
+import { rootLabel, type FeedItem, type TreeNode } from '@/domain/models';
 import { NotesView } from '@/features/notes/NotesView';
 import { usePendingDrafts } from '@/features/notes/usePendingDrafts';
 import { ScratchView } from '@/features/scratch/ScratchView';
@@ -61,10 +63,11 @@ export default function App() {
 }
 
 /**
- * Home tabs: conversations (default; the tree map lives behind it, like the
- * graph behind Mind) · chats (seeds) · scratch (notes-to-self) · mind (vault).
+ * Home tabs: feed (default — the warm feed is the front door) ·
+ * conversations (the tree map lives behind it, like the graph behind Mind) ·
+ * chats (seeds) · scratch (notes-to-self) · mind (vault).
  */
-type Tab = 'conversations' | 'chats' | 'scratch' | 'mind';
+type Tab = 'feed' | 'conversations' | 'chats' | 'scratch' | 'mind';
 
 /** One backgrounded synthesis run (at most one at a time). */
 interface SynthState {
@@ -116,7 +119,12 @@ function TabButton({
 function AppShell() {
   const { gate, signOut } = useAuth();
   const convo = useConversation(0);
-  const [tab, setTab] = useState<Tab>('conversations');
+  const [tab, setTab] = useState<Tab>('feed');
+  // Deep link into Mind at one note (from the feed).
+  const [noteRequest, setNoteRequest] = useState<{
+    title: string;
+    nonce: number;
+  } | null>(null);
   // Tree map, pushed within the Conversations tab (mirrors Mind's graph).
   const [mapOpen, setMapOpen] = useState(false);
   // The chat screen is "pushed" over the tabs (back arrow returns to them).
@@ -328,6 +336,27 @@ function AppShell() {
   const openRoot = (root: TreeNode) => {
     convo.selectPathTo(root.id); // path continues to the tip via main-line defaults
     setChatOpen(true);
+    void api.touchFeedItem(`chat:${root.id}`); // opened = touched (warm feed)
+  };
+
+  // Warm feed → wherever each kind of item lives.
+  const openFeedItem = (item: FeedItem) => {
+    const r = item.ref;
+    if (item.type === 'chat' && r.leafId != null) {
+      convo.selectPathTo(r.leafId);
+      setChatOpen(true);
+      void api.touchFeedItem(item.key);
+    } else if ((item.type === 'note' || item.type === 'event') && r.title) {
+      setTab('mind');
+      setNoteRequest((prev) => ({ title: r.title!, nonce: (prev?.nonce ?? 0) + 1 }));
+    } else if (item.type === 'approval') {
+      openInbox(r.runId ?? null);
+    } else if (item.type === 'transcript' && r.transcriptId != null) {
+      setTranscriptFocus(r.transcriptId);
+      setTranscriptsOpen(true);
+      void api.touchFeedItem(item.key);
+    }
+    // merged: its home is the project view (step 7); nothing to open yet.
   };
   const openNewChat = () => {
     convo.startNewChat();
@@ -683,10 +712,13 @@ function AppShell() {
             onDraftSeedConsumed={() => setChatDraft(null)}
             onConversationGone={() => setChatOpen(false)}
           />
+        ) : tab === 'feed' ? (
+          <FeedView onOpen={openFeedItem} />
         ) : tab === 'mind' ? (
           <NotesView
             pendingCount={pendingDrafts}
             inboxRequest={inboxRequest}
+            noteRequest={noteRequest}
             onBadgeRefresh={() => void refreshDrafts()}
             onOpenTurn={(turnId) => {
               convo.selectPathTo(turnId);
@@ -814,6 +846,12 @@ function AppShell() {
       {!chatOpen && !referencesOpen && !searchOpen && !transcriptsOpen && gate === 'open' && (
         <nav className="pb-safe px-safe border-t border-border" aria-label="Main">
           <div className="mx-auto flex max-w-3xl">
+            <TabButton
+              icon={Flame}
+              label="Feed"
+              active={tab === 'feed'}
+              onClick={() => setTab('feed')}
+            />
             <TabButton
               icon={List}
               label="Conversations"
