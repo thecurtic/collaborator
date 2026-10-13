@@ -1,6 +1,7 @@
 import type {
   BranchInput,
   ChatCard,
+  RepeatRule,
   Feed,
   NotificationSettings,
   ConversationTree,
@@ -36,6 +37,7 @@ import {
   toRecallBlock,
   toScratchItem,
   toChatCard,
+  fromRepeatRule,
   toFeed,
   toNotificationSettings,
   toTree,
@@ -64,6 +66,7 @@ import type {
   ApiTranscriptResponse,
   ApiTranscriptsResponse,
   ApiChatCard,
+  ApiNoteMeta,
   ApiFeed,
   ApiNotificationSettings,
   ApiTree,
@@ -453,6 +456,22 @@ export interface CollaboratorApi {
   /** RFC 5545 export of events (85c508c) — offer as a file download. */
   downloadEventsIcs(): Promise<Blob>;
   /**
+   * Create an event note directly — the user's own calendar gesture (tap or
+   * drag a slot, type a title). No draft; the gate is for the model.
+   */
+  createEvent(input: {
+    title: string;
+    start: string;
+    end?: string | null;
+    allDay?: boolean;
+    repeat?: RepeatRule | null;
+  }): Promise<NoteMeta>;
+  /** An .ics file's events become pending drafts; returns the inbox run. */
+  importEventsIcs(
+    ics: string,
+    filename?: string,
+  ): Promise<{ runId: string; proposed: number; skipped: { title: string; reason: string }[] }>;
+  /**
    * Delete a vault note (file + index). Inbound wikilinks become unresolved
    * (Obsidian semantics); deleting USER resets the profile hub. Returns the
    * titles of notes now holding unresolved links.
@@ -762,6 +781,41 @@ class HttpCollaboratorApi implements CollaboratorApi {
       `/api/notes/search?${search.toString()}`,
     );
     return (res.results ?? []).map(toNoteMeta);
+  }
+
+  async createEvent(input: {
+    title: string;
+    start: string;
+    end?: string | null;
+    allDay?: boolean;
+    repeat?: RepeatRule | null;
+  }): Promise<NoteMeta> {
+    const res = await request<{ note: ApiNoteMeta }>('/api/events', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: input.title,
+        start: input.start,
+        ...(input.end ? { end: input.end } : {}),
+        ...(input.allDay != null ? { all_day: input.allDay } : {}),
+        ...(input.repeat ? { repeat: fromRepeatRule(input.repeat) } : {}),
+      }),
+    });
+    return toNoteMeta(res.note);
+  }
+
+  async importEventsIcs(
+    ics: string,
+    filename?: string,
+  ): Promise<{ runId: string; proposed: number; skipped: { title: string; reason: string }[] }> {
+    const res = await request<{
+      run_id: string;
+      drafts: { id: number; title: string }[];
+      skipped: { title: string; reason: string }[];
+    }>('/api/events/import', {
+      method: 'POST',
+      body: JSON.stringify({ ics, filename }),
+    });
+    return { runId: res.run_id, proposed: res.drafts.length, skipped: res.skipped };
   }
 
   async downloadEventsIcs(): Promise<Blob> {

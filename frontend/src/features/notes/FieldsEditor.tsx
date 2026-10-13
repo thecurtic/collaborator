@@ -1,5 +1,7 @@
-import { CalendarDays, MapPin, Users } from 'lucide-react';
-import type { NoteFields, NoteFieldsPatch } from '@/domain/models';
+import { CalendarDays, MapPin, Repeat, Users } from 'lucide-react';
+import { fromRepeatRule, toRepeatRule } from '@/domain/adapters';
+import type { NoteFields, NoteFieldsPatch, RepeatFreq } from '@/domain/models';
+import { describeRepeat } from '@/features/calendar/calendarDates';
 import { PROFILE_AREAS } from './categories';
 import {
   formatEventRange,
@@ -24,7 +26,7 @@ const LABEL_CLS = 'text-xs text-muted-foreground';
 function keysFor(category: string | null, isUserHub: boolean): string[] {
   const base =
     category === 'event'
-      ? ['all_day', 'start', 'end', 'location', 'people']
+      ? ['all_day', 'start', 'end', 'repeat', 'location', 'people']
       : category === 'social-graph'
         ? ['kind', 'relation', 'birthday', 'aliases']
         : category === 'user-profile'
@@ -56,6 +58,8 @@ export function fieldsToDraft(
       : '',
     location: f?.location ?? '',
     people: (f?.people ?? []).join(', '),
+    // The rule travels as JSON in the flat draft ('' = doesn't repeat).
+    repeat: f?.repeat ? JSON.stringify(fromRepeatRule(f.repeat)) : '',
     kind: f?.kind ?? '',
     relation: f?.relation ?? '',
     birthday: f?.birthday ?? '',
@@ -91,6 +95,8 @@ export function draftToPatch(
     if (key === 'all_day') patch[key] = current[key] === '1';
     else if (key === 'people' || key === 'aliases') {
       patch[key] = splitList(current[key]);
+    } else if (key === 'repeat') {
+      patch[key] = current[key] ? (JSON.parse(current[key]) as object) : '';
     } else patch[key] = current[key];
   }
   return Object.keys(patch).length > 0 ? patch : undefined;
@@ -102,6 +108,8 @@ const EMPTY_FIELDS: NoteFields = {
   allDay: false,
   location: null,
   people: [],
+  repeat: null,
+  exceptions: [],
   aliases: [],
   kind: null,
   relation: null,
@@ -127,6 +135,7 @@ export function draftToFields(
   if ('all_day' in d) f.allDay = d.all_day === '1';
   if ('location' in d) f.location = d.location || null;
   if ('people' in d) f.people = splitList(d.people);
+  if ('repeat' in d) f.repeat = d.repeat ? toRepeatRule(JSON.parse(d.repeat)) : null;
   if ('kind' in d) f.kind = d.kind || null;
   if ('relation' in d) f.relation = d.relation || null;
   if ('birthday' in d) f.birthday = d.birthday || null;
@@ -200,6 +209,80 @@ function SelectField({
   );
 }
 
+const DAY_CODES = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
+
+/**
+ * An event's repeat rule (NOTES-FORMAT.md, Recurrence) as plain controls:
+ * how often, every N, which weekdays, and when it ends. Editing the rule
+ * here changes ALL occurrences; one date is changed from the calendar.
+ */
+function RepeatEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const rule = value ? (JSON.parse(value) as Record<string, unknown>) : null;
+  const write = (next: Record<string, unknown> | null) =>
+    onChange(next ? JSON.stringify(next) : '');
+  const freq = (rule?.freq as RepeatFreq | undefined) ?? '';
+  const days = (rule?.by_day as string[] | undefined) ?? [];
+  const ends = rule?.until ? 'until' : rule?.count ? 'count' : 'never';
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <SelectField
+          label="Repeats"
+          value={freq}
+          options={['daily', 'weekly', 'monthly', 'yearly']}
+          onChange={(v) => write(v ? { ...(rule ?? {}), freq: v, ...(v !== 'weekly' ? { by_day: undefined } : {}) } : null)}
+          allowEmpty="(doesn't repeat)"
+        />
+        {freq && (
+          <TextField
+            label={`Every N ${({ daily: 'days', weekly: 'weeks', monthly: 'months', yearly: 'years' } as const)[freq]}`}
+            type="number"
+            value={String(rule?.interval ?? 1)}
+            onChange={(v) => write({ ...rule, interval: Math.max(1, Number(v) || 1) })}
+          />
+        )}
+      </div>
+      {freq === 'weekly' && (
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Weekdays">
+          {DAY_CODES.map((c, i) => {
+            const on = days.includes(c);
+            return (
+              <button key={c} type="button" aria-pressed={on}
+                      onClick={() => write({ ...rule, by_day: on ? days.filter((d) => d !== c) : [...days, c] })}
+                      className={'h-7 w-9 rounded-md border text-[11px] ' +
+                        (on ? 'border-primary bg-primary/10 text-primary' : 'border-input text-muted-foreground')}>
+                {new Date(2026, 0, 5 + i).toLocaleDateString([], { weekday: 'short' })}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {freq && (
+        <div className="grid grid-cols-2 gap-2">
+          <SelectField
+            label="Ends"
+            value={ends}
+            options={['never', 'until', 'count']}
+            onChange={(v) => {
+              const { until: _u, count: _c, ...rest } = rule ?? {};
+              write(v === 'until' ? { ...rest, until: new Date().toISOString().slice(0, 10) }
+                : v === 'count' ? { ...rest, count: 10 } : rest);
+            }}
+          />
+          {ends === 'until' && (
+            <TextField label="On" type="date" value={String(rule?.until ?? '')}
+                       onChange={(v) => write({ ...rule, until: v })} />
+          )}
+          {ends === 'count' && (
+            <TextField label="After N times" type="number" value={String(rule?.count ?? '')}
+                       onChange={(v) => write({ ...rule, count: Math.max(1, Number(v) || 1) })} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The typed inputs for one type's fields (nothing for untyped notes). */
 export function FieldsEditor({
   category,
@@ -253,6 +336,7 @@ export function FieldsEditor({
               onChange={set('end')}
             />
           </div>
+          <RepeatEditor value={draft.repeat} onChange={set('repeat')} />
           <TextField
             label="Location"
             value={draft.location}
@@ -354,6 +438,16 @@ export function FieldsSummary({
         {formatEventRange(fields)}
       </div>,
     );
+    if (fields.repeat) {
+      const changes = fields.exceptions.length;
+      rows.push(
+        <div key="repeat" className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Repeat className="h-3.5 w-3.5 shrink-0" />
+          {describeRepeat(fields.repeat)}
+          {changes > 0 && ` · ${changes} ${changes === 1 ? 'date changed' : 'dates changed'}`}
+        </div>,
+      );
+    }
     if (fields.location) {
       rows.push(
         <div

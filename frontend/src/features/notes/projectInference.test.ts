@@ -14,6 +14,9 @@ function note(tags: string[]): NoteMeta {
     links: [],
     score: null,
     fields: null,
+    occurrence: null,
+    recurring: false,
+    moved: false,
   };
 }
 

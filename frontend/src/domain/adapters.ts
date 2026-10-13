@@ -6,6 +6,7 @@ import type {
   ApiNotificationSettings,
   ApiModelsResponse,
   ApiNoteFields,
+  ApiRepeatRule,
   ApiScratchItem,
   ApiSession,
   ApiNoteDraft,
@@ -33,6 +34,7 @@ import type {
   NoteDraft,
   NoteFields,
   NoteMeta,
+  RepeatRule,
   NotificationSettings,
   PromptInfo,
   RecallBlock,
@@ -326,6 +328,10 @@ export function toNoteFields(
     allDay: Boolean(api.all_day),
     location: str(api.location),
     people: strList(api.people),
+    repeat: toRepeatRule(api.repeat),
+    exceptions: Array.isArray(api.exceptions)
+      ? api.exceptions.filter((e) => e && typeof e.date === 'string')
+      : [],
     aliases: strList(api.aliases),
     kind: str(api.kind),
     relation: str(api.relation),
@@ -340,6 +346,7 @@ export function toNoteFields(
     f.start != null ||
     f.location != null ||
     f.people.length > 0 ||
+    f.repeat != null ||
     f.aliases.length > 0 ||
     f.kind != null ||
     f.relation != null ||
@@ -361,6 +368,9 @@ export function toNoteMeta(api: ApiNoteMeta): NoteMeta {
     sourceTurns: api.source_turns ?? [],
     links: api.links ?? [],
     score: typeof api.score === 'number' ? api.score : null,
+    occurrence: typeof api.occurrence === 'string' ? api.occurrence : null,
+    recurring: api.recurring === true,
+    moved: api.moved === true,
     // Event times arrive as top-level event_* columns, NOT inside the
     // backend's fields dict (INDEXED_FIELD_KEYS excludes them) — merge them
     // so NoteFields.start is the one truth the UI reads. Without this the
@@ -463,5 +473,29 @@ export function toFeed(api: ApiFeed): Feed {
   return {
     pinned: (api.pinned ?? []).map(toFeedItem),
     items: (api.items ?? []).map(toFeedItem),
+  };
+}
+
+export function toRepeatRule(api: ApiRepeatRule | null | undefined): RepeatRule | null {
+  if (!api || typeof api !== 'object' || !api.freq) return null;
+  return {
+    freq: api.freq,
+    ...(typeof api.interval === 'number' ? { interval: api.interval } : {}),
+    ...(Array.isArray(api.by_day) ? { byDay: api.by_day } : {}),
+    ...(typeof api.by_month_day === 'number' ? { byMonthDay: api.by_month_day } : {}),
+    ...(typeof api.until === 'string' ? { until: api.until } : {}),
+    ...(typeof api.count === 'number' ? { count: api.count } : {}),
+  };
+}
+
+/** RepeatRule -> the wire shape PATCH fields / POST /api/events take. */
+export function fromRepeatRule(rule: RepeatRule): ApiRepeatRule {
+  return {
+    freq: rule.freq,
+    ...(rule.interval && rule.interval !== 1 ? { interval: rule.interval } : {}),
+    ...(rule.byDay?.length ? { by_day: rule.byDay } : {}),
+    ...(rule.byMonthDay ? { by_month_day: rule.byMonthDay } : {}),
+    ...(rule.until ? { until: rule.until } : {}),
+    ...(rule.count ? { count: rule.count } : {}),
   };
 }

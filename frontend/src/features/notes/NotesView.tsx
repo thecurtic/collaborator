@@ -24,7 +24,6 @@ import {
   FieldsSummary,
   type FieldsDraft,
 } from './FieldsEditor';
-import { CalendarView } from './CalendarView';
 import { GraphView } from './GraphView';
 import { InboxView } from './InboxView';
 import { PeopleView } from './PeopleView';
@@ -651,10 +650,6 @@ export function NotesView({
               );
             })}
           </ul>
-        </div>
-      ) : !query.trim() && lens === 'event' ? (
-        <div className="min-h-0 flex-1">
-          <CalendarView onOpenNote={openNote} />
         </div>
       ) : !query.trim() && lens === 'project' ? (
         <div className="min-h-0 flex-1">

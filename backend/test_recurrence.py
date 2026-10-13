@@ -206,3 +206,21 @@ def test_ics_exports_the_series_whole():
     assert [n.get("occurrence") for n in r["results"]] == ["2026-10-19", "2026-10-26",
                                                            "2026-10-28"]
     print("✓ ICS: one VEVENT with RRULE + EXDATE + RECURRENCE-ID override")
+
+
+def test_create_event_directly():
+    c, dbp = _fresh()
+    r = c.post("/api/events", json={"title": "Seed swap", "start": "2026-10-24T10:00",
+                                    "end": "2026-10-24T12:00", "tags": ["Project", "garden"]})
+    assert r.status_code == 200, r.text
+    note = r.json()["note"]
+    assert note["tags"] == ["event", "project", "garden"]
+    assert note["event_start"].startswith("2026-10-24T10:00")
+    r = c.get("/api/notes/search?tag=event&from=2026-10-24&to=2026-10-24").json()
+    assert [n["title"] for n in r["results"]] == ["Seed swap"]
+    # Validated like every path; duplicate titles refused.
+    assert c.post("/api/events", json={"title": "Bad", "start": "next tuesday"}).status_code == 422
+    assert c.post("/api/events", json={"title": "Seed swap", "start": "2026-10-25"}).status_code == 409
+    assert c.post("/api/events", json={"title": "Weekly", "start": "2026-10-19T09:00",
+                                       "repeat": {"freq": "weekly"}}).status_code == 200
+    print("✓ POST /api/events writes a validated event note directly")

@@ -1,8 +1,8 @@
 import {
   Brain,
+  CalendarDays,
   ChevronLeft,
   Flame,
-  List,
   Loader2,
   MoreHorizontal,
   NotebookPen,
@@ -36,6 +36,7 @@ import { useLongPress } from '@/lib/useLongPress';
 import { cleanUrlsInText } from '@/lib/urlClean';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
+import { CalendarView } from '@/features/calendar/CalendarView';
 import { ChatCardSheet } from '@/features/chat/ChatCardSheet';
 import { FeedView } from '@/features/feed/FeedView';
 import { RootList } from '@/features/chat/RootList';
@@ -63,11 +64,12 @@ export default function App() {
 }
 
 /**
- * Home tabs: feed (default — the warm feed is the front door) ·
- * conversations (the tree map lives behind it, like the graph behind Mind) ·
- * chats (seeds) · scratch (notes-to-self) · mind (vault).
+ * Home tabs: feed (default — the warm feed is the front door) · chats (every
+ * chat; Conversations and the tree map behind a control) · scratch
+ * (notes-to-self, centre) · calendar · mind (vault, until its lenses move to
+ * the menu).
  */
-type Tab = 'feed' | 'conversations' | 'chats' | 'scratch' | 'mind';
+type Tab = 'feed' | 'chats' | 'scratch' | 'calendar' | 'mind';
 
 /** One backgrounded synthesis run (at most one at a time). */
 interface SynthState {
@@ -127,6 +129,7 @@ function AppShell() {
   } | null>(null);
   // Tree map, pushed within the Conversations tab (mirrors Mind's graph).
   const [mapOpen, setMapOpen] = useState(false);
+  const [chatsFilter, setChatsFilter] = useState<'all' | 'conversations'>('all');
   // The chat screen is "pushed" over the tabs (back arrow returns to them).
   const [chatOpen, setChatOpen] = useState(false);
   // References (prompt viewer), Web Search, and Transcripts push over
@@ -310,10 +313,6 @@ function AppShell() {
     [rootOfTurn, promote],
   );
 
-  const seedRoots = useMemo(
-    () => convo.tree.roots.filter((r) => r.state === 'seed'),
-    [convo.tree],
-  );
   const treeRoots = useMemo(
     () => convo.tree.roots.filter((r) => r.state !== 'seed'),
     [convo.tree],
@@ -730,33 +729,65 @@ function AppShell() {
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading…
           </div>
-        ) : tab === 'conversations' ? (
-          mapOpen ? (
-            // The tree map, pushed within this tab (like Mind's Graph View).
-            <div className="relative h-full">
-              <TreeMap
-                tree={mapTree}
-                activeIds={convo.activeIds}
-                onSelect={convo.selectPathTo}
-                onDeleteSubtree={handleDeleteSubtree}
-                onRename={(id, name) => void convo.renameTurn(id, name)}
-                onOpenConversation={() => setChatOpen(true)}
-                onSynthesize={startSynthesis}
-              />
-              <Button
-                variant="secondary"
-                size="icon"
-                aria-label="Back to the conversation list"
-                onClick={() => setMapOpen(false)}
-                className="absolute left-3 top-3 z-10 h-9 w-9 rounded-full shadow-md"
-              >
-                <ChevronLeft className="h-5 w-5" />
-              </Button>
-            </div>
-          ) : (
-            <div className="flex h-full flex-col">
-              <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-                <h2 className="text-2xl font-semibold">Conversations</h2>
+        ) : tab === 'calendar' ? (
+          <CalendarView
+            onOpenNote={(title) => {
+              setTab('mind');
+              setNoteRequest((prev) => ({ title, nonce: (prev?.nonce ?? 0) + 1 }));
+            }}
+            onReviewImport={(runId) => openInbox(runId)}
+          />
+        ) : tab === 'scratch' ? (
+          <ScratchView
+            onStartChat={startChatWithDraft}
+            onOpenTranscripts={() => setTranscriptsOpen(true)}
+          />
+        ) : mapOpen ? (
+          // The tree map, pushed within Chats (like Mind's Graph View).
+          <div className="relative h-full">
+            <TreeMap
+              tree={mapTree}
+              activeIds={convo.activeIds}
+              onSelect={convo.selectPathTo}
+              onDeleteSubtree={handleDeleteSubtree}
+              onRename={(id, name) => void convo.renameTurn(id, name)}
+              onOpenConversation={() => setChatOpen(true)}
+              onSynthesize={startSynthesis}
+            />
+            <Button
+              variant="secondary"
+              size="icon"
+              aria-label="Back to chats"
+              onClick={() => setMapOpen(false)}
+              className="absolute left-3 top-3 z-10 h-9 w-9 rounded-full shadow-md"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </Button>
+          </div>
+        ) : (
+          // Chats (UX doc): every chat, seeds included; the promoted ones are
+          // also reachable as Conversations, behind the control here.
+          <div className="relative flex h-full flex-col">
+            <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+              <h2 className="text-2xl font-semibold">Chats</h2>
+              <div className="flex items-center gap-1">
+                <div className="flex rounded-md border border-border p-0.5">
+                  {(['all', 'conversations'] as const).map((f) => (
+                    <button
+                      key={f}
+                      type="button"
+                      onClick={() => setChatsFilter(f)}
+                      className={
+                        'rounded px-2 py-1 text-xs capitalize ' +
+                        (chatsFilter === f
+                          ? 'bg-primary/10 font-medium text-primary'
+                          : 'text-muted-foreground hover:text-foreground')
+                      }
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -768,39 +799,18 @@ function AppShell() {
                   <TreePine className="h-4 w-4" />
                 </Button>
               </div>
-              <div className="min-h-0 flex-1">
-                <RootList
-                  roots={treeRoots}
-                  emptyTitle="No conversations yet"
-                  emptyHint="Chats graduate here when you promote them (or branch from them)."
-                  onOpen={openRoot}
-                  onRename={(id, name) => void convo.renameTurn(id, name)}
-                  onSynthesize={startSynthesis}
-                  onRegenerateTitle={regenerateTitle}
-                  onDelete={handleDeleteSubtree}
-                  onOpenCard={openChatCard}
-                />
-              </div>
-            </div>
-          )
-        ) : tab === 'scratch' ? (
-          <ScratchView
-            onStartChat={startChatWithDraft}
-            onOpenTranscripts={() => setTranscriptsOpen(true)}
-          />
-        ) : (
-          <div className="relative flex h-full flex-col">
-            <div className="border-b border-border px-4 py-3">
-              <h2 className="text-2xl font-semibold">Chats</h2>
             </div>
             <div className="min-h-0 flex-1">
               <RootList
-                roots={seedRoots}
-                emptyTitle="No chats yet"
-                emptyHint="Start one — it stays here as a seed until it's worth keeping."
+                roots={chatsFilter === 'all' ? convo.tree.roots : treeRoots}
+                emptyTitle={chatsFilter === 'all' ? 'No chats yet' : 'No conversations yet'}
+                emptyHint={chatsFilter === 'all'
+                  ? 'Start one — it stays a seed until you name, tag, branch or synthesize it.'
+                  : 'A chat becomes a conversation when you name, tag, branch or synthesize it.'}
                 onOpen={openRoot}
                 onRename={(id, name) => void convo.renameTurn(id, name)}
                 onPromote={(id) => void convo.promote(id)}
+                onSynthesize={startSynthesis}
                 onRegenerateTitle={regenerateTitle}
                 onDelete={handleDeleteSubtree}
                 onOpenCard={openChatCard}
@@ -853,12 +863,6 @@ function AppShell() {
               onClick={() => setTab('feed')}
             />
             <TabButton
-              icon={List}
-              label="Conversations"
-              active={tab === 'conversations'}
-              onClick={() => setTab('conversations')}
-            />
-            <TabButton
               icon={Sprout}
               label="Chats"
               active={tab === 'chats'}
@@ -869,6 +873,12 @@ function AppShell() {
               label="Scratch"
               active={tab === 'scratch'}
               onClick={() => setTab('scratch')}
+            />
+            <TabButton
+              icon={CalendarDays}
+              label="Calendar"
+              active={tab === 'calendar'}
+              onClick={() => setTab('calendar')}
             />
             <TabButton
               icon={Brain}

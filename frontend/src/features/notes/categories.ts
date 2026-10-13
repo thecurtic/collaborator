@@ -7,8 +7,9 @@
 export const TYPE_TAGS = ['event', 'social-graph', 'user-profile'] as const;
 
 /**
- * Notes lenses: the type tags plus `project`. goal, decision, question and
- * memory are plain tags with no lens of their own (UX doc).
+ * Notes lenses: the person and profile types plus `project`. Events have
+ * their own destination (Calendar); goal, decision, question and memory are
+ * plain tags with no lens of their own (UX doc).
  */
 export interface NoteCategory {
   tag: string;
@@ -19,7 +20,6 @@ export const NOTE_CATEGORIES: NoteCategory[] = [
   { tag: 'user-profile', label: 'Profile' },
   { tag: 'social-graph', label: 'People' },
   { tag: 'project', label: 'Projects' },
-  { tag: 'event', label: 'Events' },
 ];
 
 /** USER.md fixed section headings, lowercased = valid `area` values. */
@@ -34,13 +34,19 @@ export const PROFILE_AREAS = [
   'current focus',
 ];
 
-const TYPES = new Set<string>(TYPE_TAGS);
-const BY_TAG = new Map(NOTE_CATEGORIES.map((c) => [c.tag, c]));
+/** Badge labels per type tag (independent of which lenses exist). */
+const TYPE_LABELS: Record<(typeof TYPE_TAGS)[number], string> = {
+  event: 'Event',
+  'social-graph': 'Person',
+  'user-profile': 'Profile',
+};
 
 /** The note's type tag (decides its fields and badge), or null if untyped. */
 export function categoryOf(tags: string[]): NoteCategory | null {
   for (const t of tags) {
-    if (TYPES.has(t)) return BY_TAG.get(t) ?? null;
+    if (t in TYPE_LABELS) {
+      return { tag: t, label: TYPE_LABELS[t as keyof typeof TYPE_LABELS] };
+    }
   }
   return null;
 }

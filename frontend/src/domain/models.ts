@@ -315,6 +315,10 @@ export interface NoteFields {
   location: string | null;
   /** Social-graph note titles — real graph edges. */
   people: string[];
+  /** Recurrence rule (null = one-off). Occurrences are derived server-side. */
+  repeat: RepeatRule | null;
+  /** Per-occurrence overrides, kept forever. */
+  exceptions: OccurrenceException[];
   // social-graph
   aliases: string[];
   kind: string | null;
@@ -333,7 +337,10 @@ export interface NoteFields {
  * PATCH shape for fields (notes and drafts): omitted keys keep their value,
  * '' or [] clears one. Server-validated (422 with a readable reason).
  */
-export type NoteFieldsPatch = Record<string, string | string[] | boolean>;
+export type NoteFieldsPatch = Record<
+  string,
+  string | string[] | boolean | object
+>;
 
 /** Vault note metadata (list/search rows). */
 export interface NoteMeta {
@@ -348,6 +355,11 @@ export interface NoteMeta {
   score: number | null;
   /** Typed frontmatter (1f18a9b); null when the note has none set. */
   fields: NoteFields | null;
+  /** Calendar windows: the original date of this occurrence (recurring). */
+  occurrence: string | null;
+  recurring: boolean;
+  /** An exception gave this occurrence a different time. */
+  moved: boolean;
 }
 
 /** A full vault note (body + incoming links). */
@@ -514,4 +526,24 @@ export interface FeedItem {
 export interface Feed {
   pinned: FeedItem[];
   items: FeedItem[];
+}
+
+export type RepeatFreq = 'daily' | 'weekly' | 'monthly' | 'yearly';
+
+export interface RepeatRule {
+  freq: RepeatFreq;
+  interval?: number;
+  /** MO TU WE TH FR SA SU (weekly rules). */
+  byDay?: string[];
+  byMonthDay?: number;
+  until?: string;
+  count?: number;
+}
+
+export interface OccurrenceException {
+  date: string;
+  cancelled?: boolean;
+  start?: string;
+  end?: string;
+  note?: string;
 }

@@ -986,6 +986,14 @@ exception gave it a new time). Cancelled occurrences and ones replaced by a
 one-off note are left out (the one-off lists itself). One-off events carry
 `recurring: false`. Occurrences are never stored.
 
+**`POST /api/events`** `{ "title": "Seed swap", "start": "2026-10-24T10:00",
+"end": "2026-10-24T12:00", "all_day": false, "location"?, "repeat"?, "body"?,
+"tags"? }` → `{ "note": {…} }`. Writes an event note **directly**: the
+user's own gesture on the calendar (tap or drag a slot, type a title), so no
+draft; the review gate is for the model's proposals. Tagged `event` plus any
+`tags`; fields validated as everywhere (`422`); `409` for a title already in
+use.
+
 **`POST /api/events/import`** `{ "ics": "<file text>", "filename": "work.ics" }` →
 each event becomes a **pending draft** (tag `event`, typed fields incl.
 `repeat` from RRULE and cancelled `exceptions` from EXDATE), reviewed in the

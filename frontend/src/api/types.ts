@@ -270,6 +270,8 @@ export interface ApiNoteFields {
   all_day?: boolean;
   location?: string | null;
   people?: string[];
+  repeat?: ApiRepeatRule | null;
+  exceptions?: ApiOccurrenceException[];
   aliases?: string[];
   kind?: string | null;
   relation?: string | null;
@@ -300,6 +302,10 @@ export interface ApiNoteMeta {
   event_start?: string | null;
   event_end?: string | null;
   event_all_day?: boolean;
+  /** Calendar windows: one occurrence of a recurring event (original date). */
+  occurrence?: string | null;
+  recurring?: boolean;
+  moved?: boolean;
 }
 
 /** GET /api/notes */
@@ -479,4 +485,23 @@ export interface ApiFeedItem {
 export interface ApiFeed {
   pinned: ApiFeedItem[];
   items: ApiFeedItem[];
+}
+
+/** An event's recurrence rule (NOTES-FORMAT.md, Recurrence). */
+export interface ApiRepeatRule {
+  freq: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  interval?: number;
+  by_day?: string[];
+  by_month_day?: number;
+  until?: string;
+  count?: number;
+}
+
+/** A per-occurrence override, keyed by the occurrence's original date. */
+export interface ApiOccurrenceException {
+  date: string;
+  cancelled?: boolean;
+  start?: string;
+  end?: string;
+  note?: string;
 }

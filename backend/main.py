@@ -2914,6 +2914,52 @@ def _events_to_ics(events: List[dict]) -> str:
     return "\r\n".join(folded) + "\r\n"
 
 
+class EventCreateRequest(BaseModel):
+    title: str
+    start: str
+    end: Optional[str] = None
+    all_day: Optional[bool] = None
+    location: Optional[str] = None
+    repeat: Optional[dict] = None
+    body: str = ""
+    tags: List[str] = []
+
+
+@app.post("/api/events")
+async def create_event(
+    request: EventCreateRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Create an event note directly: the user's own gesture on the calendar
+    (tap or drag a slot, type a title). No draft — the review gate is for the
+    model's proposals; this is the user writing. Fields are validated like
+    every other path; the note is tagged `event` plus any given tags."""
+    _require_auth(passkey)
+    title = _validate_note_title(request.title)
+    tags = ["event"] + [t for t in (_normalize_tag(t) for t in request.tags)
+                        if t and t != "event"]
+    args = {k: v for k, v in {"start": request.start, "end": request.end,
+                              "all_day": request.all_day,
+                              "location": request.location,
+                              "repeat": request.repeat}.items() if v not in (None, "")}
+    fields, ferr = _normalize_note_fields(args, tags=tags, title=title)
+    if ferr:
+        raise HTTPException(status_code=422, detail=ferr)
+    if not fields.get("start"):
+        raise HTTPException(status_code=422, detail="an event needs a start")
+    db_path = _resolve_db_path(passkey)
+    vault = _resolve_vault_dir(db_path)
+    path = _write_note_file(vault, title, request.body or "", tags, [], fields=fields)
+    conn = sqlite3.connect(db_path)
+    try:
+        note = notes_index.index_note_file(conn, path, embed_fn=embed_texts)
+        feed.record_change(conn, feed.note_key(title))
+    finally:
+        conn.close()
+    note.pop("front", None)
+    return {"note": note}
+
+
 _ICS_MAX_BYTES = 2_000_000
 
 

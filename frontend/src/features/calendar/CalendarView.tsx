@@ -5,6 +5,8 @@ import {
   Download,
   Loader2,
   MapPin,
+  Repeat,
+  Upload,
   Users,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -12,14 +14,17 @@ import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { NoteMeta } from '@/domain/models';
-import { formatEventRange, parseWallClock } from './eventFields';
+import { formatEventRange, parseWallClock } from '@/features/notes/eventFields';
+import { addDays as addDaysW, eventKey, isoDay as isoDayW, startOfWeek } from './calendarDates';
+import { CreateEventSheet, OccurrenceSheet } from './EventSheets';
+import { WeekGrid } from './WeekGrid';
 
 /**
- * Calendar over event notes (85c508c): an agenda (rolling window, grouped by
- * day) and a month grid, both backed by api.listEvents — which returns events
- * OVERLAPPING [from, to] sorted by start. Multi-day events render under their
- * START day only (agenda + month) — acceptable v1; formatEventRange already
- * shows the full cross-day range on the row itself.
+ * The Calendar destination (UX doc, Events): a week time-grid that is the
+ * form (tap or drag a slot, type a title), plus agenda and month views, all
+ * backed by api.listEvents — events OVERLAPPING [from, to], recurring ones
+ * already expanded into occurrences server-side. Multi-day events render
+ * under their START day only (v1); formatEventRange shows the full range.
  */
 
 function errMessage(err: unknown): string {
@@ -98,20 +103,21 @@ function groupByStartDay(
 /** One tappable event row (agenda + month selected-day panel). */
 function EventRow({
   event,
-  onOpenNote,
+  onOpenEvent,
 }: {
   event: NoteMeta;
-  onOpenNote: (title: string) => void;
+  onOpenEvent: (event: NoteMeta) => void;
 }) {
   const f = event.fields;
   return (
     <button
       type="button"
-      onClick={() => onOpenNote(event.title)}
+      onClick={() => onOpenEvent(event)}
       className="flex w-full flex-col gap-0.5 px-4 py-2.5 text-left hover:bg-muted/60 active:bg-muted"
     >
-      <span className="truncate text-sm font-medium text-foreground">
-        {event.title}
+      <span className="flex items-center gap-1.5 truncate text-sm font-medium text-foreground">
+        {event.recurring && <Repeat className="h-3.5 w-3.5 shrink-0 text-primary/70" />}
+        <span className="truncate">{event.title}</span>
       </span>
       {f?.start && (
         <span className="text-xs text-muted-foreground">
@@ -160,8 +166,12 @@ const AGENDA_AHEAD_DAYS = 60;
 
 function AgendaList({
   onOpenNote,
+  onOpenEvent,
+  reload,
 }: {
   onOpenNote: (title: string) => void;
+  onOpenEvent: (event: NoteMeta) => void;
+  reload: number;
 }) {
   const [events, setEvents] = useState<NoteMeta[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -213,7 +223,7 @@ function AgendaList({
       .finally(() => {
         if (seq.current === s) setLoading(false);
       });
-  }, [aheadDays]);
+  }, [aheadDays, reload]);
 
   const groups = useMemo(
     () => (events === null ? null : groupByStartDay(events)),
@@ -255,8 +265,8 @@ function AgendaList({
               </p>
               <ul className="divide-y divide-border border-b border-border">
                 {g.events.map((e) => (
-                  <li key={e.filename}>
-                    <EventRow event={e} onOpenNote={onOpenNote} />
+                  <li key={eventKey(e)}>
+                    <EventRow event={e} onOpenEvent={onOpenEvent} />
                   </li>
                 ))}
               </ul>
@@ -308,9 +318,11 @@ function AgendaList({
 // ---- Month ----
 
 function MonthGrid({
-  onOpenNote,
+  onOpenEvent,
+  reload,
 }: {
-  onOpenNote: (title: string) => void;
+  onOpenEvent: (event: NoteMeta) => void;
+  reload: number;
 }) {
   // First of the visible month.
   const [anchor, setAnchor] = useState<Date>(() => {
@@ -350,7 +362,7 @@ function MonthGrid({
           setEvents((prev) => prev ?? []);
         }
       });
-  }, [fromIso, toIso]);
+  }, [fromIso, toIso, reload]);
 
   // Events keyed by start day (multi-day spill-over is a v1 non-goal).
   const byDay = useMemo(() => {
@@ -436,7 +448,7 @@ function MonthGrid({
                 </span>
                 {dayEvents.slice(0, 2).map((e) => (
                   <span
-                    key={e.filename}
+                    key={eventKey(e)}
                     className={cn(
                       'truncate rounded bg-primary/10 px-1 py-px text-[10px] leading-tight text-primary',
                       !inMonth && 'opacity-50',
@@ -472,8 +484,8 @@ function MonthGrid({
         ) : (
           <ul className="divide-y divide-border border-b border-border">
             {selectedEvents.map((e) => (
-              <li key={e.filename}>
-                <EventRow event={e} onOpenNote={onOpenNote} />
+              <li key={eventKey(e)}>
+                <EventRow event={e} onOpenEvent={onOpenEvent} />
               </li>
             ))}
           </ul>
@@ -483,18 +495,95 @@ function MonthGrid({
   );
 }
 
+// ---- Week ----
+
+function WeekView({
+  onCreate,
+  onOpenEvent,
+  reload,
+}: {
+  onCreate: (range: { start: Date; end: Date; allDay: boolean }) => void;
+  onOpenEvent: (event: NoteMeta) => void;
+  reload: number;
+}) {
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
+  const [events, setEvents] = useState<NoteMeta[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const seq = useRef(0);
+  const from = isoDayW(weekStart);
+  const to = isoDayW(addDaysW(weekStart, 6));
+
+  useEffect(() => {
+    const s = ++seq.current;
+    setError(null);
+    api
+      .listEvents(from, to)
+      .then((res) => {
+        if (seq.current === s) setEvents(res);
+      })
+      .catch((err) => {
+        if (seq.current === s) setError(errMessage(err));
+      });
+  }, [from, to, reload]);
+
+  const end = addDaysW(weekStart, 6);
+  const label =
+    weekStart.getMonth() === end.getMonth()
+      ? weekStart.toLocaleDateString([], { month: 'long', year: 'numeric' })
+      : `${weekStart.toLocaleDateString([], { month: 'short' })} – ${end.toLocaleDateString([], { month: 'short', year: 'numeric' })}`;
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center justify-between px-2 py-1">
+        <Button variant="ghost" size="icon" aria-label="Previous week"
+                onClick={() => setWeekStart(addDaysW(weekStart, -7))}
+                className="h-8 w-8 text-muted-foreground">
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <button type="button" onClick={() => setWeekStart(startOfWeek(new Date()))}
+                title="Back to this week" className="text-sm font-semibold text-foreground">
+          {label}
+        </button>
+        <Button variant="ghost" size="icon" aria-label="Next week"
+                onClick={() => setWeekStart(addDaysW(weekStart, 7))}
+                className="h-8 w-8 text-muted-foreground">
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+      </div>
+      {error && <p className="px-4 pb-1 text-xs text-destructive">{error}</p>}
+      <WeekGrid weekStart={weekStart} events={events} onCreate={onCreate}
+                onOpenEvent={onOpenEvent} />
+    </div>
+  );
+}
+
 /**
- * The calendar panel (renders in the Notes list area, below search + chips):
- * Agenda/Month toggle, ICS export, and the two views above.
+ * The Calendar destination: Week (default — the calendar is the form),
+ * Agenda and Month; .ics import (events become proposals to review) and
+ * export. A one-off event opens its note; an occurrence of a recurring one
+ * asks "this one or all of them" for changes.
  */
 export function CalendarView({
   onOpenNote,
+  onReviewImport,
 }: {
   onOpenNote: (title: string) => void;
+  /** After an import: open the drafts inbox at that run. */
+  onReviewImport: (runId: string) => void;
 }) {
-  const [mode, setMode] = useState<'agenda' | 'month'>('agenda');
+  const [mode, setMode] = useState<'week' | 'agenda' | 'month'>('week');
   const [exporting, setExporting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [creating, setCreating] = useState<{ start: Date; end: Date; allDay: boolean } | null>(null);
+  const [occurrence, setOccurrence] = useState<NoteMeta | null>(null);
+  const [reload, setReload] = useState(0);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const openEvent = (e: NoteMeta) => {
+    if (e.recurring && e.occurrence) setOccurrence(e);
+    else onOpenNote(e.title);
+  };
 
   // RFC 5545 export (85c508c): fetch the blob, click a temporary <a download>.
   const exportIcs = async () => {
@@ -517,14 +606,36 @@ export function CalendarView({
     }
   };
 
+  const importIcs = async (file: File) => {
+    setExportError(null);
+    setNotice(null);
+    try {
+      const out = await api.importEventsIcs(await file.text(), file.name);
+      if (out.proposed > 0) onReviewImport(out.runId);
+      else setNotice(out.skipped.length
+        ? `Nothing new to import (${out.skipped.length} skipped: ${out.skipped[0].reason}).`
+        : 'No events found in that file.');
+    } catch (err) {
+      setExportError(errMessage(err));
+    }
+  };
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-2 px-4 py-2">
-        <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-          <CalendarDays className="h-4 w-4 text-primary/70" />
-          Calendar
-        </span>
+      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+        <h2 className="text-2xl font-semibold">Calendar</h2>
         <div className="flex items-center gap-1">
+          <input ref={fileRef} type="file" accept=".ics,text/calendar" className="hidden"
+                 onChange={(e) => {
+                   const f = e.target.files?.[0];
+                   e.target.value = '';
+                   if (f) void importIcs(f);
+                 }} />
+          <Button variant="ghost" size="icon" aria-label="Import a calendar file (.ics)"
+                  title="Import an .ics file — its events become proposals to review"
+                  onClick={() => fileRef.current?.click()} className="h-8 w-8 text-muted-foreground">
+            <Upload className="h-4 w-4" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -541,13 +652,13 @@ export function CalendarView({
             )}
           </Button>
           <div className="flex rounded-md border border-border p-0.5">
-            {(['agenda', 'month'] as const).map((m) => (
+            {(['week', 'agenda', 'month'] as const).map((m) => (
               <button
                 key={m}
                 type="button"
                 onClick={() => setMode(m)}
                 className={cn(
-                  'rounded px-2.5 py-1 text-xs capitalize',
+                  'rounded px-2 py-1 text-xs capitalize',
                   mode === m
                     ? 'bg-primary/10 font-medium text-primary'
                     : 'text-muted-foreground hover:text-foreground',
@@ -559,16 +670,22 @@ export function CalendarView({
           </div>
         </div>
       </div>
-      {exportError && (
-        <p className="px-4 pb-2 text-xs text-destructive">
-          Export failed: {exportError}
+      {(exportError || notice) && (
+        <p className={cn('px-4 py-1.5 text-xs', exportError ? 'text-destructive' : 'text-muted-foreground')}>
+          {exportError ?? notice}
         </p>
       )}
-      {mode === 'agenda' ? (
-        <AgendaList onOpenNote={onOpenNote} />
+      {mode === 'week' ? (
+        <WeekView onCreate={setCreating} onOpenEvent={openEvent} reload={reload} />
+      ) : mode === 'agenda' ? (
+        <AgendaList onOpenNote={onOpenNote} onOpenEvent={openEvent} reload={reload} />
       ) : (
-        <MonthGrid onOpenNote={onOpenNote} />
+        <MonthGrid onOpenEvent={openEvent} reload={reload} />
       )}
+      <CreateEventSheet range={creating} onClose={() => setCreating(null)}
+                        onCreated={() => setReload((n) => n + 1)} />
+      <OccurrenceSheet event={occurrence} onClose={() => setOccurrence(null)}
+                       onChanged={() => setReload((n) => n + 1)} onOpenNote={onOpenNote} />
     </div>
   );
 }
