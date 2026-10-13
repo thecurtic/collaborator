@@ -1,6 +1,7 @@
 import type {
   BranchInput,
   ChatCard,
+  NotificationSettings,
   ConversationTree,
   HealthStatus,
   Note,
@@ -34,6 +35,7 @@ import {
   toRecallBlock,
   toScratchItem,
   toChatCard,
+  toNotificationSettings,
   toTree,
   toTurnsPage,
 } from '@/domain/adapters';
@@ -60,6 +62,7 @@ import type {
   ApiTranscriptResponse,
   ApiTranscriptsResponse,
   ApiChatCard,
+  ApiNotificationSettings,
   ApiTree,
   ApiTtsVoices,
   ApiTurnsResponse,
@@ -340,6 +343,13 @@ export interface CollaboratorApi {
    * it on the conversation's root to promote the whole chat (seed → tree).
    */
   setTurnState(turnId: number, state: 'seed' | 'tree'): Promise<void>;
+
+  // --- Notifications: the settings list + delivery test ---
+  getNotificationSettings(): Promise<NotificationSettings>;
+  /** Turn kinds on/off; omitted kinds keep their setting. */
+  setNotificationKinds(enabled: Record<string, boolean>): Promise<NotificationSettings>;
+  /** Send a test through the configured delivery; resolves to its status. */
+  sendTestNotification(): Promise<string>;
 
   // --- Chats: chat-level tags + the three-dots card (any turn id in a chat) ---
   /** The card: the chat's tags and its cached summary (null until generated). */
@@ -633,6 +643,30 @@ class HttpCollaboratorApi implements CollaboratorApi {
       method: 'PATCH',
       body: JSON.stringify({ state }),
     });
+  }
+
+  async getNotificationSettings(): Promise<NotificationSettings> {
+    return toNotificationSettings(
+      await request<ApiNotificationSettings>('/api/notifications/settings'),
+    );
+  }
+
+  async setNotificationKinds(
+    enabled: Record<string, boolean>,
+  ): Promise<NotificationSettings> {
+    return toNotificationSettings(
+      await request<ApiNotificationSettings>('/api/notifications/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      }),
+    );
+  }
+
+  async sendTestNotification(): Promise<string> {
+    const res = await request<{ delivered: string }>('/api/notifications/test', {
+      method: 'POST',
+    });
+    return res.delivered;
   }
 
   async getChat(turnId: number): Promise<ChatCard> {

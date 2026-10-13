@@ -1,6 +1,7 @@
 import type {
   ApiChatCard,
   ApiHealth,
+  ApiNotificationSettings,
   ApiModelsResponse,
   ApiNoteFields,
   ApiScratchItem,
@@ -28,6 +29,7 @@ import type {
   NoteDraft,
   NoteFields,
   NoteMeta,
+  NotificationSettings,
   PromptInfo,
   RecallBlock,
   ScratchItem,
@@ -405,5 +407,19 @@ export function toChatCard(api: ApiChatCard): ChatCard {
           stale: s.stale === true,
         }
       : null,
+  };
+}
+
+export function toNotificationSettings(
+  api: ApiNotificationSettings,
+): NotificationSettings {
+  return {
+    kinds: (api.kinds ?? []).map((k) => ({
+      kind: k.kind,
+      label: k.label,
+      description: k.description,
+      enabled: k.enabled === true,
+    })),
+    ntfyConfigured: api.delivery?.ntfy === true,
   };
 }

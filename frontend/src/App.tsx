@@ -126,6 +126,8 @@ function AppShell() {
   const [referencesOpen, setReferencesOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [transcriptsOpen, setTranscriptsOpen] = useState(false);
+  // A transcript to open straight away (from a notification's deep link).
+  const [transcriptFocus, setTranscriptFocus] = useState<number | null>(null);
   // Composer prefill for chats spawned from search ("chat about this page").
   const [chatDraft, setChatDraft] = useState<{
     text: string;
@@ -205,6 +207,21 @@ function AppShell() {
         setChatOpen(false);
         setTab('scratch');
       });
+  }, [gate]);
+
+  // Notification deep links (?open=transcript:<id>, set as the ntfy click
+  // URL): open the target, then drop the param so a reload doesn't re-open.
+  useEffect(() => {
+    if (gate !== 'open') return;
+    const sp = new URLSearchParams(window.location.search);
+    const m = /^transcript:(\d+)$/.exec(sp.get('open') ?? '');
+    if (!m) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    setChatOpen(false);
+    setReferencesOpen(false);
+    setSearchOpen(false);
+    setTranscriptFocus(Number(m[1]));
+    setTranscriptsOpen(true);
   }, [gate]);
 
   /** Open the Mind tab on the inbox, optionally filtered to one run. */
@@ -630,7 +647,13 @@ function AppShell() {
         ) : referencesOpen ? (
           <ReferencesView />
         ) : transcriptsOpen ? (
-          <TranscriptsView onBack={() => setTranscriptsOpen(false)} />
+          <TranscriptsView
+            initialId={transcriptFocus}
+            onBack={() => {
+              setTranscriptsOpen(false);
+              setTranscriptFocus(null);
+            }}
+          />
         ) : chatOpen ? (
           <ChatView
             convo={convo}

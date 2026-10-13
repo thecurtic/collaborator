@@ -183,10 +183,20 @@ function TranscriptDetail({
  * the transcript's own shape (title, channel, length, date); a search box
  * matches title, channel and full text, and tapping a channel filters by it.
  */
-export function TranscriptsView({ onBack }: { onBack: () => void }) {
+export function TranscriptsView({
+  onBack,
+  initialId = null,
+}: {
+  onBack: () => void;
+  /** Open this transcript first (a notification's deep link). */
+  initialId?: number | null;
+}) {
   const [items, setItems] = useState<Transcript[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(initialId);
+  useEffect(() => {
+    if (initialId != null) setSelectedId(initialId);
+  }, [initialId]);
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
   const [channel, setChannel] = useState<string | null>(null);

@@ -279,6 +279,18 @@ def load_config() -> dict:
             "model": None,
             "prompt_file": "title-prompt.md",  # editable/auditable, like other layers
         },
+        "notifications": {
+            # Kinds and their on/off live in the app (settings list, per
+            # user); this block is only DELIVERY. Every notification is stored
+            # either way. Nothing is sent anywhere until ntfy is configured.
+            "app_url": None,       # public URL of this app, for tap-to-open links
+            "ntfy": {
+                "url": None,       # your own ntfy server, e.g. "https://<ntfy-host>"
+                "token": None,     # access token if the server requires one
+                "topics": {},      # per user: identity hash (or "default") -> topic
+                "timeout": 10,
+            },
+        },
         "chat_summary": {
             # The three-dots chat card's summary: generated on demand (never
             # after every turn) by the utility model, cached on the root, and

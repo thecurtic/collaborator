@@ -9,7 +9,7 @@ import asyncio
 import json
 import time
 import secrets
-from typing import List, Optional
+from typing import Dict, List, Optional
 from starlette.responses import FileResponse, Response, StreamingResponse
 
 from pydantic import BaseModel
@@ -3354,6 +3354,86 @@ async def delete_video_transcript(
         raise HTTPException(status_code=404,
                             detail=f"Transcript {transcript_id} not found")
     return {"deleted": transcript_id}
+
+
+# --- Notifications (settings list, stored log, ntfy delivery) -------------------
+
+class NotificationSettingsRequest(BaseModel):
+    enabled: Dict[str, bool]
+
+
+@app.get("/api/notifications/settings")
+async def get_notification_settings(
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """The settings list: every notification kind with its on/off, plus
+    whether phone delivery (ntfy) is configured for this user."""
+    _require_auth(passkey)
+    import notifications
+    db_path = _resolve_db_path(passkey)
+    conn = sqlite3.connect(db_path)
+    try:
+        kinds = notifications.get_settings(conn)
+    finally:
+        conn.close()
+    return {"kinds": kinds, "delivery": notifications.delivery_status(db_path)}
+
+
+@app.put("/api/notifications/settings")
+async def put_notification_settings(
+    request: NotificationSettingsRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Turn kinds on/off: {"enabled": {"transcript_ready": false}}. Omitted
+    kinds keep their setting. 422 for an unknown kind."""
+    _require_auth(passkey)
+    import notifications
+    db_path = _resolve_db_path(passkey)
+    conn = sqlite3.connect(db_path)
+    try:
+        try:
+            kinds = notifications.set_settings(conn, request.enabled)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        conn.close()
+    return {"kinds": kinds, "delivery": notifications.delivery_status(db_path)}
+
+
+@app.get("/api/notifications")
+async def get_notifications(
+    limit: int = 50,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Recent notifications, newest first (stored whether or not delivered)."""
+    _require_auth(passkey)
+    import notifications
+    conn = sqlite3.connect(_resolve_db_path(passkey))
+    try:
+        items = notifications.list_notifications(conn, max(1, min(limit, 200)))
+    finally:
+        conn.close()
+    return {"notifications": items, "count": len(items)}
+
+
+@app.post("/api/notifications/test")
+async def send_test_notification(
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Send a test notification through the configured delivery, bypassing
+    the kind settings. 409 when no delivery is configured; otherwise returns
+    how delivery went ("ntfy" or "ntfy failed (…)")."""
+    _require_auth(passkey)
+    import notifications
+    db_path = _resolve_db_path(passkey)
+    if not notifications.delivery_status(db_path)["ntfy"]:
+        raise HTTPException(status_code=409, detail="No delivery is configured — "
+                            "set notifications.ntfy.url and this user's topic "
+                            "in config.yaml")
+    status = await asyncio.to_thread(
+        notifications.send_ntfy, notifications.user_key_for_db(db_path),
+        "Collaborator test", "Notifications reach this device.", None)
+    return {"delivered": status}
 
 
 @app.get("/api/models")

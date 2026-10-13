@@ -6,6 +6,7 @@ import { SPEECH_RATE } from '@/features/voice/speechUtils';
 import { ApiRequestError } from '@/api/http';
 import { Button } from '@/components/ui/button';
 import { useModalA11y } from '@/lib/useModalA11y';
+import { NotificationsSection } from './NotificationsSection';
 import { useCapabilities } from '@/lib/capabilities';
 import { KEYWORD_OPTIONS } from '@/features/voice/keywordSpotter';
 import { PIPER_VOICES } from '@/features/voice/piperVoices';
@@ -724,6 +725,9 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
 
         {/* Logged-in devices (hidden when auth is off / list is empty). */}
         <DevicesSection />
+
+        {/* Server-backed, per user: which kinds notify (all optional). */}
+        <NotificationsSection open={open} />
 
         {/* Client-side preference. */}
         <div className="mt-5 flex items-center justify-between border-t border-border pt-4">

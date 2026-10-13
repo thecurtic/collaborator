@@ -3,6 +3,7 @@ import type { ApiNoteFields, ApiRecall, ApiTurn } from '@/api/types';
 import {
   toChatCard,
   toHealth,
+  toNotificationSettings,
   toNoteDraft,
   toNoteMeta,
   toRecallBlock,
@@ -254,6 +255,24 @@ describe('toTranscript', () => {
       channel: null,
       error: null,
       snippet: null,
+    });
+  });
+});
+
+describe('toNotificationSettings', () => {
+  it('maps kinds and the delivery flag', () => {
+    expect(
+      toNotificationSettings({
+        kinds: [
+          { kind: 'transcript_ready', label: 'Transcript ready',
+            description: 'd', default: true, enabled: false },
+        ],
+        delivery: { ntfy: true },
+      }),
+    ).toEqual({
+      kinds: [{ kind: 'transcript_ready', label: 'Transcript ready',
+                description: 'd', enabled: false }],
+      ntfyConfigured: true,
     });
   });
 });

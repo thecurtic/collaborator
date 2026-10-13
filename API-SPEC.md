@@ -882,6 +882,40 @@ catalogue, freely browsable) and `read_transcript(id, chunk?, query?)` (paged
 by id, never downloads). `transcribe_video` takes a new URL only.
 
 
+### 17. Notifications
+
+Which kinds notify is a per-user setting in the app; delivery to the phone is
+ntfy (a self-hosted server, `notifications.ntfy` in config) and is dormant until
+configured. Every notification is stored either way.
+
+**`GET /api/notifications/settings`** → the settings list:
+```json
+{ "kinds": [ { "kind": "agent_stops", "label": "Agent team stops",
+               "description": "…", "default": true, "enabled": true },
+             { "kind": "transcript_ready", "label": "Transcript ready",
+               "description": "…", "default": true, "enabled": false } ],
+  "delivery": { "ntfy": false } }
+```
+`delivery.ntfy` is true when the server URL and this user's topic are set.
+
+**`PUT /api/notifications/settings`** `{ "enabled": { "transcript_ready": false } }`
+→ same shape. Omitted kinds keep their setting; `422` for an unknown kind.
+
+**`GET /api/notifications?limit=50`** → `{ "notifications": [...], "count": N }`,
+newest first: `{ id, kind, title, body, link, created_at, delivered }`.
+`delivered` is `"ntfy"`, `"not configured"`, `"ntfy failed (<ErrorClass>)"`, or
+null while sending. `link` is an in-app path (e.g. `?open=transcript:12`); with
+`notifications.app_url` set, tapping the phone notification opens it.
+
+**`POST /api/notifications/test`** → `{ "delivered": "ntfy" | "ntfy failed (…)" }`,
+bypassing the kind settings; `409` when no delivery is configured.
+
+Producers today: `transcript_ready` (a background transcription finished or
+failed). `agent_stops` is listed and on by default but has no producer until
+the agent team exists; stops the user caused (the inference switch) are
+dropped in Collaborator, never sent.
+
+
 ## Data Models
 
 ### Turn

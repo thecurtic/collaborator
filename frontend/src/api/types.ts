@@ -451,3 +451,15 @@ export interface ApiChatCard {
   } | null;
   promoted?: boolean;
 }
+
+/** GET/PUT /api/notifications/settings */
+export interface ApiNotificationSettings {
+  kinds: {
+    kind: string;
+    label: string;
+    description: string;
+    default: boolean;
+    enabled: boolean;
+  }[];
+  delivery: { ntfy: boolean };
+}

@@ -437,6 +437,28 @@ def list_transcripts(db_path: str, query: str = None,
                      "No stored transcripts match.")}
 
 
+def _notify_transcript(db_path: str, transcript_id: int, title,
+                       error) -> None:
+    """A background transcript finished (or failed): the user isn't waiting
+    on the screen, so tell them. Never lets notification trouble break the
+    job."""
+    try:
+        import notifications
+        if error:
+            kind = classify_video_error(error).replace("_", " ")
+            notifications.notify(
+                db_path, "transcript_ready", "Transcript failed",
+                f"{title or 'A video'} couldn't be transcribed ({kind}).",
+                link=f"?open=transcript:{transcript_id}")
+        else:
+            notifications.notify(
+                db_path, "transcript_ready", "Transcript ready",
+                title or "A video finished transcribing.",
+                link=f"?open=transcript:{transcript_id}")
+    except Exception as e:
+        print(f"Warning: transcript notification failed: {e}")
+
+
 def transcribe_video(db_path: str, url: str, chunk: int = 1) -> dict:
     """Transcribe a video/audio URL from its actual audio (never captions).
 
@@ -528,9 +550,11 @@ def transcribe_video(db_path: str, url: str, chunk: int = 1) -> dict:
                 _db.set_transcript_result(wconn, row["id"], text=text)
                 print(f"transcribe_video: job #{row['id']} done "
                       f"({len(text)} chars)")
+                _notify_transcript(db_path, row["id"], meta["title"], None)
             except Exception as e:
                 print(f"Warning: transcribe_video job #{row['id']} failed: {e}")
                 _db.set_transcript_result(wconn, row["id"], error=str(e)[:600])
+                _notify_transcript(db_path, row["id"], meta["title"], str(e))
         finally:
             wconn.close()
 

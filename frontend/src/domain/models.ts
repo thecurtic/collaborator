@@ -464,3 +464,17 @@ export interface SendMessageInput {
   state?: ConversationState;
 }
 
+
+/** One notification kind in the settings list (every kind is optional). */
+export interface NotificationKind {
+  kind: string;
+  label: string;
+  description: string;
+  enabled: boolean;
+}
+
+export interface NotificationSettings {
+  kinds: NotificationKind[];
+  /** Phone delivery (self-hosted ntfy) is configured on the server. */
+  ntfyConfigured: boolean;
+}
