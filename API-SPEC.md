@@ -949,7 +949,7 @@ Types, what "changed" means, and `ref`:
 |---|---|---|
 | `chat` | its newest turn (touched = opened) | `root_id`, `leaf_id`, `state` |
 | `note` | an in-app change: approval, edit, rename, or an Obsidian edit seen by reindex. File mtimes never count. Touched = opened (`GET /api/notes/{title}`) | `title` |
-| `event` | an event note starting within 14 days; it also warms on its own 24 h before it starts | `title`, `start`, `all_day` |
+| `event` | an event note starting within 14 days; within 24 h of starting it counts as warm *now* on every load, so close events stay near the top | `title`, `start`, `all_day` |
 | `approval` | a pending draft's creation | `draft_id`, `run_id` |
 | `transcript` | a finished or failed transcription | `transcript_id`, `status` |
 | `merged` | merged agent work (no producer until the agent layer exists) | `merged_id`, `project` |

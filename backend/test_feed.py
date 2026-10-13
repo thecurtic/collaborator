@@ -137,6 +137,7 @@ def test_approvals_events_transcripts_and_merged():
     events = {i["title"]: i for i in f["items"] if i["type"] == "event"}
     assert set(events) == {"Seed swap", "Later fair"}            # past one excluded
     assert events["Seed swap"]["warmth"] is not None              # within a day: warm
+    assert f["items"][0]["title"] == "Seed swap"                  # ...and on top
     assert events["Later fair"]["warmth"] is None                 # not yet
     assert "note:last week" not in by_key                         # untouched past event
     print("✓ approvals, upcoming events, finished transcripts and merged work")

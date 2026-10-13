@@ -9,9 +9,9 @@ Item types and what "changed" means for each:
   note        the app's own record of a change (approval, edit, an Obsidian
               edit seen by reindex) — never file mtimes, which migrations and
               data moves rewrite wholesale; touched = opened
-  event       an event note starting within the window; it also "moves" when
-              it comes within a day of starting, so tomorrow's event warms up
-              even if nobody touched it
+  event       an event note starting within the window; within a day of
+              starting it counts as warm right now, every load, so close
+              events stay near the top
   approval    a pending draft (its creation)
   transcript  a finished or failed transcription (its finish)
   merged      merged agent work — a supported type with no producer until the
@@ -205,8 +205,11 @@ def _note_and_event_items(conn, activity, now) -> List[Dict]:
         tags = [t.lower() for t in n.get("tags") or []]
         start = _parse_local(n.get("event_start")) if "event" in tags else None
         if start and now - _dt.timedelta(hours=6) <= start <= horizon:
-            warms = start - _dt.timedelta(hours=EVENT_WARMS_HOURS)
-            moved = warms if warms <= now else None
+            # Within a day of starting (or just started), an event is warm
+            # NOW on every load, so close events stay near the top. A
+            # deliberate bend of the touched/changed rule (2026-10-13).
+            close = start - _dt.timedelta(hours=EVENT_WARMS_HOURS) <= now
+            moved = now if close else None
             out.append({"key": key, "type": "event", "title": n["title"],
                         "subtitle": n.get("event_start"),
                         "warmth": _later(touched, changed, moved),
