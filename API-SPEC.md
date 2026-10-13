@@ -928,6 +928,49 @@ the agent team exists; stops the user caused (the inference switch) are
 dropped in Collaborator, never sent.
 
 
+### 18. Warm Feed
+
+The front door: one list ordered by **warmth**, the later of "last touched"
+and "last changed". Nothing is scored; shape weight only breaks ties
+(approval > event > merged > chat > transcript > note). Pinned items sit on
+top regardless of warmth.
+
+**`GET /api/feed?limit=50`** →
+```json
+{ "pinned": [ ... ],
+  "items": [ { "key": "chat:12", "type": "chat", "title": "Raised beds",
+               "subtitle": "last line of the chat", "warmth": "2026-10-13T09:12:03.512000Z",
+               "tags": ["garden"], "pinned": false,
+               "ref": { "root_id": 12, "leaf_id": 19, "state": "tree" } } ] }
+```
+Types, what "changed" means, and `ref`:
+
+| type | changed | ref |
+|---|---|---|
+| `chat` | its newest turn (touched = opened) | `root_id`, `leaf_id`, `state` |
+| `note` | an in-app change: approval, edit, rename, or an Obsidian edit seen by reindex. File mtimes never count. Touched = opened (`GET /api/notes/{title}`) | `title` |
+| `event` | an event note starting within 14 days; it also warms on its own 24 h before it starts | `title`, `start`, `all_day` |
+| `approval` | a pending draft's creation | `draft_id`, `run_id` |
+| `transcript` | a finished or failed transcription | `transcript_id`, `status` |
+| `merged` | merged agent work (no producer until the agent layer exists) | `merged_id`, `project` |
+
+A note never touched or changed in the app doesn't appear. `warmth` is null
+for an upcoming event not yet within a day; such items sort last. Pinned items
+don't count against `limit`.
+
+**`POST /api/feed/touch`** `{ "key": "chat:12" }` → record that the user opened
+it (chats, transcripts, …; notes are touched server-side when read). `422` for
+a malformed key (`chat:<id>`, `note:<title>`, `transcript:<id>`,
+`approval:<id>`, `merged:<id>`).
+
+**`POST /api/feed/pin`** `{ "key": "note:raised beds", "pinned": true }` → pin or
+unpin.
+
+`POST /api/notes/reindex` also returns `updated_titles`: existing notes whose
+content changed on disk (these count as changed in the feed; first-time adds
+don't).
+
+
 ## Data Models
 
 ### Turn

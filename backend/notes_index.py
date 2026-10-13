@@ -270,7 +270,8 @@ def reindex_vault(conn, vault_dir: str, embed_fn=None,
 
     New/changed files (by content hash) are re-parsed and re-embedded; rows whose
     files vanished are removed. Seeds USER.md when absent. Returns
-    {"added", "updated", "removed", "total", "user_note_created"}.
+    {"added", "updated", "removed", "total", "user_note_created",
+    "updated_titles"}.
     """
     user_created = False
     if ensure_user:
@@ -288,7 +289,7 @@ def reindex_vault(conn, vault_dir: str, embed_fn=None,
     existing = dict(cursor.execute(
         "SELECT filename, content_hash FROM notes_index").fetchall())
 
-    added, updated, changed = 0, 0, []
+    added, updated, changed, updated_titles = 0, 0, [], []
     for name, path in on_disk.items():
         note = parse_note_file(path)
         if name not in existing:
@@ -297,6 +298,7 @@ def reindex_vault(conn, vault_dir: str, embed_fn=None,
         elif existing[name] != note["content_hash"]:
             updated += 1
             changed.append(note)
+            updated_titles.append(note["title"])
 
     # Embed changed notes in batches (one model call per chunk).
     embeddings = {}
@@ -322,7 +324,10 @@ def reindex_vault(conn, vault_dir: str, embed_fn=None,
 
     total = cursor.execute("SELECT COUNT(*) FROM notes_index").fetchone()[0]
     return {"added": added, "updated": updated, "removed": removed,
-            "total": total, "user_note_created": user_created}
+            "total": total, "user_note_created": user_created,
+            # Existing notes whose content changed (e.g. edited in Obsidian):
+            # the warm feed treats these as "changed"; first-time adds don't.
+            "updated_titles": sorted(updated_titles)}
 
 
 def list_notes(conn, tag: str = None):

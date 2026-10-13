@@ -44,6 +44,7 @@ logbuffer.install()   # ring buffer behind the read_logs tool; tees, never redir
 import agent_tools
 import auth
 import notes_index
+import feed
 import nwc
 import scratch
 import voice
@@ -2567,6 +2568,7 @@ async def approve_draft(
             path = _write_note_file(vault, title, draft["body"],
                                     draft["tags"], draft["source_turns"],
                                     fields=draft.get("fields"))
+            feed.record_change(conn, feed.note_key(title))
             draft = set_note_draft_status(conn, draft_id, "approved")
             # Index the new note immediately (best-effort; reindex reconciles).
             try:
@@ -2627,6 +2629,8 @@ async def reindex_notes(
                 conn, vault, embed_fn=embed_texts,
                 ensure_user=bool(config.get("notes", {}).get(
                     "bootstrap_user_note", True)))
+            for title in stats.get("updated_titles", []):
+                feed.record_change(conn, feed.note_key(title))
         finally:
             conn.close()
         return stats
@@ -2799,6 +2803,7 @@ async def get_vault_note(
             if note is None:
                 raise HTTPException(status_code=404, detail=f"Note \"{title}\" not found")
             note["backlinks"] = notes_index.get_backlinks(conn, note["title"])
+            feed.record_touch(conn, feed.note_key(note["title"]))   # opened = touched
         finally:
             conn.close()
         return {"note": note}
@@ -2835,6 +2840,7 @@ async def delete_vault_note(
             conn.cursor().execute("DELETE FROM notes_index WHERE filename = ?",
                                   (note["filename"],))
             conn.commit()
+            feed.forget(conn, feed.note_key(note["title"]))
         finally:
             conn.close()
         return {"deleted": note["title"],
@@ -2917,6 +2923,10 @@ def _apply_note_edit(conn, vault: str, title: str,
 
     result = notes_index.get_note_by_title(conn, new_title)
     result["backlinks"] = notes_index.get_backlinks(conn, new_title)
+    # The feed's record of change (UX doc: warmth = later of touched/changed).
+    if renamed:
+        feed.rename(conn, feed.note_key(old_title), feed.note_key(new_title))
+    feed.record_change(conn, feed.note_key(new_title))
     return {"note": result, "renamed": renamed, "links_rewritten": links_rewritten}
 
 
@@ -3363,6 +3373,77 @@ async def delete_video_transcript(
         raise HTTPException(status_code=404,
                             detail=f"Transcript {transcript_id} not found")
     return {"deleted": transcript_id}
+
+
+# --- Warm feed -----------------------------------------------------------------
+
+_FEED_KEY_RE = _re_mod.compile(r"^(chat|note|transcript|approval|merged):.{1,200}$")
+
+
+class FeedKeyRequest(BaseModel):
+    key: str
+
+
+class FeedPinRequest(BaseModel):
+    key: str
+    pinned: bool = True
+
+
+def _feed_key(key: str) -> str:
+    key = (key or "").strip()
+    if not _FEED_KEY_RE.match(key):
+        raise HTTPException(status_code=422, detail="feed key must look like "
+                            "chat:<root id>, note:<title>, transcript:<id>, "
+                            "approval:<id> or merged:<id>")
+    return key
+
+
+@app.get("/api/feed")
+async def get_feed(
+    limit: int = 50,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """The warm feed: {pinned: [...], items: [...]} — see feed.py for what
+    each type's warmth means."""
+    _require_auth(passkey)
+    conn = sqlite3.connect(_resolve_db_path(passkey))
+    try:
+        return feed.build_feed(conn, limit=max(1, min(limit, 200)))
+    finally:
+        conn.close()
+
+
+@app.post("/api/feed/touch")
+async def touch_feed_item(
+    request: FeedKeyRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Record that the user opened an item (chats, transcripts…; notes are
+    touched server-side when read)."""
+    _require_auth(passkey)
+    key = _feed_key(request.key)
+    conn = sqlite3.connect(_resolve_db_path(passkey))
+    try:
+        feed.record_touch(conn, key)
+    finally:
+        conn.close()
+    return {"key": key, "touched": True}
+
+
+@app.post("/api/feed/pin")
+async def pin_feed_item(
+    request: FeedPinRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Pin (or unpin) an item to the top of the feed, regardless of warmth."""
+    _require_auth(passkey)
+    key = _feed_key(request.key)
+    conn = sqlite3.connect(_resolve_db_path(passkey))
+    try:
+        feed.set_pin(conn, key, request.pinned)
+    finally:
+        conn.close()
+    return {"key": key, "pinned": request.pinned}
 
 
 # --- Notifications (settings list, stored log, ntfy delivery) -------------------
