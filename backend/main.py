@@ -3664,6 +3664,65 @@ async def delete_video_transcript(
     return {"deleted": transcript_id}
 
 
+# --- Projects: name overrides ---------------------------------------------------
+# UX doc, How a project forms: the name is the tag that never appears beside
+# another name; when an unrelated tag happens to behave like one, the fix is
+# an override (pin this tag as a name, or ignore it), never retagging. The
+# overrides are a small visible list in settings. Inference itself runs in the
+# client over the user's notes and chats; this only stores the overrides.
+
+class ProjectOverridesRequest(BaseModel):
+    pinned: List[str] = []
+    ignored: List[str] = []
+
+
+def _project_overrides(conn) -> dict:
+    conn.execute("CREATE TABLE IF NOT EXISTS project_overrides ("
+                 "tag TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('pinned','ignored')))")
+    rows = conn.execute("SELECT tag, mode FROM project_overrides ORDER BY tag").fetchall()
+    return {"pinned": [t for t, m in rows if m == "pinned"],
+            "ignored": [t for t, m in rows if m == "ignored"]}
+
+
+@app.get("/api/projects/overrides")
+async def get_project_overrides(passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """{pinned: [tags always treated as project names],
+    ignored: [tags never treated as project names]}."""
+    _require_auth(passkey)
+    conn = sqlite3.connect(_resolve_db_path(passkey))
+    try:
+        return _project_overrides(conn)
+    finally:
+        conn.close()
+
+
+@app.put("/api/projects/overrides")
+async def put_project_overrides(
+    request: ProjectOverridesRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Replace both lists (tags normalized; a tag can't be in both — 422)."""
+    _require_auth(passkey)
+    pinned = sorted({t for t in (_normalize_tag(x) for x in request.pinned) if t})
+    ignored = sorted({t for t in (_normalize_tag(x) for x in request.ignored) if t})
+    both = set(pinned) & set(ignored)
+    if both:
+        raise HTTPException(status_code=422,
+                            detail=f"a tag can't be both pinned and ignored: {', '.join(sorted(both))}")
+    if "project" in pinned or "project" in ignored:
+        raise HTTPException(status_code=422, detail="'project' itself can't be overridden")
+    conn = sqlite3.connect(_resolve_db_path(passkey))
+    try:
+        _project_overrides(conn)
+        conn.execute("DELETE FROM project_overrides")
+        conn.executemany("INSERT INTO project_overrides (tag, mode) VALUES (?, ?)",
+                         [(t, "pinned") for t in pinned] + [(t, "ignored") for t in ignored])
+        conn.commit()
+        return _project_overrides(conn)
+    finally:
+        conn.close()
+
+
 # --- Warm feed -----------------------------------------------------------------
 
 _FEED_KEY_RE = _re_mod.compile(r"^(chat|note|transcript|approval|merged):.{1,200}$")

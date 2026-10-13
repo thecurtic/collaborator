@@ -1016,6 +1016,22 @@ cancelled/replaced dates as `EXDATE`, and each moved occurrence as an override
 VEVENT with the same UID and `RECURRENCE-ID`.
 
 
+### 20. Projects
+
+A project is whatever wears `project` plus one name tag, notes and chats alike
+(chat tags count). The name is inferred by exclusivity in the client (a name
+never appears beside another name; kind tags like `bug` span many). When an
+unrelated tag behaves like a name, or a real name is missed, the fix is an
+override, never retagging:
+
+**`GET /api/projects/overrides`** → `{ "pinned": ["garden"], "ignored": ["urgent"] }`
+— pinned tags are always project names, ignored tags never are.
+
+**`PUT /api/projects/overrides`** `{ "pinned": [...], "ignored": [...] }` → replaces
+both lists (normalized like tags). `422` if a tag is in both, or for
+`project` itself.
+
+
 ## Data Models
 
 ### Turn
