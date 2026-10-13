@@ -60,9 +60,15 @@ auth_enabled = config.get("authentication", {}).get("enabled", False)
 # Enable CORS so the frontend (served from a different origin/host on the tailnet)
 # can read API responses. Without this, browsers block the response even though
 # the request reaches the backend.
+_cors_origins = config.get("server", {}).get("cors_origins", ["http://localhost:3000"])
+# Credentials are allowed, so a wildcard would let ANY site make signed-in
+# requests (Starlette echoes the caller's origin). Refuse it outright.
+if any(str(o).strip() == "*" for o in _cors_origins or []):
+    raise RuntimeError("server.cors_origins must list exact origins; '*' is "
+                       "refused because requests carry credentials")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=config.get("server", {}).get("cors_origins", ["http://localhost:3000"]),
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -92,10 +98,13 @@ async def session_middleware(request: Request, call_next):
         except Exception as e:
             print(f"Warning: session validation failed: {e}")
     reset = auth.current_session.set(ctx)
+    client_reset = auth.current_client.set(auth.client_key(
+        request.client.host if request.client else None, request.headers))
     try:
         return await call_next(request)
     finally:
         auth.current_session.reset(reset)
+        auth.current_client.reset(client_reset)
 
 
 class UserMessage(BaseModel):
@@ -3987,12 +3996,10 @@ def transcribe_audio(
     passkey: Optional[str] = Header(None, alias="X-Passkey")
 ):
     """Transcribe audio to text using Whisper."""
-    if auth_enabled:
-        if not passkey:
-            raise HTTPException(status_code=403, detail="Passkey required")
-        if not validate_passkey(passkey):
-            raise HTTPException(status_code=403, detail="Invalid or revoked passkey")
-    
+    # The shared check: sessions work here too, and bad passkeys count
+    # toward the lockout like everywhere else.
+    _require_auth(passkey)
+
     # Check file size (25MB limit)
     content_length = int(request.headers.get("content-length", 0))
     if content_length > 25 * 1024 * 1024:
@@ -4275,6 +4282,9 @@ async def transcribe_stream(
         except Exception as e:
             await _send({"type": "error", "detail": f"partial decode failed: {e}"})
 
+    max_minutes = (voice.stt_config() or {}).get("max_session_minutes", 120)
+    max_session_bytes = int(voice.BYTES_PER_SEC * 60 * max_minutes)
+
     async def _finalize_and_close(phrase_event: Optional[dict] = None) -> None:
         started = time.monotonic()
         if decode_task and not decode_task.done():
@@ -4297,6 +4307,13 @@ async def transcribe_stream(
             data_bytes = message.get("bytes")
             if data_bytes is not None:
                 session.feed(data_bytes)
+                if len(session.audio) > max_session_bytes:
+                    # Bounded memory: end the turn as if the user had, so
+                    # nothing said so far is lost.
+                    print("Warning: streaming STT session hit "
+                          f"max_session_minutes ({max_minutes}); finalizing")
+                    await _finalize_and_close()
+                    return
                 # Phrase candidates fire on trailing quiet — checked per chunk so
                 # firing doesn't wait for the next decode.
                 event = session.pending_event()

@@ -63,6 +63,13 @@ authentication:
   lockout_threshold: 5         # failed passkey attempts before backoff kicks in
   lockout_base_seconds: 60
   lockout_max_seconds: 3600
+  # The lockout counts per client address. Behind reverse proxies, list the
+  # proxies that talk to this backend directly (addresses or CIDRs); only their
+  # requests may name the real client via CF-Connecting-IP / X-Forwarded-For.
+  # Empty: forwarding headers are ignored and everyone behind a proxy shares one
+  # lockout counter.
+  trusted_proxies: []
+  # trusted_proxies: ["127.0.0.1"]   # e.g. a Caddy on the same machine
 
 # System prompt configuration
 system_prompt:
@@ -102,6 +109,7 @@ system_prompt:
 #     api_url: "http://<inference-host>:8000/v1"      # speaches on the inference box
 #     partial_model: "Systran/faster-whisper-small.en"
 #     final_model: "deepdml/faster-whisper-large-v3-turbo-ct2"
+#     max_session_minutes: 120     # a streaming session past this finalizes and closes
 #     final_pass: true                # false = live partials become the message
 #                                     # (fastest end-of-turn; final_model still
 #                                     # used for uploads + video transcription)

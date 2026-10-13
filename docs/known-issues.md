@@ -20,6 +20,20 @@
   `/docs` be the REST reference.
 
 
+## Security follow-ups (added 2026-10-13)
+
+- **DNS rebinding in fetch_url.** The private-address check resolves the host,
+  then `requests` resolves it again to connect, so a hostile DNS server could
+  answer public for the check and private for the connection. Every redirect
+  hop is now re-checked, which closes the easy path; closing this one means
+  connecting to the exact address that was checked (a pinned transport
+  adapter). It doesn't apply when `tools.fetch_url.webtool_url` or a proxy is
+  set, since the fetch then resolves elsewhere.
+- **The webtool's own redirects.** With `webtool_url` set, fetching and
+  redirects happen in the webtool service; its private-address handling is
+  that service's to enforce.
+
+
 Carried over from an internal review of the backend and frontend on
 2026-09-15. Line numbers were accurate then and drift; search for the symbol.
 Most important first.

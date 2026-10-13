@@ -164,49 +164,116 @@ def user_hash_for_passkey(passkey: str) -> Optional[str]:
     return found[0] if found else None
 
 
-# --- Lockout (global exponential backoff on failed passkey attempts) -----------
+# --- Lockout (per-client exponential backoff on failed passkey attempts) -------
+# Keyed by the client's address, so one noisy client (or an attacker sending
+# junk passkeys) only locks itself out, never every new login. Passkeys are
+# 256-bit random, so this throttles; it isn't what makes guessing hopeless.
 
 _lockout_lock = threading.Lock()
-_lockout = {"failures": 0, "locked_until": 0.0}
+_lockouts: dict = {}          # client key -> {"failures", "locked_until"}
+_LOCKOUT_MAX_CLIENTS = 10000  # bound memory against address-hopping floods
+
+# Set per-request by the session middleware: the client's address as far as
+# the configured trusted proxies let us see it ("unknown" outside requests).
+current_client: ContextVar[str] = ContextVar("current_client", default="unknown")
 
 
 def _lockout_cfg() -> dict:
     return get_config().get("authentication", {}) or {}
 
 
-def lockout_remaining() -> int:
-    """Seconds until passkey attempts are accepted again (0 = not locked)."""
+def _in_networks(addr: str, networks) -> bool:
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    for net in networks or []:
+        try:
+            if ip in ipaddress.ip_network(str(net), strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def client_key(peer: Optional[str], headers) -> str:
+    """The client address for lockout purposes.
+
+    Forwarding headers are trusted ONLY when the direct peer is one of
+    authentication.trusted_proxies (addresses or CIDRs): then CF-Connecting-IP
+    (set by Cloudflare) wins, else the right-most X-Forwarded-For hop that
+    isn't itself a trusted proxy. Otherwise the peer address is the client —
+    so with nothing configured behind a proxy, everyone shares the proxy's
+    address (the old global lockout), never a spoofable header.
+    """
+    peer = (peer or "unknown").strip()
+    trusted = _lockout_cfg().get("trusted_proxies") or []
+    if not trusted or not _in_networks(peer, trusted):
+        return peer
+    cf = (headers.get("cf-connecting-ip") or "").strip()
+    if cf:
+        return cf
+    hops = [h.strip() for h in (headers.get("x-forwarded-for") or "").split(",")
+            if h.strip()]
+    for hop in reversed(hops):
+        if not _in_networks(hop, trusted):
+            return hop
+    return peer
+
+
+def _entry(key: str) -> dict:
+    entry = _lockouts.get(key)
+    if entry is None:
+        if len(_lockouts) >= _LOCKOUT_MAX_CLIENTS:
+            now = time.time()
+            for k in [k for k, v in _lockouts.items() if v["locked_until"] < now]:
+                del _lockouts[k]
+            while len(_lockouts) >= _LOCKOUT_MAX_CLIENTS:
+                del _lockouts[next(iter(_lockouts))]   # oldest first
+        entry = _lockouts[key] = {"failures": 0, "locked_until": 0.0}
+    return entry
+
+
+def lockout_remaining(key: Optional[str] = None) -> int:
+    """Seconds until this client's passkey attempts are accepted (0 = not locked)."""
+    key = key or current_client.get()
     with _lockout_lock:
-        return max(0, int(_lockout["locked_until"] - time.time()))
+        entry = _lockouts.get(key)
+        return max(0, int(entry["locked_until"] - time.time())) if entry else 0
 
 
-def record_auth_failure() -> None:
+def record_auth_failure(key: Optional[str] = None) -> None:
+    key = key or current_client.get()
     cfg = _lockout_cfg()
     threshold = cfg.get("lockout_threshold", 5)
     base = cfg.get("lockout_base_seconds", 60)
     cap = cfg.get("lockout_max_seconds", 3600)
     with _lockout_lock:
-        _lockout["failures"] += 1
-        over = _lockout["failures"] - threshold
+        entry = _entry(key)
+        entry["failures"] += 1
+        over = entry["failures"] - threshold
         if over >= 0:
             delay = min(cap, base * (2 ** over))
-            _lockout["locked_until"] = time.time() + delay
-            print(f"Warning: auth lockout engaged — {_lockout['failures']} "
-                  f"consecutive failed passkey attempts; new logins blocked "
-                  f"for {delay}s (existing sessions unaffected)")
+            entry["locked_until"] = time.time() + delay
+            print(f"Warning: auth lockout engaged for {key} — "
+                  f"{entry['failures']} consecutive failed passkey attempts; "
+                  f"new logins from it blocked for {delay}s (existing sessions "
+                  "unaffected)")
         else:
-            print(f"Warning: failed passkey attempt "
-                  f"({_lockout['failures']}/{threshold} before lockout)")
+            print(f"Warning: failed passkey attempt from {key} "
+                  f"({entry['failures']}/{threshold} before lockout)")
 
 
-def record_auth_success() -> None:
+def record_auth_success(key: Optional[str] = None) -> None:
+    key = key or current_client.get()
     with _lockout_lock:
-        _lockout["failures"] = 0
-        _lockout["locked_until"] = 0.0
+        _lockouts.pop(key, None)
 
 
 def _reset_lockout_for_tests() -> None:
-    record_auth_success()
+    with _lockout_lock:
+        _lockouts.clear()
 
 
 # --- Sessions -------------------------------------------------------------------

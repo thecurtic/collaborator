@@ -134,6 +134,11 @@ def load_config() -> dict:
             "lockout_threshold": 5,
             "lockout_base_seconds": 60,
             "lockout_max_seconds": 3600,
+            # The lockout counts per client. Behind reverse proxies every
+            # request comes from the proxy, so list them here (addresses or
+            # CIDRs): only requests FROM these may name the real client via
+            # CF-Connecting-IP / X-Forwarded-For. Empty = trust no header.
+            "trusted_proxies": [],
         },
         "system_prompt": {
             "text": "You are Collaborator, a helpful assistant.",
@@ -220,6 +225,9 @@ def load_config() -> dict:
                 "window_seconds": 15,        # uncommitted rolling window per partial decode
                 "commit_keep_seconds": 6,    # audio kept uncommitted when the window overflows
                 "final_full_pass_seconds": 90,  # sessions up to this get a full final-model re-decode
+                # A streaming session keeps its audio in memory (~115 MB/hour);
+                # past this it finalizes and closes as if the turn had ended.
+                "max_session_minutes": 120,
             },
             "phrases": {
                 # In-stream phrase detection (end / interrupt). The silence gate

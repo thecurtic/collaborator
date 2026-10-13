@@ -1620,6 +1620,42 @@ def screenshot_page(url: str, question: Optional[str] = None) -> Dict:
     return out
 
 
+_MAX_REDIRECTS = 5
+_REDIRECT_CODES = (301, 302, 303, 307, 308)
+
+
+def _get_following_safe_redirects(url: str, fcfg: Dict, proxy):
+    """GET with redirects followed BY HAND, re-applying the http(s) and
+    private-address checks to every hop. requests' automatic redirects would
+    let a public page bounce the fetch to 127.0.0.1, a tailnet host or a
+    metadata address after the first check passed. Returns the final
+    streaming response, or an {error} dict when a hop is refused."""
+    from urllib.parse import urljoin, urlparse
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        response = requests.get(
+            current,
+            timeout=fcfg.get("timeout", 20),
+            headers={"User-Agent": "Collaborator/0.2 (self-hosted personal assistant)"},
+            stream=True,
+            allow_redirects=False,
+            proxies={"http": proxy, "https": proxy} if proxy else None,
+        )
+        location = (getattr(response, "headers", None) or {}).get("location")
+        if getattr(response, "status_code", 200) not in _REDIRECT_CODES or not location:
+            return response
+        target = urljoin(current, location)
+        response.close()
+        parsed = urlparse(target)
+        if parsed.scheme not in ("http", "https"):
+            return {"error": f"refusing a redirect to a non-http(s) URL ({target!r})"}
+        if not fcfg.get("allow_private", False) and _host_is_private(parsed.hostname or ""):
+            return {"error": "refusing a redirect to a private/internal address "
+                             "(enable tools.fetch_url.allow_private for tailnet/LAN URLs)"}
+        current = target
+    return {"error": f"too many redirects (more than {_MAX_REDIRECTS})"}
+
+
 def fetch_url(url: str, chunk: int = 1) -> Dict:
     """Fetch a URL and return readable text + hyperlinks for the model.
 
@@ -1649,13 +1685,9 @@ def fetch_url(url: str, chunk: int = 1) -> Dict:
 
     proxy = fcfg.get("proxy")
     try:
-        response = requests.get(
-            url,
-            timeout=fcfg.get("timeout", 20),
-            headers={"User-Agent": "Collaborator/0.2 (self-hosted personal assistant)"},
-            stream=True,
-            proxies={"http": proxy, "https": proxy} if proxy else None,
-        )
+        response = _get_following_safe_redirects(url, fcfg, proxy)
+        if isinstance(response, dict):
+            return response                   # a redirect hop was refused
         response.raise_for_status()
 
         max_bytes = fcfg.get("max_bytes", 2_000_000)

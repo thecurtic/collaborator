@@ -42,6 +42,16 @@ X-Passkey: <your-passkey-here>
 }
 ```
 
+### Lockout (429)
+Failed passkey attempts back off exponentially **per client address**
+(`authentication.lockout_*`): after the threshold, new passkey auth from that
+client gets `429` with `Retry-After`; established sessions are never affected,
+and other clients are untouched. Behind reverse proxies, list them in
+`authentication.trusted_proxies`; only requests from those may name the real
+client via `CF-Connecting-IP` or `X-Forwarded-For`. Every passkey-accepting
+endpoint, `POST /api/transcribe` included, applies the same check and also
+accepts a session.
+
 ---
 
 ## Base URL
@@ -474,6 +484,8 @@ captured (any frame size). This is fed straight to Whisper (no transcode).
 ```
 The server emits a `partial` roughly every ~2s of received audio (re-transcribing the
 buffer), sends `final` on `end`, then closes. Segmenting is internal and may change.
+A session is capped at `voice.stt.max_session_minutes` (default 120) of audio:
+past that it finalizes and closes exactly as if `end` had been sent.
 
 ---
 
