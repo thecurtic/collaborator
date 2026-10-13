@@ -20,6 +20,20 @@
   `/docs` be the REST reference.
 
 
+## Timezones (added 2026-10-13)
+
+- **Event times follow the server's timezone, not mine.** Timed events are
+  stamped with the server's local UTC offset at approval, recurring
+  occurrences keep wall-clock time in the server's zone, and ICS import
+  converts to it. That's right only while I'm in the server's zone. Needs a
+  location-based answer: the zone I'm in (from the device, or USER.md's
+  `timezone`, or turn location when it's on) for display and for the time
+  the model resolves "tomorrow at 9" against, with events keeping an
+  explicit zone of their own (ICS TZID) so a 9:00 meeting at home stays 9:00
+  at home when I travel. Touches: `_finalize_event_fields`, recurrence
+  expansion, ICS import/export, the current-date grounding in prompts, and
+  the frontend's wall-clock parsing.
+
 ## Security follow-ups (added 2026-10-13)
 
 - **DNS rebinding in fetch_url.** The private-address check resolves the host,
