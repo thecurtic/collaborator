@@ -70,8 +70,8 @@ function groupSatellites(
 
 /**
  * The user's own profile: the USER hub note (typed facts + body) plus its
- * user-profile satellite notes grouped by area. Renders in the Notes list
- * area — the host owns the header, search bar, and category chips. Editing
+ * user-profile satellite notes grouped by area. A page of Settings (UX doc:
+ * it's mine, edited rarely, not browsed); the host owns the header. Editing
  * flows through the normal note screen via onOpenNote('USER').
  */
 export function ProfileView({

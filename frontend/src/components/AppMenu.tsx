@@ -1,5 +1,4 @@
 import {
-  BookOpen,
   FileText,
   FileVideo,
   Globe,
@@ -40,7 +39,6 @@ function MenuItem({
  */
 export function AppMenu({
   onOpenSettings,
-  onOpenReferences,
   onOpenWebSearch,
   onOpenTranscripts,
   onOpenNotes,
@@ -48,7 +46,6 @@ export function AppMenu({
   onSignOut,
 }: {
   onOpenSettings: () => void;
-  onOpenReferences: () => void;
   onOpenWebSearch: () => void;
   onOpenTranscripts: () => void;
   onOpenNotes: () => void;
@@ -104,9 +101,6 @@ export function AppMenu({
             <div className="my-1 border-t border-border" />
             <MenuItem icon={Globe} onClick={() => pick(onOpenWebSearch)}>
               Web Search
-            </MenuItem>
-            <MenuItem icon={BookOpen} onClick={() => pick(onOpenReferences)}>
-              References
             </MenuItem>
             <MenuItem icon={SettingsIcon} onClick={() => pick(onOpenSettings)}>
               Settings

@@ -1,4 +1,13 @@
-import { Loader2, LogOut, Smartphone, Volume2, X } from 'lucide-react';
+import {
+  BookOpen,
+  ChevronRight,
+  Loader2,
+  LogOut,
+  Smartphone,
+  UserRound,
+  Volume2,
+  X,
+} from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { synthesize } from '@/features/voice/piperTts';
@@ -45,6 +54,27 @@ import {
 interface SettingsSheetProps {
   open: boolean;
   onClose: () => void;
+  /** Push the Profile screen (the USER hub and its satellites). */
+  onOpenProfile: () => void;
+  /** Push the References screen (the prompts the model is shown). */
+  onOpenReferences: () => void;
+}
+
+/** A row that leaves the sheet for a pushed screen. */
+function PageRow({ icon: Icon, label, hint, onClick }: {
+  icon: typeof BookOpen; label: string; hint: string; onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick}
+            className="flex w-full items-center gap-3 rounded-lg px-1 py-2.5 text-left hover:bg-muted/60 active:bg-muted">
+      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium text-foreground">{label}</span>
+        <span className="block text-xs text-muted-foreground">{hint}</span>
+      </span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+    </button>
+  );
 }
 
 /**
@@ -418,7 +448,12 @@ function DevicesSection() {
   );
 }
 
-export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
+export function SettingsSheet({
+  open,
+  onClose,
+  onOpenProfile,
+  onOpenReferences,
+}: SettingsSheetProps) {
   const debug = useDebugEnabled();
   const tools = useToolsEnabled();
   const location = useLocationEnabled();
@@ -466,6 +501,17 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
           >
             <X className="h-4 w-4" />
           </Button>
+        </div>
+
+        {/* What the model is shown about me and how it's instructed (UX
+            doc, Destinations: Profile and References live in Settings). */}
+        <div className="-mt-1 mb-4 border-b border-border pb-3">
+          <PageRow icon={UserRound} label="Profile"
+                   hint="What Collaborator knows about you"
+                   onClick={() => { onClose(); onOpenProfile(); }} />
+          <PageRow icon={BookOpen} label="References"
+                   hint="The prompts the model is shown"
+                   onClick={() => { onClose(); onOpenReferences(); }} />
         </div>
 
         {/* Chat model (server-backed; applies immediately). */}

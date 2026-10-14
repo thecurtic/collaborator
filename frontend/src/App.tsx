@@ -30,6 +30,7 @@ import { AppMenu } from '@/components/AppMenu';
 import { Button } from '@/components/ui/button';
 import { RenameSheet } from '@/components/RenameSheet';
 import { ReferencesView } from '@/features/reference/ReferencesView';
+import { ProfileView } from '@/features/notes/ProfileView';
 import { WebSearchView } from '@/features/search/WebSearchView';
 import { TranscriptsView } from '@/features/transcripts/TranscriptsView';
 import { useLongPress } from '@/lib/useLongPress';
@@ -133,10 +134,10 @@ function AppShell() {
   const [chatsFilter, setChatsFilter] = useState<'all' | 'conversations'>('all');
   // The chat screen is "pushed" over the tabs (back arrow returns to them).
   const [chatOpen, setChatOpen] = useState(false);
-  // References (prompt viewer), Web Search, and Transcripts push over
-  // whatever is showing.
-  const [referencesOpen, setReferencesOpen] = useState(false);
-  // Notes (the vault: list, graph, people, profile, drafts inbox) — a pushed
+  // Web Search and Transcripts push over whatever is showing; so do Profile
+  // and References, which are pages of Settings.
+  const [settingsPage, setSettingsPage] = useState<'profile' | 'references' | null>(null);
+  // Notes (the vault: list, graph, people, drafts inbox) — a pushed
   // screen from the menu; `notesLens` opens it on a lens (People).
   const [notesOpen, setNotesOpen] = useState(false);
   const [notesLens, setNotesLens] = useState<string | null>(null);
@@ -234,7 +235,7 @@ function AppShell() {
     if (!m) return;
     window.history.replaceState(null, '', window.location.pathname);
     setChatOpen(false);
-    setReferencesOpen(false);
+    setSettingsPage(null);
     setSearchOpen(false);
     setTranscriptFocus(Number(m[1]));
     setTranscriptsOpen(true);
@@ -243,7 +244,7 @@ function AppShell() {
   /** Open the Notes screen, optionally on a lens. */
   const openNotes = useCallback((lens: string | null = null) => {
     setChatOpen(false);
-    setReferencesOpen(false);
+    setSettingsPage(null);
     setSearchOpen(false);
     setTranscriptsOpen(false);
     setNotesLens(lens);
@@ -385,7 +386,7 @@ function AppShell() {
   // can add their question or just send (pasted URLs get auto-fetched).
   const startChatWithDraft = (text: string) => {
     setSearchOpen(false);
-    setReferencesOpen(false);
+    setSettingsPage(null);
     setTranscriptsOpen(false);
     convo.startNewChat();
     setChatOpen(true);
@@ -469,7 +470,7 @@ function AppShell() {
     <div className="flex h-full flex-col">
       <header className="pt-safe px-safe border-b border-border">
         <div className="flex items-center gap-2 px-2 py-3">
-          {referencesOpen || searchOpen || transcriptsOpen || notesOpen ? (
+          {settingsPage !== null || searchOpen || transcriptsOpen || notesOpen ? (
             <>
               <Button
                 variant="ghost"
@@ -482,7 +483,7 @@ function AppShell() {
                       ? setTranscriptsOpen(false)
                       : notesOpen
                         ? setNotesOpen(false)
-                        : setReferencesOpen(false)
+                        : setSettingsPage(null)
                 }
                 className="h-8 w-8 shrink-0"
               >
@@ -495,7 +496,7 @@ function AppShell() {
                     ? 'Transcripts'
                     : notesOpen
                       ? notesLens === 'social-graph' ? 'People' : 'Notes'
-                      : 'References'}
+                      : settingsPage === 'profile' ? 'Profile' : 'References'}
               </span>
             </>
           ) : chatOpen ? (
@@ -547,18 +548,13 @@ function AppShell() {
           <div className="flex shrink-0 items-center gap-1">
             <AppMenu
               onOpenSettings={() => setSettingsOpen(true)}
-              onOpenReferences={() => {
-                setSearchOpen(false);
-                setTranscriptsOpen(false);
-                setReferencesOpen(true);
-              }}
               onOpenWebSearch={() => {
-                setReferencesOpen(false);
+                setSettingsPage(null);
                 setTranscriptsOpen(false);
                 setSearchOpen(true);
               }}
               onOpenTranscripts={() => {
-                setReferencesOpen(false);
+                setSettingsPage(null);
                 setSearchOpen(false);
                 setNotesOpen(false);
                 setTranscriptsOpen(true);
@@ -566,7 +562,7 @@ function AppShell() {
               onOpenNotes={() => openNotes(null)}
               onOpenPeople={() => openNotes('social-graph')}
               onSignOut={() => {
-                setReferencesOpen(false);
+                setSettingsPage(null);
                 setSearchOpen(false);
                 setTranscriptsOpen(false);
                 setChatOpen(false);
@@ -663,7 +659,24 @@ function AppShell() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
       {/* After CallScreen so it stacks on top when opened mid-call. */}
-      <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsSheet
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onOpenProfile={() => {
+          setSearchOpen(false);
+          setTranscriptsOpen(false);
+          setNotesOpen(false);
+          setChatOpen(false);
+          setSettingsPage('profile');
+        }}
+        onOpenReferences={() => {
+          setSearchOpen(false);
+          setTranscriptsOpen(false);
+          setNotesOpen(false);
+          setChatOpen(false);
+          setSettingsPage('references');
+        }}
+      />
 
       {/* Chat-title hold menu (+ its rename sheet). */}
       <ActionSheet
@@ -698,8 +711,13 @@ function AppShell() {
           <PasskeyScreen />
         ) : searchOpen ? (
           <WebSearchView onStartChat={startChatWithDraft} />
-        ) : referencesOpen ? (
+        ) : settingsPage === 'references' ? (
           <ReferencesView />
+        ) : settingsPage === 'profile' ? (
+          <ProfileView onOpenNote={(title) => {
+            setSettingsPage(null);
+            openNoteByTitle(title);
+          }} />
         ) : notesOpen ? (
           <NotesView
             key={notesLens ?? 'notes'}
@@ -865,7 +883,7 @@ function AppShell() {
       </main>
 
       {/* Errors on tab screens (the chat screen shows its own strip). */}
-      {!chatOpen && !referencesOpen && !searchOpen && !transcriptsOpen && !notesOpen && gate === 'open' && convo.error && (
+      {!chatOpen && settingsPage === null && !searchOpen && !transcriptsOpen && !notesOpen && gate === 'open' && convo.error && (
         <div className="flex items-start gap-2 border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           <p className="max-h-24 min-w-0 flex-1 overflow-y-auto break-words">
             {convo.error}
@@ -889,7 +907,7 @@ function AppShell() {
       )}
 
       {/* Bottom tabs — hidden while a pushed screen (chat/references/search) is open. */}
-      {!chatOpen && !referencesOpen && !searchOpen && !transcriptsOpen && !notesOpen && gate === 'open' && (
+      {!chatOpen && settingsPage === null && !searchOpen && !transcriptsOpen && !notesOpen && gate === 'open' && (
         <nav className="pb-safe px-safe border-t border-border" aria-label="Main">
           <div className="mx-auto flex max-w-3xl">
             <TabButton

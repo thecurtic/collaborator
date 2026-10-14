@@ -16,7 +16,7 @@ import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Note, NoteFieldsPatch, NoteMeta } from '@/domain/models';
-import { categoryOf, NOTE_CATEGORIES } from './categories';
+import { categoryOf } from './categories';
 import {
   draftToPatch,
   FieldsEditor,
@@ -27,7 +27,6 @@ import {
 import { GraphView } from './GraphView';
 import { InboxView } from './InboxView';
 import { PeopleView } from './PeopleView';
-import { ProfileView } from './ProfileView';
 import { invalidateTagVocabulary } from './tags';
 import { TagAssist } from './TagAssist';
 import { NoteBody } from './NoteBody';
@@ -45,7 +44,7 @@ interface NotesViewProps {
   inboxRequest: { runId: string | null; nonce: number } | null;
   /** Deep link to one note (the warm feed); bump nonce to re-trigger. */
   noteRequest?: { title: string; nonce: number } | null;
-  /** Open on this lens (the menu's People entry) instead of the picker. */
+  /** Open on this lens (the menu's People entry) instead of all notes. */
   initialLens?: string | null;
   /** Refresh the app-level pending-drafts badge. */
   onBadgeRefresh: () => void;
@@ -387,10 +386,10 @@ export function NotesView({
   const [screen, setScreen] = useState<Screen>({ kind: 'list' });
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'semantic' | 'keyword'>('semantic');
-  // The active lens. Mind's first page IS the lens picker (2026-08-17):
-  // null = picker; 'all' = whole vault; otherwise a category tag whose lens
-  // renders its own view. The old chip row is retired.
-  const [lens, setLens] = useState<string | null>(initialLens);
+  // Notes goes straight to the whole pile (UX doc, Destinations); People,
+  // from the menu, opens this screen on its own lens. Profile lives in
+  // Settings now.
+  const lens = initialLens ?? 'all';
   const [notes, setNotes] = useState<NoteMeta[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reindexing, setReindexing] = useState(false);
@@ -417,11 +416,9 @@ export function NotesView({
               q,
               mode,
               20,
-              lens && lens !== 'all' ? lens : undefined,
+              lens !== 'all' ? lens : undefined,
             )
-          : // The picker page fetches the full list too — it feeds the
-            // per-lens counts.
-            await api.listNotes(lens && lens !== 'all' ? lens : undefined);
+          : await api.listNotes(lens !== 'all' ? lens : undefined);
         if (searchSeq.current === seq) setNotes(result);
       } catch (err) {
         if (searchSeq.current === seq) {
@@ -442,15 +439,14 @@ export function NotesView({
   const reload = useCallback(() => {
     searchSeq.current++;
     setQuery('');
-    setLens(null);
     void (async () => {
       try {
-        setNotes(await api.listNotes());
+        setNotes(await api.listNotes(lens !== 'all' ? lens : undefined));
       } catch (err) {
         setError(errMessage(err));
       }
     })();
-  }, []);
+  }, [lens]);
 
   const reindex = async () => {
     setReindexing(true);
@@ -582,84 +578,14 @@ export function NotesView({
             </button>
           )}
         </div>
-        {/* Lens bar: the picker page is Mind's front door (2026-08-17) —
-            this row only appears once a lens is open, as the way back. */}
-        {lens !== null && !query.trim() && (
-          <button
-            type="button"
-            onClick={() => setLens(null)}
-            className="mt-2 flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Lenses
-            <span className="font-medium text-foreground">
-              ·{' '}
-              {lens === 'all'
-                ? 'All notes'
-                : (NOTE_CATEGORIES.find((c) => c.tag === lens)?.label ?? lens)}
-            </span>
-          </button>
-        )}
         {reindexNotice && (
           <p className="mt-1.5 text-xs text-muted-foreground">{reindexNotice}</p>
         )}
       </div>
 
-      {/* Mind = lens picker first (2026-08-17): the front page lists the
-          lenses; opening one renders its view. A typed query drops to the
-          flat search list, scoped when a category lens is open. */}
-      {!query.trim() && lens === null ? (
-        <div className="flex-1 overflow-y-auto overscroll-contain">
-          <ul className="divide-y divide-border">
-            <li>
-              <button
-                type="button"
-                onClick={() => setLens('all')}
-                className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-muted/60 active:bg-muted"
-              >
-                <Search className="h-4 w-4 shrink-0 text-primary/70" />
-                <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
-                  All notes
-                </span>
-                {notes && (
-                  <span className="text-xs text-muted-foreground">
-                    {notes.length}
-                  </span>
-                )}
-              </button>
-            </li>
-            {NOTE_CATEGORIES.map((c) => {
-              const count = notes?.filter((n) =>
-                n.tags.includes(c.tag),
-              ).length;
-              return (
-                <li key={c.tag}>
-                  <button
-                    type="button"
-                    onClick={() => setLens(c.tag)}
-                    className="flex w-full items-center gap-3 px-4 py-3.5 text-left hover:bg-muted/60 active:bg-muted"
-                  >
-                    <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
-                      {c.label}
-                    </span>
-                    {count != null && count > 0 && (
-                      <span className="text-xs text-muted-foreground">
-                        {count}
-                      </span>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ) : !query.trim() && lens === 'social-graph' ? (
+      {!query.trim() && lens === 'social-graph' ? (
         <div className="min-h-0 flex-1">
           <PeopleView onOpenNote={openNote} />
-        </div>
-      ) : !query.trim() && lens === 'user-profile' ? (
-        <div className="min-h-0 flex-1">
-          <ProfileView onOpenNote={openNote} />
         </div>
       ) : (
       <div className="flex-1 overflow-y-auto overscroll-contain">
