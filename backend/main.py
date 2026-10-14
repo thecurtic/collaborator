@@ -3874,8 +3874,11 @@ async def send_test_notification(
     return {"delivered": status}
 
 
+# Plain `def` (here and set_model): the inference calls block, and FastAPI
+# runs sync endpoints in its threadpool, so an unreachable inference box
+# stalls only this request, not every other one.
 @app.get("/api/models")
-async def list_models(
+def list_models(
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
     """Models available at the inference endpoint, plus the active one.
@@ -3912,7 +3915,7 @@ async def list_models(
 
 
 @app.put("/api/model")
-async def set_model(
+def set_model(
     request: ModelRequest,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
