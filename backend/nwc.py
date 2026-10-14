@@ -1,19 +1,16 @@
-"""Nostr Wallet Connect (NIP-47) spending + L402 paid search (Lethe).
+"""Nostr Wallet Connect (NIP-47) transport + L402 paid search (Lethe).
 
-Two tools live here, deliberately split so the model drives the payment loop
-end to end and nwc_pay stays general:
-
-- nwc_pay: pay a BOLT11 invoice (or read the wallet balance) through the
-  user's NWC connection — e.g. a Zeus/LDK node running on their phone. The
-  wallet side already enforces its own NWC budget; this module adds app-side
-  caps (max sats per payment / per day) backed by a spend ledger in the
-  per-user conversation DB.
+- The NWC client: one NIP-47 request at a time (`nwc_call`) over the user's
+  connection, plus `_lookup_payment` for recovering a timed-out payment.
+  wallet.py's `nwc` provider uses these; the wallet's ledger and caps live
+  there. NWC is the dormant alternative to LNbits (UX doc, Money).
 - lethe_search: query an Aperture-fronted Lethe instance (paid vertical
   search). Unauthenticated requests come back HTTP 402 with an L402 challenge
   (macaroon + Lightning invoice); the challenge is parked in the DB and the
-  invoice handed to the model. When nwc_pay later settles that exact invoice,
-  the preimage + parked macaroon are minted into a reusable L402 token and
-  the retried search goes through.
+  invoice handed to the model. When the wallet tool later settles that exact
+  invoice, the preimage + parked macaroon are minted into a reusable L402
+  token and the retried search goes through.
+- BOLT11 helpers (amount, payment hash) shared by the wallet.
 
 NWC connections are PER USER, keyed by identity hash (the directory name
 under backend/data/users/), "default" when auth is off. Connection strings
@@ -50,8 +47,8 @@ class NwcError(Exception):
 class NwcTimeout(NwcError):
     """No response inside the timeout. CRUCIAL nuance: the wallet may still
     complete the payment after we stop waiting — a timed-out pay_invoice is
-    UNCONFIRMED, not failed. nwc_pay tracks these attempts and recovers them
-    (via lookup_invoice) when the same invoice is retried."""
+    UNCONFIRMED, not failed. The wallet ledger keeps these attempts parked
+    and recovers them (via lookup_invoice) when the same invoice is retried."""
 
 
 class NwcUnreachable(NwcError):
@@ -524,22 +521,13 @@ def bolt11_payment_hash(invoice: str):
     return None
 
 
-# --- spend ledger + L402 storage (per-user conversation DB) -----------------
+# --- L402 storage (per-user conversation DB) --------------------------------
 
 
 def _ensure_schema(conn) -> None:
+    """Lethe's L402 storage. (Spends are recorded by wallet.py's ledger; the
+    old nwc_spends / nwc_attempts tables in existing DBs are left alone.)"""
     conn.executescript("""
-        CREATE TABLE IF NOT EXISTS nwc_spends (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            day TEXT NOT NULL,
-            amount_msat INTEGER NOT NULL,
-            fees_msat INTEGER,
-            invoice TEXT NOT NULL,
-            preimage TEXT,
-            reason TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_nwc_spends_day ON nwc_spends(day);
         CREATE TABLE IF NOT EXISTS l402_challenges (
             invoice TEXT PRIMARY KEY,
             macaroon TEXT NOT NULL,
@@ -552,31 +540,7 @@ def _ensure_schema(conn) -> None:
             preimage TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS nwc_attempts (
-            invoice TEXT PRIMARY KEY,
-            payment_hash TEXT,
-            amount_msat INTEGER NOT NULL,
-            reason TEXT,
-            created_at TEXT NOT NULL,
-            last_error TEXT
-        );
     """)
-    conn.commit()
-
-
-def _spent_today_msat(conn) -> int:
-    row = conn.execute("SELECT COALESCE(SUM(amount_msat), 0) FROM nwc_spends "
-                       "WHERE day = ?", (time.strftime("%Y-%m-%d"),)).fetchone()
-    return int(row[0] or 0)
-
-
-def _record_spend(conn, amount_msat: int, fees_msat, invoice: str,
-                  preimage, reason) -> None:
-    conn.execute(
-        "INSERT INTO nwc_spends (created_at, day, amount_msat, fees_msat, "
-        "invoice, preimage, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (time.strftime("%Y-%m-%dT%H:%M:%S"), time.strftime("%Y-%m-%d"),
-         amount_msat, fees_msat, invoice, preimage, reason))
     conn.commit()
 
 
@@ -638,170 +602,7 @@ def _lookup_payment(uri: str, inv: str, payment_hash, timeout: float):
     return "unpaid", None, None
 
 
-# --- the tools --------------------------------------------------------------
-
-
-def nwc_pay(db_path: str, user_key: str, action: str = "pay_invoice",
-            invoice: str = None, reason: str = None) -> dict:
-    """Pay a BOLT11 invoice (or read the balance) via the user's NWC wallet.
-
-    App-side caps on top of the wallet's own NWC budget:
-    tools.nwc.max_sats_per_payment and max_sats_per_day (spend ledger in the
-    per-user DB). Paying an invoice that matches a parked L402 challenge mints
-    a reusable access token for that host.
-    """
-    uri = connection_for(user_key)
-    if not uri:
-        return {"error": "no NWC connection configured for this user "
-                         "(tools.nwc.connections)"}
-    cfg = _nwc_cfg()
-    timeout = cfg.get("timeout", 30)
-    action = (action or "pay_invoice").strip()
-
-    if action == "get_balance":
-        try:
-            result = nwc_call(uri, "get_balance", {}, timeout=timeout)
-        except NwcError as e:
-            return {"error": str(e)}
-        out = {"balance_sats": int(result.get("balance", 0)) // 1000}
-        conn = sqlite3.connect(db_path)
-        try:
-            _ensure_schema(conn)
-            spent = _spent_today_msat(conn) // 1000
-        finally:
-            conn.close()
-        cap_day = cfg.get("max_sats_per_day", 500)
-        out.update({"spent_today_sats": spent, "daily_cap_sats": cap_day,
-                    "remaining_today_sats": max(0, cap_day - spent)})
-        return out
-
-    if action != "pay_invoice":
-        return {"error": f"unknown action {action!r} (pay_invoice | get_balance)"}
-    inv = (invoice or "").strip().lower()
-    if not inv:
-        return {"error": "invoice is required for pay_invoice"}
-    try:
-        amount_msat = bolt11_amount_msat(inv)
-    except NwcError as e:
-        return {"error": str(e)}
-    if amount_msat is None:
-        return {"error": "invoice has no amount — amountless invoices are "
-                         "refused because spending caps can't be enforced"}
-    amount_sats = amount_msat // 1000
-    cap_pay = cfg.get("max_sats_per_payment", 100)
-    cap_day = cfg.get("max_sats_per_day", 500)
-
-    conn = sqlite3.connect(db_path)
-    try:
-        _ensure_schema(conn)
-
-        # RECOVERY: this invoice was attempted before and timed out. The
-        # payment may have settled after we stopped waiting, so ask the wallet
-        # what happened BEFORE anything else — including the caps, because a
-        # settled payment already spent the money and refusing to record it
-        # would lose both the truth and the L402 token.
-        attempt = conn.execute(
-            "SELECT payment_hash, reason FROM nwc_attempts WHERE invoice = ?",
-            (inv,)).fetchone()
-        if attempt:
-            state, preimage, fees_msat = _lookup_payment(
-                uri, inv, attempt[0], timeout)
-            if state == "settled":
-                if not conn.execute("SELECT 1 FROM nwc_spends WHERE "
-                                    "invoice = ?", (inv,)).fetchone():
-                    _record_spend(conn, amount_msat, fees_msat, inv,
-                                  preimage, reason or attempt[1])
-                conn.execute("DELETE FROM nwc_attempts WHERE invoice = ?",
-                             (inv,))
-                conn.commit()
-                out = {"status": "paid", "recovered": True,
-                       "amount_sats": amount_sats, "preimage": preimage,
-                       "note": "this payment had already settled after the "
-                               "earlier timed-out attempt — recovered from "
-                               "the wallet, NOT paid twice",
-                       "spent_today_sats": _spent_today_msat(conn) // 1000,
-                       "daily_cap_sats": cap_day}
-                if preimage:
-                    l402 = _mint_l402_if_challenge(conn, inv, preimage)
-                    if l402:
-                        out["l402"] = l402
-                else:
-                    out["note"] += ("; the wallet reported it settled but "
-                                    "returned no preimage, so no L402 token "
-                                    "could be minted")
-                return out
-            if state == "unreachable":
-                return {"status": "unconfirmed",
-                        "error": "the wallet didn't answer the settlement "
-                                 "check — it looks unreachable right now. "
-                                 "The earlier attempt stays parked; retry "
-                                 "nwc_pay with this SAME invoice once the "
-                                 "wallet is back online. No new payment was "
-                                 "attempted."}
-            if state == "unknown":
-                return {"error": "an earlier attempt to pay this invoice "
-                                 "timed out, and the wallet supports no way "
-                                 "to check whether it settled "
-                                 "(lookup_invoice/list_transactions both "
-                                 "unavailable). NOT retrying the payment — "
-                                 "that could pay twice. The user must check "
-                                 "the wallet's payment history manually."}
-            # state == "unpaid": the wallet confirms it never settled — safe
-            # to try again; fall through to a fresh payment attempt.
-
-        spent_msat = _spent_today_msat(conn)
-        if amount_msat > cap_pay * 1000:
-            return {"error": f"invoice is {amount_sats} sats — over the "
-                             f"per-payment cap of {cap_pay} sats "
-                             "(tools.nwc.max_sats_per_payment)"}
-        if spent_msat + amount_msat > cap_day * 1000:
-            return {"error": f"paying {amount_sats} sats would exceed today's "
-                             f"cap of {cap_day} sats "
-                             f"({spent_msat // 1000} already spent)"}
-
-        # Park the attempt BEFORE contacting the wallet, so a timeout (or a
-        # crash) always leaves a recoverable trace.
-        conn.execute("INSERT OR REPLACE INTO nwc_attempts (invoice, "
-                     "payment_hash, amount_msat, reason, created_at, "
-                     "last_error) VALUES (?, ?, ?, ?, ?, NULL)",
-                     (inv, bolt11_payment_hash(inv), amount_msat, reason,
-                      time.strftime("%Y-%m-%dT%H:%M:%S")))
-        conn.commit()
-        try:
-            result = nwc_call(uri, "pay_invoice", {"invoice": inv},
-                              timeout=timeout)
-        except NwcTimeout as e:
-            # UNCONFIRMED, not failed: the attempt row stays for recovery.
-            conn.execute("UPDATE nwc_attempts SET last_error = ? "
-                         "WHERE invoice = ?", (str(e), inv))
-            conn.commit()
-            return {"status": "unconfirmed", "error": str(e),
-                    "note": "the payment may still settle in the background. "
-                            "Retry nwc_pay with this SAME invoice shortly — "
-                            "it will check the wallet and recover the "
-                            "payment (minting any L402 token) if it settled. "
-                            "Do NOT pay a fresh invoice for the same "
-                            "purchase."}
-        except NwcError as e:
-            # The wallet answered definitively — nothing to recover.
-            conn.execute("DELETE FROM nwc_attempts WHERE invoice = ?", (inv,))
-            conn.commit()
-            return {"error": str(e)}
-        preimage = result.get("preimage")
-        fees_msat = result.get("fees_paid")
-        _record_spend(conn, amount_msat, fees_msat, inv, preimage, reason)
-        conn.execute("DELETE FROM nwc_attempts WHERE invoice = ?", (inv,))
-        conn.commit()
-        out = {"status": "paid", "amount_sats": amount_sats,
-               "fees_msat": fees_msat, "preimage": preimage,
-               "spent_today_sats": (spent_msat + amount_msat) // 1000,
-               "daily_cap_sats": cap_day}
-        l402 = _mint_l402_if_challenge(conn, inv, preimage)
-        if l402:
-            out["l402"] = l402
-        return out
-    finally:
-        conn.close()
+# --- the Lethe tool ---------------------------------------------------------
 
 
 _L402_CHALLENGE_RE = re.compile(
@@ -814,7 +615,7 @@ def lethe_search(db_path: str, query: str, vertical: str = None,
 
     With a stored token: authorized request. Without one (or when the token is
     rejected): park the 402 challenge and hand the invoice to the model, which
-    pays it via nwc_pay and retries.
+    pays it with the wallet tool and retries.
     """
     import requests
     cfg = _lethe_cfg()
@@ -876,7 +677,8 @@ def lethe_search(db_path: str, query: str, vertical: str = None,
                     if amount_msat is not None else None,
                     "invoice": invoice,
                     "note": "access to this search requires an L402 payment: "
-                            "pay this exact invoice with nwc_pay, then call "
+                            "pay this exact invoice with the wallet tool "
+                            "(action pay_invoice), then call "
                             "lethe_search again — the access token is minted "
                             "automatically and reused for future searches"}
 

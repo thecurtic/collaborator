@@ -338,6 +338,7 @@ def load_config() -> dict:
                 "list_transcripts": True,  # catalogue of stored transcripts
                 "read_transcript": True,   # read one stored transcript by id
                 "read_logs": True,     # agent can read its own recent server logs
+                "wallet": True,        # self-gating: needs a wallet for the user
             },
             "git": {
                 # Read-only forge access (Gitea; GitHub API-compatible for these
@@ -346,6 +347,18 @@ def load_config() -> dict:
                 "token": None,         # READ-ONLY token (set in .config.yaml)
                 "max_chars": 20000,
                 "timeout": 15,
+            },
+            "wallet": {
+                # Collaborator's own Lightning wallet (wallet.py). provider:
+                # "lnbits" (what runs) or "nwc" (dormant; tools.nwc.connections).
+                # LNbits wallets are per user, keyed by identity hash:
+                # {"<hash>": {"invoice_key": ..., "admin_key": ...}}.
+                "provider": "lnbits",
+                "max_sats_per_payment": 100,
+                "max_sats_per_day": 500,
+                "low_balance_sats": 0,    # >0: get_balance flags a top-up below it
+                "timeout": 30,
+                "lnbits": {"url": None, "wallets": {}},
             },
             "transcribe_video": {
                 "sync_max_minutes": 10,   # <= this: transcript returned in-turn

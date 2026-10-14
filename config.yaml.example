@@ -238,8 +238,8 @@ tools:
     list_transcripts: true    # catalogue of stored transcripts (cheap, browsable)
     read_transcript: true     # read one stored transcript by id, paged
     read_logs: true           # agent can read its own recent server logs (ring buffer)
-    nwc_pay: true             # self-gating: active only when tools.nwc.connections has
-                              # an entry for the requesting user
+    wallet: true              # self-gating: active only when the requesting user has a
+                              # wallet under the selected tools.wallet.provider
     lethe_search: true        # self-gating: active only when tools.lethe.url is set
   transcribe_video:
     sync_max_minutes: 10      # videos up to this long transcribe within the turn
@@ -293,7 +293,29 @@ tools:
     prompts:                  # per-kind synthesis prompt files (editable/auditable)
       memory: "recall-synthesis-prompt.md"
       web: "synthesis-web.md"
-  nwc:                        # Lightning spending via Nostr Wallet Connect (nwc_pay tool)
+  wallet:                     # Collaborator's own Lightning wallet (wallet tool; the
+                              # DITTA tool pays through it too)
+    provider: "lnbits"        # lnbits (what runs) | nwc (dormant: tools.nwc below)
+    max_sats_per_payment: 100 # app-side cap per invoice, on top of the wallet's balance
+    max_sats_per_day: 500     # app-side daily cap, per provider (each can be its own node)
+    low_balance_sats: 0       # >0: below this, get_balance prompts a top-up invoice
+    timeout: 30               # seconds to wait for a payment to confirm
+    lnbits:
+      # One LNbits wallet per user on your LND node, funded with a working
+      # budget. Its two keys are scoped to that wallet alone: the invoice key
+      # mints invoices and reads balance/status (cannot move money); the admin
+      # key can pay FROM THAT WALLET ONLY. Leave admin_key out for a
+      # receive-only wallet. Keyed by identity hash ("default" with auth off).
+      # Keys NEVER live in this repo.
+      url: "https://<lnbits-host>"
+      wallets: {}
+      # wallets:
+      #   "<user-identity-hash>":
+      #     invoice_key: "<lnbits-invoice-key>"
+      #     admin_key: "<lnbits-admin-key>"
+      #     # url: "https://<other-lnbits-host>"   # optional per-wallet override
+  nwc:                        # Nostr Wallet Connect: the dormant wallet provider
+                              # (tools.wallet.provider: nwc). Caps: tools.wallet.
     # Connections are PER USER and NEVER live in this repo — wire real values
     # into the gitignored config.yaml on the prod box. Key each entry by the
     # user's identity hash (the directory name under backend/data/users/);
@@ -304,15 +326,13 @@ tools:
     # connections:
     #   default: "nostr+walletconnect://<wallet-pubkey>?relay=wss://relay.example.com&secret=<64-hex>"
     #   "<user-identity-hash>": "nostr+walletconnect://..."
-    max_sats_per_payment: 100 # app-side cap per invoice, on top of the NWC budget
-    max_sats_per_day: 500     # app-side rolling daily cap (spend ledger in the per-user DB)
     timeout: 30               # seconds to wait for the wallet's NIP-47 response
     encryption: "auto"        # auto (read the wallet's info event: nip44_v2 when
                               # advertised, else nip04) | nip44 | nip04 to pin one
   lethe:                      # EXPERIMENTAL paid search (lethe_search tool): a Lethe
     url: ""                   # vertical index behind an Aperture L402 proxy, e.g.
                               # "https://lethe.example.com". Empty = tool disabled.
-                              # 402 challenges are settled via nwc_pay; the minted
+                              # 402 challenges are settled via the wallet tool; the minted
                               # L402 token is stored per user and reused.
     vertical: "cybersec"      # default vertical path segment (/v1/<vertical>/search)
     results: 8                # max results returned to the model

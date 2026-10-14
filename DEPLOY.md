@@ -106,7 +106,8 @@ cd backend
 
 `rotate` issues a new passkey for an existing identity, moves nothing on disk,
 and logs every device out. The identity hash printed at creation is what
-`tools.nwc.connections` and the per-user wallet config are keyed by.
+`tools.wallet.lnbits.wallets` (and the dormant `tools.nwc.connections`) are
+keyed by.
 
 ## Android shell
 

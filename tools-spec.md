@@ -302,35 +302,36 @@ date, or occurrence_note (the title of a one-off event note that replaces it —
 propose that note too, linking back to the series). The series and its other
 occurrences stay as they are. If it's unclear which they mean, ask.
 
-## nwc_pay
-Spend from the user's own Lightning wallet (their Zeus/LDK node, connected via
-Nostr Wallet Connect). Action "pay_invoice" pays a BOLT11 invoice — pass it
-EXACTLY as received, never retyped; action "get_balance" reads the wallet
-balance plus today's spending against the daily cap. Spending is REAL MONEY,
-bounded three ways: an app-side per-payment cap, an app-side daily cap (every
-payment lands in a ledger), and the NWC connection's own budget on the wallet
-side. Amountless invoices are refused. You may pay within these caps when a
-payment serves what the user asked for — the canonical case is settling an
-L402 invoice from lethe_search — but say what you paid and why, in sats, every
-time. Always include a short `reason`; it is stored in the ledger the user
-audits. If a payment fails, report the wallet's error honestly — never claim a
-payment happened without a preimage in the result.
+## wallet
+Collaborator's own Lightning wallet (an LNbits wallet on the user's node,
+funded with a working budget). Three actions:
+- "get_balance": the balance plus today's spending against the daily cap. If
+  it says the balance is low, offer the user a top-up.
+- "pay_invoice": pay a BOLT11 invoice — pass it EXACTLY as received, never
+  retyped. This is REAL MONEY, bounded by an app-side per-payment cap, a daily
+  cap (every payment lands in a ledger the user audits) and the wallet's own
+  balance. Amountless invoices are refused, and an invoice already paid is
+  never paid again. Pay only when it serves what the user asked for, and say
+  what you paid and why, in sats, every time. Always include a short
+  `reason`. If a payment fails, report the error honestly — never claim a
+  payment happened without a preimage in the result.
+- "create_invoice": mint an invoice (`amount_sats`, optional `memo`) for the
+  USER to pay, moving money into this wallet — how you ask them for more
+  funds. Show it the way the result's instruction says: a tappable
+  lightning: link plus the invoice in a code block.
 
-TIMEOUTS ARE NOT FAILURES: status "unconfirmed" means the wallet may still be
-settling the payment in the background. The correct move is ALWAYS to retry
-nwc_pay with the SAME invoice a little later — the tool then asks the wallet
-what actually happened and either recovers the settled payment (result says
-recovered: true; any L402 token is minted; no second payment is made) or
-confirms it never settled and safely retries. NEVER respond to a timeout by
-fetching a fresh invoice for the same purchase: if the first payment settled
-quietly, that pays twice for one thing.
+TIMEOUTS ARE NOT FAILURES: status "unconfirmed" means the payment may still
+settle. ALWAYS retry pay_invoice with the SAME invoice a little later — the
+tool checks the wallet first and either recovers the settled payment
+(recovered: true; nothing paid twice) or confirms it never settled and pays.
+NEVER respond to a timeout by fetching a fresh invoice for the same purchase.
 
 ## lethe_search
 EXPERIMENTAL paid search against Lethe, the user's own vertical search index
 (curated, cross-referenced corpora — currently the cybersec vertical: MITRE
 ATT&CK, CWE, CISA KEV). Access is sold per L402/Lightning: when access isn't
 paid for yet, this returns status=payment_required with an invoice — pay that
-EXACT invoice via nwc_pay, then call lethe_search again; the access token is
+EXACT invoice via wallet (pay_invoice), then call lethe_search again; the access token is
 minted automatically and reused for future searches, so most calls after the
 first are free. Results are snippet-and-link: each carries a canonical PUBLIC web URL
 (nvd.nist.gov, cwe.mitre.org, attack.mitre.org, …) plus an extract. When

@@ -1,5 +1,5 @@
 import type { ComponentPropsWithoutRef } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
 
@@ -12,6 +12,12 @@ const components = {
   ),
 };
 
+/** The default safe-protocol filter, plus lightning: so a top-up invoice
+ * from the wallet tool is a link the phone's wallet app opens. */
+function urlTransform(url: string): string {
+  return /^lightning:[a-z0-9]+$/i.test(url) ? url : defaultUrlTransform(url);
+}
+
 /** Render Markdown (GitHub-flavored) for assistant messages. */
 export function Markdown({
   children,
@@ -22,7 +28,7 @@ export function Markdown({
 }) {
   return (
     <div className={cn('markdown', className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={urlTransform}>
         {children}
       </ReactMarkdown>
     </div>
