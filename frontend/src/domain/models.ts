@@ -208,6 +208,12 @@ export interface ScratchItem {
 }
 
 /** A video-transcription job (b23d8ea): STT over the audio, never captions. */
+/** GET /api/transcripts: the jobs plus the tag vocabulary in use. */
+export interface TranscriptList {
+  items: Transcript[];
+  vocabulary: string[];
+}
+
 export interface Transcript {
   id: number;
   url: string;
@@ -221,6 +227,8 @@ export interface Transcript {
   chars: number | null;
   /** Text around the first search hit (filtered listings only). */
   snippet: string | null;
+  /** Optional tags; `project` plus a name puts it in that project. */
+  tags: string[];
   createdAt: string;
   finishedAt: string | null;
   /** Full text — present only when fetched by id. */

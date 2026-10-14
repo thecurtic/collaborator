@@ -111,12 +111,13 @@ tell the user that reason plainly; don't retry other URLs for the same video.
 
 ## list_transcripts
 The catalogue of transcripts the user already has, newest first: id, title,
-channel, duration_s, created_at, status, chars (failed ones too, with their
-error). It's cheap — call it freely whenever a video the user has might be
-relevant, including when they say "that video about X" or "the one from
+channel, duration_s, created_at, status, chars, tags (failed ones too, with
+their error). It's cheap — call it freely whenever a video the user has might
+be relevant, including when they say "that video about X" or "the one from
 <channel>". Optional `query` (keywords that must all appear in the title,
-channel or full text; matches include a snippet) and `channel` (part of a
-channel name). Pick the relevant entries yourself, then read_transcript them —
+channel, tags or full text; matches include a snippet), `channel` (part of a
+channel name) and `tag` (only transcripts wearing that tag, such as a
+project's name). Pick the relevant entries yourself, then read_transcript them —
 read what the request warrants, not everything.
 
 ## read_transcript

@@ -410,6 +410,7 @@ export interface ApiTranscript {
   snippet?: string;
   created_at: string;
   finished_at?: string | null;
+  tags?: string[];
   /** Full text — only on GET /api/transcripts/{id}. */
   text?: string;
 }
@@ -418,6 +419,8 @@ export interface ApiTranscript {
 export interface ApiTranscriptsResponse {
   transcripts: ApiTranscript[];
   count: number;
+  /** Every tag in use (notes, chats, transcripts), most used first. */
+  vocabulary?: string[];
 }
 
 /** GET /api/transcripts/{id} */

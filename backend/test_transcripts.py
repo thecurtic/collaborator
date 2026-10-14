@@ -193,3 +193,32 @@ def test_old_rows_get_keys_on_migration():
     db.ensure_conversation_schema(conn)                       # idempotent
     conn.close()
     print("✓ existing rows are keyed on migration, so old URLs still hit")
+
+
+def test_transcript_tags_filter_and_vocabulary(monkeypatch):
+    c, dbp = _fresh()
+    _stub(monkeypatch)
+    tid = agent_tools.transcribe_video(dbp, f"https://youtu.be/{VID}")["id"]
+
+    r = c.put(f"/api/transcripts/{tid}/tags", json={"tags": ["Project", "Garden Beds", "project"]})
+    assert r.status_code == 200, r.text
+    t = r.json()["transcript"]
+    assert t["tags"] == ["project", "garden-beds"] and "text" not in t
+    assert c.put(f"/api/transcripts/{tid}/tags", json={"tags": ["event"]}).status_code == 422
+    assert c.put("/api/transcripts/999/tags", json={"tags": ["x"]}).status_code == 404
+
+    listing = c.get("/api/transcripts").json()
+    assert listing["transcripts"][0]["tags"] == ["project", "garden-beds"]
+    assert "garden-beds" in listing["vocabulary"]
+    assert c.get("/api/transcripts?tag=Garden Beds").json()["count"] == 1
+    assert c.get("/api/transcripts?tag=bug").json()["count"] == 0
+    assert c.get(f"/api/transcripts/{tid}").json()["transcript"]["tags"] == ["project", "garden-beds"]
+
+    # The model's catalogue filters by tag too, and keyword search sees tags.
+    assert agent_tools.list_transcripts(dbp, tag="garden-beds")["count"] == 1
+    assert agent_tools.list_transcripts(dbp, tag="other")["count"] == 0
+    assert agent_tools.list_transcripts(dbp, "garden-beds")["count"] == 1
+
+    # [] clears.
+    assert c.put(f"/api/transcripts/{tid}/tags", json={"tags": []}).json()["transcript"]["tags"] == []
+    print("✓ transcripts carry tags: set, filter, vocabulary, clear")

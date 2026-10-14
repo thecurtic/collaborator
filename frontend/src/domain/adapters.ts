@@ -268,6 +268,7 @@ export function toTranscript(api: ApiTranscript): Transcript {
     error: typeof api.error === 'string' && api.error ? api.error : null,
     chars: typeof api.chars === 'number' ? api.chars : null,
     snippet: typeof api.snippet === 'string' && api.snippet ? api.snippet : null,
+    tags: Array.isArray(api.tags) ? api.tags.filter((t) => typeof t === 'string') : [],
     createdAt: api.created_at,
     finishedAt: api.finished_at ?? null,
     text: typeof api.text === 'string' ? api.text : null,

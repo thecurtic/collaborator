@@ -418,13 +418,14 @@ def read_transcript(db_path: str, transcript_id, chunk: int = 1,
 
 
 def list_transcripts(db_path: str, query: str = None,
-                     channel: str = None) -> dict:
+                     channel: str = None, tag: str = None) -> dict:
     """The stored-transcript catalogue (metadata, never full text)."""
     import sqlite3
     import db as _db
     conn = sqlite3.connect(db_path)
     try:
-        rows = _db.search_transcripts(conn, query, channel=channel, limit=200)
+        rows = _db.search_transcripts(conn, query, channel=channel, limit=200,
+                                       tag=tag)
     finally:
         conn.close()
     for r in rows:

@@ -328,9 +328,10 @@ def _promote_chat(conn, turn_id: int) -> bool:
 _MAX_CHAT_TAGS = 12
 
 
-def _normalize_chat_tags(tags: List[str]):
+def _normalize_chat_tags(tags: List[str], what: str = "chat"):
     """(normalized, error). Lowercase-hyphenated, deduped, order kept. Type
-    tags are rejected: a chat is never an event, person or profile note."""
+    tags are rejected: a chat (or transcript) is never an event, person or
+    profile note."""
     out = []
     for t in tags or []:
         n = _normalize_tag(t)
@@ -339,15 +340,16 @@ def _normalize_chat_tags(tags: List[str]):
     typed = [t for t in out if t in TYPE_TAGS]
     if typed:
         return [], (f"{', '.join(typed)} {'is a note type' if len(typed) == 1 else 'are note types'}"
-                    ", not a chat tag")
+                    f", not a {what} tag")
     if len(out) > _MAX_CHAT_TAGS:
-        return [], f"a chat carries at most {_MAX_CHAT_TAGS} tags"
+        return [], f"a {what} carries at most {_MAX_CHAT_TAGS} tags"
     return out, None
 
 
 def _tag_vocabulary(conn, limit: int = 80) -> List[str]:
-    """Tags in use across notes and chats, most used first (the shared
-    vocabulary summary proposals are steered toward)."""
+    """Tags in use across notes, chats and transcripts, most used first (the
+    shared vocabulary summary proposals and tag completion are steered
+    toward)."""
     from collections import Counter
     counts = Counter()
     try:
@@ -356,6 +358,8 @@ def _tag_vocabulary(conn, limit: int = 80) -> List[str]:
     except sqlite3.OperationalError:
         pass                                  # no notes index yet
     counts.update(_normalize_tag(t) for t in all_chat_tags(conn))
+    from db import all_transcript_tags
+    counts.update(_normalize_tag(t) for t in all_transcript_tags(conn))
     return [t for t, _ in counts.most_common()
             if t and t not in TYPE_TAGS][:limit]
 
@@ -599,9 +603,9 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                          "in the background — tell the user. Every result has "
                          "an id; read further with read_transcript."),
     "list_transcripts": ("The catalogue of transcripts the user already has: "
-                         "id, title, channel, length, date, status. Cheap — "
-                         "call it freely when a video might be relevant; "
-                         "optional query/channel filters."),
+                         "id, title, channel, length, date, status, tags. "
+                         "Cheap — call it freely when a video might be "
+                         "relevant; optional query/channel/tag filters."),
     "read_transcript": ("Read a stored transcript by id (from list_transcripts "
                         "or transcribe_video), paged with chunk; query jumps "
                         "to a phrase. Never downloads anything."),
@@ -831,7 +835,10 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                                          "in the title, channel or full text"},
                 "channel": {"type": "string",
                             "description": "optional: only this channel "
-                                           "(part of its name is enough)"}},
+                                           "(part of its name is enough)"},
+                "tag": {"type": "string",
+                        "description": "optional: only transcripts wearing "
+                                       "this tag (e.g. a project's name)"}},
                 "required": []}}})
     if avail.get("read_transcript", True):
         schemas.append({"type": "function", "function": {
@@ -1432,7 +1439,8 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
         if name == "list_transcripts":
             return json.dumps(agent_tools.list_transcripts(
                 db_path, (args.get("query") or "").strip() or None,
-                channel=(args.get("channel") or "").strip() or None))
+                channel=(args.get("channel") or "").strip() or None,
+                tag=_normalize_tag(args.get("tag") or "") or None))
         if name == "read_transcript":
             try:
                 chunk = max(1, int(args.get("chunk") or 1))
@@ -3593,25 +3601,31 @@ async def act_on_scratch(
 async def list_video_transcripts(
     channel: Optional[str] = None,
     q: Optional[str] = None,
+    tag: Optional[str] = None,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
     """Video transcription jobs (status + metadata; text via /api/transcripts/{id}).
     Long videos transcribe in the background — this is where they surface.
-    Optional ?channel= (substring, case-insensitive) and ?q= (keywords over
-    title, channel and text; matches carry a snippet)."""
+    Optional ?channel= (substring, case-insensitive), ?q= (keywords over
+    title, channel, tags and text; matches carry a snippet) and ?tag= (exact
+    tag). `vocabulary` is every tag in use anywhere, for tag completion."""
     _require_auth(passkey)
     try:
         conn = sqlite3.connect(_resolve_db_path(passkey))
         try:
-            if channel or q:
+            if channel or q or tag:
                 from db import search_transcripts
-                transcripts = search_transcripts(conn, q, channel=channel)
+                transcripts = search_transcripts(
+                    conn, q, channel=channel,
+                    tag=_normalize_tag(tag) if tag else None)
             else:
                 from db import list_transcripts
                 transcripts = list_transcripts(conn)
+            vocabulary = _tag_vocabulary(conn)
         finally:
             conn.close()
-        return {"transcripts": transcripts, "count": len(transcripts)}
+        return {"transcripts": transcripts, "count": len(transcripts),
+                "vocabulary": vocabulary}
     except HTTPException:
         raise
     except Exception as e:
@@ -3641,6 +3655,33 @@ async def get_video_transcript(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/transcripts/{transcript_id}/tags")
+async def put_transcript_tags(
+    transcript_id: int,
+    request: ChatTagsRequest,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Replace a transcript's tags (full list; [] clears). Same rules as chat
+    tags: normalized, no type tags. `project` plus a name puts it in that
+    project."""
+    _require_auth(passkey)
+    tags, err = _normalize_chat_tags(request.tags, what="transcript")
+    if err:
+        raise HTTPException(status_code=422, detail=err)
+    conn = sqlite3.connect(_resolve_db_path(passkey))
+    try:
+        from db import get_transcript, set_transcript_tags
+        if not set_transcript_tags(conn, transcript_id, tags):
+            raise HTTPException(status_code=404,
+                                detail=f"Transcript {transcript_id} not found")
+        t = get_transcript(conn, transcript_id)
+    finally:
+        conn.close()
+    t.pop("video_key", None)
+    t["chars"] = len(t.pop("text") or "")
+    return {"transcript": t}
 
 
 @app.delete("/api/transcripts/{transcript_id}")

@@ -27,6 +27,14 @@ export function globalTagVocabulary(): Promise<string[]> {
   return vocabPromise;
 }
 
+/** Same normalization the backend applies (lowercase-hyphenated). */
+export function normalizeTag(tag: string): string {
+  return tag
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 /** New tags were approved — the cached vocabulary is stale. */
 export function invalidateTagVocabulary(): void {
   vocabPromise = null;

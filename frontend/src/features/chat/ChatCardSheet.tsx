@@ -1,23 +1,14 @@
-import { Loader2, Plus, RefreshCw, Sparkles, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
 import type { ChatCard } from '@/domain/models';
-import { TagAssist } from '@/features/notes/TagAssist';
-import { globalTagVocabulary, nearMissTags } from '@/features/notes/tags';
+import { TagEditor } from '@/features/notes/TagEditor';
 import { useModalA11y } from '@/lib/useModalA11y';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
-}
-
-/** Same normalization the backend applies (lowercase-hyphenated). */
-function normalizeTag(tag: string): string {
-  return tag
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
 }
 
 /**
@@ -50,12 +41,6 @@ export function ChatCardSheet({
   const [loading, setLoading] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
-  const [noteVocab, setNoteVocab] = useState<string[]>([]);
-  // A new tag that's a near-miss of an existing one asks before it's saved.
-  const [nearMiss, setNearMiss] = useState<
-    { tag: string; existing: string[] } | null
-  >(null);
 
   const summarize = (id: number) => {
     setSummarizing(true);
@@ -71,12 +56,7 @@ export function ChatCardSheet({
     if (!open || turnId == null) return;
     let cancelled = false;
     setCard(null);
-    setDraft('');
-    setNearMiss(null);
     setError(null);
-    void globalTagVocabulary().then((v) => {
-      if (!cancelled) setNoteVocab(v);
-    });
     setLoading(true);
     api
       .getChat(turnId)
@@ -97,12 +77,6 @@ export function ChatCardSheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, turnId]);
 
-  const tags = card?.tags ?? [];
-  const proposals = useMemo(
-    () => (card?.summary?.proposedTags ?? []).filter((t) => !tags.includes(t)),
-    [card, tags],
-  );
-
   if (!open) return null;
 
   const saveTags = (next: string[]) => {
@@ -120,40 +94,6 @@ export function ChatCardSheet({
         setCard(prev);
         setError(errMessage(err));
       });
-  };
-
-  const addTags = (added: string[]) => {
-    const fresh = [...new Set(added)].filter((t) => t && !tags.includes(t));
-    if (fresh.length) saveTags([...tags, ...fresh]);
-  };
-
-  const addDraft = () => {
-    const added = draft.split(',').map(normalizeTag).filter(Boolean);
-    if (!added.length) return;
-    const vocab = [...new Set([...noteVocab, ...vocabulary])];
-    for (const t of added) {
-      if (vocab.includes(t) || tags.includes(t)) continue;
-      const near = nearMissTags(t, vocab);
-      if (near.length) {
-        setNearMiss({ tag: t, existing: near });
-        return;
-      }
-    }
-    setDraft('');
-    addTags(added);
-  };
-
-  /** Resolve the near-miss question: `use` replaces the new tag (or keeps it). */
-  const resolveNearMiss = (use: string) => {
-    if (!nearMiss) return;
-    const added = draft
-      .split(',')
-      .map(normalizeTag)
-      .filter(Boolean)
-      .map((t) => (t === nearMiss.tag ? use : t));
-    setNearMiss(null);
-    setDraft('');
-    addTags(added);
   };
 
   return createPortal(
@@ -226,102 +166,14 @@ export function ChatCardSheet({
         <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Tags
         </p>
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {tags.length === 0 && (
-            <span className="text-xs italic text-muted-foreground">
-              No tags yet
-            </span>
-          )}
-          {tags.map((t) => (
-            <span
-              key={t}
-              className="flex items-center gap-1 rounded-full bg-accent py-0.5 pl-2.5 pr-1 text-xs text-accent-foreground"
-            >
-              {t}
-              <button
-                type="button"
-                aria-label={`Remove ${t}`}
-                onClick={() => saveTags(tags.filter((x) => x !== t))}
-                className="rounded-full p-0.5 hover:bg-background/60"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </span>
-          ))}
-        </div>
-
-        {proposals.length > 0 && (
-          <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] text-muted-foreground">Suggested:</span>
-            {proposals.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => saveTags([...tags, t])}
-                className="flex items-center gap-0.5 rounded-full border border-dashed border-primary/50 px-2 py-0.5 text-xs text-primary hover:bg-primary/5"
-              >
-                <Plus className="h-3 w-3" />
-                {t}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div className="flex gap-2">
-          <input
-            value={draft}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              setNearMiss(null);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') addDraft();
-            }}
-            disabled={!card}
-            placeholder="Add tags, comma-separated"
-            aria-label="Add tags"
-            className="min-h-[2.25rem] flex-1 rounded-md border border-input bg-background px-3 text-base text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
-          />
-          <Button onClick={addDraft} disabled={!card || !draft.trim()}>
-            Add
-          </Button>
-        </div>
-        {nearMiss && (
-          <div className="mt-2 rounded-md bg-amber-500/10 px-2.5 py-2 text-xs text-amber-800">
-            <p>
-              Did you mean{' '}
-              {nearMiss.existing.map((e) => `“${e}”`).join(' or ')} instead of
-              “{nearMiss.tag}”?
-            </p>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {nearMiss.existing.map((e) => (
-                <button
-                  key={e}
-                  type="button"
-                  onClick={() => resolveNearMiss(e)}
-                  className="rounded-full bg-amber-500/20 px-2 py-0.5 font-medium hover:bg-amber-500/30"
-                >
-                  Use {e}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => resolveNearMiss(nearMiss.tag)}
-                className="rounded-full px-2 py-0.5 hover:bg-amber-500/20"
-              >
-                Keep {nearMiss.tag}
-              </button>
-            </div>
-          </div>
-        )}
-        <div className="mt-1.5">
-          <TagAssist
-            tagsText={draft}
-            originalTags={tags}
-            onComplete={(next) => setDraft(next)}
-            extraVocab={vocabulary}
-          />
-        </div>
+        <TagEditor
+          key={card?.rootId ?? 'none'}
+          tags={card?.tags ?? []}
+          onChange={saveTags}
+          vocabulary={vocabulary}
+          proposals={card?.summary?.proposedTags ?? []}
+          disabled={!card}
+        />
 
         {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
       </div>

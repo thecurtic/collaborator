@@ -16,6 +16,7 @@ import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Transcript } from '@/domain/models';
+import { TagEditor } from '@/features/notes/TagEditor';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
@@ -44,10 +45,15 @@ function fmtDate(sqlUtc: string | null): string | null {
 /** One finished/failed/running video-transcription job, opened from the list. */
 function TranscriptDetail({
   id,
+  vocabulary,
   onBack,
+  onTagsSaved,
 }: {
   id: number;
+  /** Tags in use beyond the vault, for completion and near-miss checks. */
+  vocabulary: string[];
   onBack: () => void;
+  onTagsSaved: (t: Transcript) => void;
 }) {
   const [item, setItem] = useState<Transcript | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +85,24 @@ function TranscriptDetail({
     },
     [],
   );
+
+  // Tags save as they change (optimistic, restored on failure).
+  const saveTags = (next: string[]) => {
+    if (!item) return;
+    const prev = item;
+    setItem({ ...item, tags: next });
+    setError(null);
+    api
+      .setTranscriptTags(item.id, next)
+      .then((t) => {
+        setItem((cur) => (cur ? { ...cur, tags: t.tags } : cur));
+        onTagsSaved(t);
+      })
+      .catch((err) => {
+        setItem(prev);
+        setError(errMessage(err));
+      });
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -148,6 +172,11 @@ function TranscriptDetail({
                   {item.channel}
                 </p>
               )}
+              {/* Optional tags (UX doc, Transcripts): `project` plus a name
+                  puts this transcript on that project's shelf. */}
+              <div className="mb-4 border-b border-border pb-3">
+                <TagEditor tags={item.tags} onChange={saveTags} vocabulary={vocabulary} />
+              </div>
               {item.status === 'processing' && (
                 <p className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -196,6 +225,7 @@ export function TranscriptsView({
   initialId?: number | null;
 }) {
   const [items, setItems] = useState<Transcript[] | null>(null);
+  const [vocabulary, setVocabulary] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(initialId);
   useEffect(() => {
@@ -213,12 +243,12 @@ export function TranscriptsView({
   const load = useCallback(async () => {
     setError(null);
     try {
-      setItems(
-        await api.listTranscripts({
-          channel: channel ?? undefined,
-          q: debounced,
-        }),
-      );
+      const list = await api.listTranscripts({
+        channel: channel ?? undefined,
+        q: debounced,
+      });
+      setItems(list.items);
+      setVocabulary(list.vocabulary);
     } catch (err) {
       setError(errMessage(err));
       setItems([]);
@@ -252,7 +282,15 @@ export function TranscriptsView({
 
   if (selectedId != null) {
     return (
-      <TranscriptDetail id={selectedId} onBack={() => setSelectedId(null)} />
+      <TranscriptDetail
+        id={selectedId}
+        vocabulary={vocabulary}
+        onBack={() => setSelectedId(null)}
+        onTagsSaved={(t) => {
+          setItems((prev) => prev?.map((x) => (x.id === t.id ? { ...x, tags: t.tags } : x)) ?? prev);
+          setVocabulary((v) => [...new Set([...v, ...t.tags])]);
+        }}
+      />
     );
   }
 
@@ -381,6 +419,11 @@ export function TranscriptsView({
                           .trim()}
                       </span>
                     </span>
+                    {t.tags.length > 0 && (
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        {t.tags.join(', ')}
+                      </span>
+                    )}
                     {t.snippet && (
                       <span className="mt-0.5 line-clamp-2 block text-xs italic text-muted-foreground">
                         …{t.snippet}…

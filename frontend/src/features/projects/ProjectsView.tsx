@@ -3,6 +3,7 @@ import {
   ChevronRight,
   EyeOff,
   FileText,
+  FileVideo,
   FolderKanban,
   Loader2,
   MessageSquare,
@@ -12,7 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { ActionSheet, type SheetAction } from '@/components/ActionSheet';
 import { Button } from '@/components/ui/button';
-import { rootLabel, type NoteMeta, type TreeNode } from '@/domain/models';
+import { rootLabel, type NoteMeta, type Transcript, type TreeNode } from '@/domain/models';
 import { useLongPress } from '@/lib/useLongPress';
 import { cn } from '@/lib/utils';
 import {
@@ -26,15 +27,16 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
 }
 
-/** A project member, note or chat, with what the shelves need to show it. */
+/** A project member (note, chat or transcript) with what the shelves need. */
 interface Member extends ProjectItem {
-  kind: 'note' | 'chat';
+  kind: 'note' | 'chat' | 'transcript';
   title: string;
   note?: NoteMeta;
   root?: TreeNode;
+  transcriptId?: number;
 }
 
-function membersFrom(notes: NoteMeta[], roots: TreeNode[]): Member[] {
+function membersFrom(notes: NoteMeta[], roots: TreeNode[], transcripts: Transcript[]): Member[] {
   return [
     ...notes.map((n) => ({ key: `note:${n.filename}`, tags: n.tags, kind: 'note' as const,
                            title: n.title, note: n })),
@@ -42,14 +44,17 @@ function membersFrom(notes: NoteMeta[], roots: TreeNode[]): Member[] {
       .filter((r) => r.chatTags.includes('project'))
       .map((r) => ({ key: `chat:${r.id}`, tags: r.chatTags, kind: 'chat' as const,
                      title: rootLabel(r), root: r })),
+    ...transcripts.map((t) => ({ key: `transcript:${t.id}`, tags: t.tags,
+                                 kind: 'transcript' as const, title: t.title ?? t.url,
+                                 transcriptId: t.id })),
   ];
 }
 
 function counts(items: Member[]): string {
-  const notes = items.filter((i) => i.kind === 'note').length;
-  const chats = items.length - notes;
-  const part = (n: number, w: string) => (n ? `${n} ${w}${n === 1 ? '' : 's'}` : null);
-  return [part(notes, 'note'), part(chats, 'chat')].filter(Boolean).join(' · ');
+  const n = (kind: Member['kind']) => items.filter((i) => i.kind === kind).length;
+  const part = (c: number, w: string) => (c ? `${c} ${w}${c === 1 ? '' : 's'}` : null);
+  return [part(n('note'), 'note'), part(n('chat'), 'chat'), part(n('transcript'), 'transcript')]
+    .filter(Boolean).join(' · ');
 }
 
 function ProjectRow({ name, items, onOpen, onMenu }: {
@@ -99,8 +104,8 @@ function Shelf({ label, icon: Icon, items, onOpen }: {
 
 /**
  * Projects (UX doc, Projects): a project is whatever wears `project` plus one
- * name tag — notes and chats alike — and every project gets the same base
- * view: shelves of its notes and chats, filtered by kind tags (bug,
+ * name tag — notes, chats and transcripts alike — and every project gets the
+ * same base view: a shelf for each, filtered by kind tags (bug,
  * feature). Names are inferred by exclusivity; misfires are fixed with an
  * override (hold a project: not a name; hold a kind tag: treat as a name),
  * listed in Settings. Nothing is retagged.
@@ -109,13 +114,16 @@ export function ProjectsView({
   roots,
   onOpenNote,
   onOpenChat,
+  onOpenTranscript,
 }: {
   /** Conversation roots (their chat tags place chats in projects). */
   roots: TreeNode[];
   onOpenNote: (title: string) => void;
   onOpenChat: (root: TreeNode) => void;
+  onOpenTranscript: (id: number) => void;
 }) {
   const [notes, setNotes] = useState<NoteMeta[] | null>(null);
+  const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [overrides, setOverrides] = useState<NameOverrides>({ pinned: [], ignored: [] });
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -124,10 +132,12 @@ export function ProjectsView({
 
   const load = useCallback(() => {
     setError(null);
-    Promise.all([api.listNotes('project'), api.getProjectOverrides()])
-      .then(([n, o]) => {
+    Promise.all([api.listNotes('project'), api.getProjectOverrides(),
+                 api.listTranscripts({ tag: 'project' })])
+      .then(([n, o, t]) => {
         setNotes(n);
         setOverrides(o);
+        setTranscripts(t.items);
       })
       .catch((err) => {
         setError(errMessage(err));
@@ -137,7 +147,8 @@ export function ProjectsView({
 
   useEffect(() => load(), [load]);
 
-  const members = useMemo(() => membersFrom(notes ?? [], roots), [notes, roots]);
+  const members = useMemo(() => membersFrom(notes ?? [], roots, transcripts),
+    [notes, roots, transcripts]);
   const inference = useMemo(() => inferProjects(members, overrides), [members, overrides]);
 
   const saveOverrides = (next: NameOverrides) => {
@@ -158,6 +169,7 @@ export function ProjectsView({
   const openMember = (m: Member) => {
     if (m.kind === 'note' && m.note) onOpenNote(m.note.title);
     else if (m.root) onOpenChat(m.root);
+    else if (m.transcriptId != null) onOpenTranscript(m.transcriptId);
   };
 
   if (notes === null) {
@@ -204,6 +216,8 @@ export function ProjectsView({
                      onOpen={openMember} />
               <Shelf label="Chats" icon={MessageSquare} items={scope.filter((m) => m.kind === 'chat')}
                      onOpen={openMember} />
+              <Shelf label="Transcripts" icon={FileVideo}
+                     items={scope.filter((m) => m.kind === 'transcript')} onOpen={openMember} />
             </>
           )}
         </div>
@@ -225,7 +239,7 @@ export function ProjectsView({
             <FolderKanban className="mx-auto mb-3 h-8 w-8 opacity-40" />
             <p className="text-lg font-medium text-foreground">No projects yet</p>
             <p className="mt-1 px-8 text-sm">
-              Tag notes or chats with “project” plus the project's name — it appears here on its own.
+              Tag notes, chats or transcripts with “project” plus the project's name — it appears here on its own.
             </p>
           </div>
         ) : (
@@ -252,7 +266,8 @@ export function ProjectsView({
                       <button type="button" onClick={() => openMember(m)}
                               className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-muted/60">
                         {m.kind === 'note' ? <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          : <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" />}
+                          : m.kind === 'chat' ? <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          : <FileVideo className="h-4 w-4 shrink-0 text-muted-foreground" />}
                         <span className="min-w-0 flex-1 truncate text-sm">{m.title}</span>
                       </button>
                     </li>

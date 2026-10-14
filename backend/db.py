@@ -240,6 +240,10 @@ def ensure_conversation_schema(conn) -> None:
         cursor.execute("ALTER TABLE transcripts ADD COLUMN channel TEXT")
     if "video_key" not in tr_cols:
         cursor.execute("ALTER TABLE transcripts ADD COLUMN video_key TEXT")
+    # tags: optional, like everything else (UX doc, Transcripts) — one
+    # tagged `project` + a name joins that project. JSON list, NULL = none.
+    if "tags" not in tr_cols:
+        cursor.execute("ALTER TABLE transcripts ADD COLUMN tags TEXT")
     from video_urls import canonical_video
     for (tid, url) in cursor.execute(
             "SELECT id, url FROM transcripts WHERE video_key IS NULL").fetchall():
@@ -1227,8 +1231,14 @@ def delete_scratch(db, scratch_id: int) -> Optional[dict]:
 
 TRANSCRIPT_COLUMNS = ["id", "url", "title", "duration_s", "status", "text",
                       "error", "created_at", "finished_at", "channel",
-                      "video_key"]
+                      "video_key", "tags"]
 _TRANSCRIPT_COLS = ", ".join(TRANSCRIPT_COLUMNS)
+
+
+def _transcript_row(row) -> dict:
+    d = dict(zip(TRANSCRIPT_COLUMNS, row))
+    d["tags"] = _parse_tags(d.get("tags"))
+    return d
 
 
 def create_transcript(db, url: str, title: Optional[str],
@@ -1259,7 +1269,7 @@ def get_transcript(db, transcript_id: int) -> Optional[dict]:
     row = db.cursor().execute(
         f"SELECT {_TRANSCRIPT_COLS} FROM transcripts WHERE id = ?",
         (transcript_id,)).fetchone()
-    return dict(zip(TRANSCRIPT_COLUMNS, row)) if row else None
+    return _transcript_row(row) if row else None
 
 
 def get_transcript_by_url(db, url: str) -> Optional[dict]:
@@ -1270,29 +1280,35 @@ def get_transcript_by_url(db, url: str) -> Optional[dict]:
     row = db.cursor().execute(
         f"SELECT {_TRANSCRIPT_COLS} FROM transcripts WHERE video_key = ? "
         "ORDER BY id DESC LIMIT 1", (canonical_video(url)[0],)).fetchone()
-    return dict(zip(TRANSCRIPT_COLUMNS, row)) if row else None
+    return _transcript_row(row) if row else None
 
 
 def search_transcripts(db, query: Optional[str] = None,
                        channel: Optional[str] = None,
-                       limit: Optional[int] = None) -> List[dict]:
+                       limit: Optional[int] = None,
+                       tag: Optional[str] = None) -> List[dict]:
     """The transcript catalogue, newest first: metadata only, never the full
     text (read_transcript pages that by id). `query` keyword-matches title,
-    channel and full text (all terms) and adds a snippet around the first
-    hit; `channel` keeps only that channel (case-insensitive substring).
+    channel, tags and full text (all terms) and adds a snippet around the
+    first hit; `channel` keeps only that channel (case-insensitive
+    substring); `tag` keeps only transcripts wearing that exact tag.
     Errored rows are included with their error, so failures are visible."""
     rows = db.cursor().execute(
         f"SELECT {_TRANSCRIPT_COLS} FROM transcripts ORDER BY id DESC").fetchall()
     out = []
     terms = [t for t in (query or "").lower().split() if len(t) >= 2]
     want_channel = (channel or "").strip().lower()
+    want_tag = (tag or "").strip().lower()
     for row in rows:
-        d = dict(zip(TRANSCRIPT_COLUMNS, row))
+        d = _transcript_row(row)
         text = d.pop("text") or ""
         d.pop("video_key", None)
         if want_channel and want_channel not in (d.get("channel") or "").lower():
             continue
-        haystack = f"{d.get('title') or ''}\n{d.get('channel') or ''}\n{text}".lower()
+        if want_tag and want_tag not in d["tags"]:
+            continue
+        haystack = (f"{d.get('title') or ''}\n{d.get('channel') or ''}\n"
+                    f"{' '.join(d['tags'])}\n{text}").lower()
         if terms and not all(t in haystack for t in terms):
             continue
         if terms:
@@ -1312,10 +1328,29 @@ def list_transcripts(db) -> List[dict]:
         f"SELECT {_TRANSCRIPT_COLS} FROM transcripts ORDER BY id DESC").fetchall()
     out = []
     for row in rows:
-        d = dict(zip(TRANSCRIPT_COLUMNS, row))
+        d = _transcript_row(row)
         d["chars"] = len(d.pop("text") or "")   # listing omits the body
         d.pop("video_key", None)
         out.append(d)
+    return out
+
+
+def set_transcript_tags(db, transcript_id: int, tags: List[str]) -> bool:
+    """Replace a transcript's tags (caller normalizes; [] clears). False if
+    there is no such transcript."""
+    cursor = db.cursor()
+    cursor.execute("UPDATE transcripts SET tags = ? WHERE id = ?",
+                   (_json.dumps(tags) if tags else None, transcript_id))
+    db.commit()
+    return cursor.rowcount > 0
+
+
+def all_transcript_tags(db) -> List[str]:
+    """Every tag worn by any transcript (for the shared tag vocabulary)."""
+    out: List[str] = []
+    for (raw,) in db.cursor().execute(
+            "SELECT tags FROM transcripts WHERE tags IS NOT NULL").fetchall():
+        out.extend(_parse_tags(raw))
     return out
 
 

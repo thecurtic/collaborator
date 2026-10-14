@@ -20,6 +20,7 @@ import type {
   ModelsInfo,
   NoteFieldsPatch,
   Transcript,
+  TranscriptList,
   TtsVoices,
   TurnsPage,
   WebSearch,
@@ -544,10 +545,13 @@ export interface CollaboratorApi {
 
   /**
    * Background video-transcription jobs (b23d8ea), newest first. Optional
-   * filters: `channel` (substring) and `q` (keywords over title, channel and
-   * full text; matches carry a snippet).
+   * filters: `channel` (substring), `q` (keywords over title, channel, tags
+   * and full text; matches carry a snippet) and `tag` (exact). Comes with
+   * the tag vocabulary in use, for the tag editor.
    */
-  listTranscripts(filter?: { channel?: string; q?: string }): Promise<Transcript[]>;
+  listTranscripts(filter?: { channel?: string; q?: string; tag?: string }): Promise<TranscriptList>;
+  /** Replace a transcript's tags ([] clears); returns it (no text). */
+  setTranscriptTags(id: number, tags: string[]): Promise<Transcript>;
   /** One job including its full text. */
   getTranscript(id: number): Promise<Transcript>;
   /** Delete a stored transcript (row only; the source video is remote). */
@@ -1089,15 +1093,28 @@ class HttpCollaboratorApi implements CollaboratorApi {
   async listTranscripts(filter?: {
     channel?: string;
     q?: string;
-  }): Promise<Transcript[]> {
+    tag?: string;
+  }): Promise<TranscriptList> {
     const params = new URLSearchParams();
     if (filter?.channel) params.set('channel', filter.channel);
     if (filter?.q?.trim()) params.set('q', filter.q.trim());
+    if (filter?.tag) params.set('tag', filter.tag);
     const qs = params.toString();
     const res = await request<ApiTranscriptsResponse>(
       `/api/transcripts${qs ? `?${qs}` : ''}`,
     );
-    return (res.transcripts ?? []).map(toTranscript);
+    return {
+      items: (res.transcripts ?? []).map(toTranscript),
+      vocabulary: res.vocabulary ?? [],
+    };
+  }
+
+  async setTranscriptTags(id: number, tags: string[]): Promise<Transcript> {
+    const res = await request<ApiTranscriptResponse>(`/api/transcripts/${id}/tags`, {
+      method: 'PUT',
+      body: JSON.stringify({ tags }),
+    });
+    return toTranscript(res.transcript);
   }
 
   async getTranscript(id: number): Promise<Transcript> {
