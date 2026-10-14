@@ -1,15 +1,9 @@
-"""Nostr Wallet Connect (NIP-47) transport + L402 paid search (Lethe).
+"""Nostr Wallet Connect (NIP-47) transport: the dormant wallet provider.
 
 - The NWC client: one NIP-47 request at a time (`nwc_call`) over the user's
   connection, plus `_lookup_payment` for recovering a timed-out payment.
   wallet.py's `nwc` provider uses these; the wallet's ledger and caps live
   there. NWC is the dormant alternative to LNbits (UX doc, Money).
-- lethe_search: query an Aperture-fronted Lethe instance (paid vertical
-  search). Unauthenticated requests come back HTTP 402 with an L402 challenge
-  (macaroon + Lightning invoice); the challenge is parked in the DB and the
-  invoice handed to the model. When the wallet tool later settles that exact
-  invoice, the preimage + parked macaroon are minted into a reusable L402
-  token and the retried search goes through.
 - BOLT11 helpers (amount, payment hash) shared by the wallet.
 
 NWC connections are PER USER, keyed by identity hash (the directory name
@@ -33,7 +27,6 @@ import json
 import os
 import re
 import secrets
-import sqlite3
 import time
 from urllib.parse import urlparse, parse_qs
 
@@ -64,10 +57,6 @@ def _nwc_cfg() -> dict:
     return (get_config().get("tools", {}) or {}).get("nwc") or {}
 
 
-def _lethe_cfg() -> dict:
-    return (get_config().get("tools", {}) or {}).get("lethe") or {}
-
-
 def user_key_for_db(db_path: str, auth_enabled: bool) -> str:
     """The per-user key for NWC config lookup.
 
@@ -86,10 +75,6 @@ def connection_for(user_key: str) -> str:
 
 def nwc_configured(user_key: str) -> bool:
     return bool(connection_for(user_key))
-
-
-def lethe_configured() -> bool:
-    return bool((_lethe_cfg().get("url") or "").strip())
 
 
 # --- NWC connection URI -----------------------------------------------------
@@ -521,45 +506,7 @@ def bolt11_payment_hash(invoice: str):
     return None
 
 
-# --- L402 storage (per-user conversation DB) --------------------------------
-
-
-def _ensure_schema(conn) -> None:
-    """Lethe's L402 storage. (Spends are recorded by wallet.py's ledger; the
-    old nwc_spends / nwc_attempts tables in existing DBs are left alone.)"""
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS l402_challenges (
-            invoice TEXT PRIMARY KEY,
-            macaroon TEXT NOT NULL,
-            host TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS l402_tokens (
-            host TEXT PRIMARY KEY,
-            macaroon TEXT NOT NULL,
-            preimage TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-    """)
-    conn.commit()
-
-
-def _mint_l402_if_challenge(conn, inv: str, preimage) -> str:
-    """Settling a parked challenge mints the reusable access token. Returns a
-    model-facing note, or None when this invoice wasn't an L402 challenge."""
-    row = conn.execute("SELECT macaroon, host FROM l402_challenges "
-                       "WHERE invoice = ?", (inv,)).fetchone()
-    if not row or not preimage:
-        return None
-    macaroon, host = row
-    conn.execute("INSERT OR REPLACE INTO l402_tokens "
-                 "(host, macaroon, preimage, created_at) VALUES (?, ?, ?, ?)",
-                 (host, macaroon, preimage,
-                  time.strftime("%Y-%m-%dT%H:%M:%S")))
-    conn.execute("DELETE FROM l402_challenges WHERE invoice = ?", (inv,))
-    conn.commit()
-    return (f"access token minted for {host} — call lethe_search again to "
-            "run the paid search")
+# --- payment lookup (recovering a timed-out payment) -----------------------
 
 
 def _lookup_payment(uri: str, inv: str, payment_hash, timeout: float):
@@ -600,116 +547,3 @@ def _lookup_payment(uri: str, inv: str, payment_hash, timeout: float):
             if preimage or tx.get("settled_at"):
                 return "settled", preimage, tx.get("fees_paid")
     return "unpaid", None, None
-
-
-# --- the Lethe tool ---------------------------------------------------------
-
-
-_L402_CHALLENGE_RE = re.compile(
-    r'(?:L402|LSAT)\s+macaroon="([^"]+)",\s*invoice="([^"]+)"')
-
-
-def lethe_search(db_path: str, query: str, vertical: str = None,
-                 mode: str = None, limit: int = None) -> dict:
-    """Search the Aperture-fronted Lethe API, driving the L402 loop.
-
-    With a stored token: authorized request. Without one (or when the token is
-    rejected): park the 402 challenge and hand the invoice to the model, which
-    pays it with the wallet tool and retries.
-    """
-    import requests
-    cfg = _lethe_cfg()
-    base = (cfg.get("url") or "").strip().rstrip("/")
-    if not base:
-        return {"error": "lethe search is not configured (tools.lethe.url)"}
-    if not (query or "").strip():
-        return {"error": "query is required"}
-    vertical = (vertical or cfg.get("vertical") or "cybersec").strip()
-    if not re.fullmatch(r"[a-z0-9_-]+", vertical):
-        return {"error": f"invalid vertical {vertical!r}"}
-    max_results = cfg.get("results", 8)
-    try:
-        limit = max(1, min(int(limit), max_results)) if limit else max_results
-    except (TypeError, ValueError):
-        limit = max_results
-    host = urlparse(base).netloc
-    url = f"{base}/v1/{vertical}/search"
-    params = {"q": query, "limit": limit}
-    if mode in ("hybrid", "lexical", "semantic"):
-        params["mode"] = mode
-
-    conn = sqlite3.connect(db_path)
-    try:
-        _ensure_schema(conn)
-        token = conn.execute("SELECT macaroon, preimage FROM l402_tokens "
-                             "WHERE host = ?", (host,)).fetchone()
-        headers = {}
-        if token:
-            headers["Authorization"] = f"L402 {token[0]}:{token[1]}"
-        try:
-            r = requests.get(url, params=params, headers=headers,
-                             timeout=cfg.get("timeout", 20))
-        except requests.RequestException as e:
-            return {"error": f"lethe request failed: {e}"}
-
-        if r.status_code == 402:
-            challenge = _L402_CHALLENGE_RE.search(
-                r.headers.get("WWW-Authenticate", ""))
-            if not challenge:
-                return {"error": "got HTTP 402 but no parseable L402 "
-                                 "challenge in WWW-Authenticate"}
-            macaroon, invoice = challenge.group(1), challenge.group(2).lower()
-            if token:
-                # The stored token no longer opens the door; drop it.
-                conn.execute("DELETE FROM l402_tokens WHERE host = ?", (host,))
-            conn.execute("INSERT OR REPLACE INTO l402_challenges "
-                         "(invoice, macaroon, host, created_at) "
-                         "VALUES (?, ?, ?, ?)",
-                         (invoice, macaroon, host,
-                          time.strftime("%Y-%m-%dT%H:%M:%S")))
-            conn.commit()
-            try:
-                amount_msat = bolt11_amount_msat(invoice)
-            except NwcError:
-                amount_msat = None
-            return {"status": "payment_required",
-                    "amount_sats": (amount_msat // 1000)
-                    if amount_msat is not None else None,
-                    "invoice": invoice,
-                    "note": "access to this search requires an L402 payment: "
-                            "pay this exact invoice with the wallet tool "
-                            "(action pay_invoice), then call "
-                            "lethe_search again — the access token is minted "
-                            "automatically and reused for future searches"}
-
-        if r.status_code != 200:
-            return {"error": f"lethe returned HTTP {r.status_code}: "
-                             f"{r.text[:200]}"}
-        try:
-            data = r.json()
-        except ValueError:
-            return {"error": "lethe returned non-JSON"}
-    finally:
-        conn.close()
-
-    results = (data.get("results") or [])[:limit]
-    return {
-        "vertical": vertical, "query": query, "count": len(results),
-        "paid_access": bool(token),
-        # Each result carries a canonical public web URL (nvd.nist.gov,
-        # cwe.mitre.org, attack.mitre.org, …). "corpus" is just which internal
-        # index the doc came from — NOT a citation; never present it as the
-        # source. Cite the url.
-        "results": [{"title": x.get("title"), "snippet": x.get("snippet"),
-                     "url": x.get("url"), "corpus": x.get("source"),
-                     "id": x.get("id"), "rank": x.get("rank")}
-                    for x in results],
-        "instruction": (
-            "Present these results to the user NOW, in this reply — do not "
-            "stop or wait to be asked. For EACH result, give its title as a "
-            "markdown link to its url — [title](url) — followed by a one-line "
-            "gist from the snippet. The url is a real web page the user can "
-            "open; the link is the whole point. Ground every claim in the "
-            "snippet text; don't invent severity, exploitation status, or "
-            "CVE-chaining the snippet doesn't state."),
-    }

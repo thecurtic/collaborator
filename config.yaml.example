@@ -240,7 +240,7 @@ tools:
     read_logs: true           # agent can read its own recent server logs (ring buffer)
     wallet: true              # self-gating: active only when the requesting user has a
                               # wallet under the selected tools.wallet.provider
-    lethe_search: true        # self-gating: active only when tools.lethe.url is set
+    ditta_search: true        # self-gating: active only when tools.ditta.url + pubkey are set
   transcribe_video:
     sync_max_minutes: 10      # videos up to this long transcribe within the turn
     max_minutes: 240          # hard cap; longer videos are refused
@@ -329,11 +329,15 @@ tools:
     timeout: 30               # seconds to wait for the wallet's NIP-47 response
     encryption: "auto"        # auto (read the wallet's info event: nip44_v2 when
                               # advertised, else nip04) | nip44 | nip04 to pin one
-  lethe:                      # EXPERIMENTAL paid search (lethe_search tool): a Lethe
-    url: ""                   # vertical index behind an Aperture L402 proxy, e.g.
-                              # "https://lethe.example.com". Empty = tool disabled.
-                              # 402 challenges are settled via the wallet tool; the minted
-                              # L402 token is stored per user and reused.
-    vertical: "cybersec"      # default vertical path segment (/v1/<vertical>/search)
-    results: 8                # max results returned to the model
-    timeout: 20
+  ditta:                      # DITTA federated search (ditta_search tool) via your broker
+    url: ""                   # the broker's base URL: a domain, an IP or an onion, e.g.
+                              # "https://<broker-host>". Empty = tool disabled.
+    pubkey: ""                # the broker's signing pubkey (64 hex, from its GET /):
+                              # a 402 challenge signed by any other key is never paid
+    max_sats_per_query: 10    # per-query ceiling; the quote is checked before sending
+                              # and the invoice before paying (wallet caps apply too)
+    results: 10               # results asked for per query (1-50)
+    # proxy: "socks5h://<tor-host>:9050"   # needed for an onion broker; also routes
+                              # clearnet/VPN brokers through it. pip install requests[socks]
+    timeout: 30
+    onion_timeout: 90

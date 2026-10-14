@@ -46,6 +46,7 @@ import auth
 import notes_index
 import feed
 import recurrence
+import ditta
 import nwc
 import wallet
 import scratch
@@ -628,13 +629,13 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                "pay, to top the wallet up. A timeout is UNCONFIRMED, not "
                "failed — retry with the SAME invoice (the tool checks before "
                "it pays); never fetch a fresh invoice for the same purchase."),
-    "lethe_search": ("EXPERIMENTAL paid search against the user's Lethe "
-                     "vertical index (L402/Lightning-gated). If access isn't "
-                     "paid for yet it returns status=payment_required with an "
-                     "invoice — pay that exact invoice with wallet, then call "
-                     "this again; the access token is minted automatically and "
-                     "reused. Distinct from web_search (general web): Lethe is "
-                     "curated, domain-specific search."),
+    "ditta_search": ("Federated search through the user's DITTA broker: it "
+                     "routes the query to independent indexers and merges "
+                     "what they return. Paid per query from the wallet "
+                     "automatically, within a per-query cap — you never "
+                     "handle an invoice. Distinct from web_search; reach for "
+                     "it when the user asks for DITTA or when its indexers "
+                     "fit the question."),
 }
 
 
@@ -1056,21 +1057,16 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                          "description": "create_invoice only: the invoice's "
                                         "description"}},
                 "required": []}}})
-    # lethe_search is self-gating: present only when tools.lethe.url is set.
-    if avail.get("lethe_search", True) and nwc.lethe_configured():
+    # ditta_search is self-gating: needs the broker's url + pinned pubkey.
+    # A broker that charges also needs the user's wallet (checked at call).
+    if avail.get("ditta_search", True) and ditta.configured():
         schemas.append({"type": "function", "function": {
-            "name": "lethe_search",
-            "description": descs["lethe_search"],
+            "name": "ditta_search",
+            "description": descs["ditta_search"],
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "what to search for"},
-                "vertical": {"type": "string",
-                             "description": "index vertical (default from "
-                                            "config, e.g. cybersec)"},
-                "mode": {"type": "string",
-                         "enum": ["hybrid", "lexical", "semantic"],
-                         "description": "retrieval strategy (default hybrid)"},
-                "limit": {"type": "integer",
-                          "description": "max results (capped by config)"}},
+                "n": {"type": "integer",
+                      "description": "how many results (default from config)"}},
                 "required": ["query"]}}})
 
     def execute(name, args):
@@ -1470,11 +1466,10 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 action=args.get("action") or "get_balance",
                 invoice=args.get("invoice"), reason=args.get("reason"),
                 amount_sats=args.get("amount_sats"), memo=args.get("memo")))
-        if name == "lethe_search":
-            return json.dumps(nwc.lethe_search(
-                db_path, args.get("query") or "",
-                vertical=args.get("vertical"), mode=args.get("mode"),
-                limit=args.get("limit")))
+        if name == "ditta_search":
+            return json.dumps(ditta.ditta_search(
+                db_path, wallet_user_key, args.get("query") or "",
+                n=args.get("n")))
         return json.dumps({"error": f"unknown tool {name}"})
 
     return schemas, execute, state

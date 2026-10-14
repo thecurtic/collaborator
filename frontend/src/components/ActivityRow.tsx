@@ -12,9 +12,11 @@ import {
   Loader2,
   NotebookPen,
   NotebookText,
+  Network,
   ScrollText,
   Wrench,
   X,
+  Zap,
 } from 'lucide-react';
 import type { ToolActivity } from '@/domain/models';
 
@@ -33,6 +35,8 @@ export function toolIcon(tool: string) {
   if (tool === 'calculate') return Calculator;
   if (tool === 'git_read') return FolderGit2;
   if (tool === 'transcribe_video') return FileVideo;
+  if (tool === 'ditta_search') return Network;
+  if (tool === 'wallet') return Zap;
   return Wrench;
 }
 

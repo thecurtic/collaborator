@@ -509,13 +509,7 @@ def wallet_tool(db_path: str, user_key: str, action: str = "get_balance",
     try:
         out["spent_today_sats"] = spent_today_msat(
             conn, provider_for(user_key).name) // 1000
-        # Settling a parked Lethe challenge mints its reusable token.
-        nwc._ensure_schema(conn)
-        l402 = nwc._mint_l402_if_challenge(conn, _normalize_invoice(invoice),
-                                           res.get("preimage"))
     finally:
         conn.close()
     out["daily_cap_sats"] = _caps()[1] // 1000
-    if l402:
-        out["l402"] = l402
     return out

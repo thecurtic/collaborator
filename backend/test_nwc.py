@@ -1,5 +1,5 @@
-"""Tests for nwc (NIP-47 wallet client, L402 loop with Lethe search) and the
-executor wiring in main. The wallet's ledger and caps: test_wallet.py.
+"""Tests for nwc (the NIP-47 wallet client) and the wallet tool's executor
+wiring in main. The wallet's ledger and caps: test_wallet.py.
 
 Crypto tests need coincurve + cryptography (skipped when absent); nothing
 here touches the network — the relay roundtrip and HTTP are mocked.
@@ -342,133 +342,20 @@ def test_config_pin_skips_probe(monkeypatch, tmp_path):
     print("✓ pinned encryption goes straight to the request, no probe")
 
 
-# --- the L402 loop (HTTP + wallet mocked) ----------------------------------------
-
-class _Resp:
-    def __init__(self, status_code, headers=None, payload=None):
-        self.status_code = status_code
-        self.headers = headers or {}
-        self._payload = payload
-        self.text = json.dumps(payload) if payload is not None else ""
-    def json(self):
-        if self._payload is None:
-            raise ValueError("no json")
-        return self._payload
-
-
-def test_l402_loop_end_to_end(monkeypatch):
-    """402 challenge -> parked -> paid via the wallet -> token minted -> results."""
-    import requests
-    _nwc_settings(monkeypatch)
-    wcfg = config.get_config()["tools"].setdefault("wallet", {})
-    monkeypatch.setitem(wcfg, "provider", "nwc")
-    monkeypatch.setitem(wcfg, "max_sats_per_payment", 100)
-    monkeypatch.setitem(wcfg, "max_sats_per_day", 500)
-    lcfg = config.get_config()["tools"].setdefault("lethe", {})
-    monkeypatch.setitem(lcfg, "url", "https://lethe.example.com")
-    monkeypatch.setitem(lcfg, "results", 8)
-    dbp = _fresh_db()
-    invoice = "lnbc210n1p...challenge"
-    seen = []
-
-    def fake_get(url, params=None, headers=None, timeout=None):
-        seen.append({"url": url, "params": params, "headers": headers or {}})
-        if "Authorization" not in (headers or {}):
-            return _Resp(402, headers={
-                "WWW-Authenticate":
-                    f'L402 macaroon="MAC123", invoice="{invoice}"'})
-        assert headers["Authorization"] == f"L402 MAC123:{'ef' * 32}"
-        return _Resp(200, payload={"results": [
-            {"id": "kev:CVE-2024-1", "title": "Known exploited vuln",
-             "snippet": "…", "url": "https://cisa.gov/x", "source": "kev",
-             "rank": 1, "scores": {"debug": 1}}]})
-
-    monkeypatch.setattr(requests, "get", fake_get)
-
-    # 1. Unpaid search: challenge parked, invoice handed to the model.
-    first = nwc.lethe_search(dbp, "actively exploited kernel bugs")
-    assert first["status"] == "payment_required"
-    assert first["invoice"] == invoice.lower() and first["amount_sats"] == 21
-    assert "wallet tool" in first["note"]
-
-    # 2. Paying that exact invoice mints the token from the parked macaroon.
-    monkeypatch.setattr(nwc, "nwc_call", lambda uri, method, params, timeout=30:
-                        {"preimage": "ef" * 32, "fees_paid": 21})
-    paid = wallet.wallet_tool(dbp, "default", action="pay_invoice",
-                              invoice=invoice, reason="lethe access")
-    assert paid["status"] == "paid" and "lethe.example.com" in paid["l402"]
-    conn = sqlite3.connect(dbp)
-    assert conn.execute("SELECT COUNT(*) FROM l402_challenges").fetchone()[0] == 0
-    mac = conn.execute("SELECT macaroon FROM l402_tokens").fetchone()[0]
-    conn.close()
-    assert mac == "MAC123"
-
-    # 3. Retried search sends the Authorization header and gets results.
-    second = nwc.lethe_search(dbp, "actively exploited kernel bugs")
-    assert second["count"] == 1 and second["paid_access"] is True
-    item = second["results"][0]
-    assert item["url"] == "https://cisa.gov/x"       # the public link is forwarded
-    assert item["corpus"] == "kev"                   # index name, renamed from 'source'
-    assert "source" not in item and "scores" not in item   # not a citation; debug dropped
-    # The result tells the model to present links now, without being re-asked.
-    assert "markdown link" in second["instruction"]
-    assert "do not" in second["instruction"].lower()
-    assert seen[-1]["params"]["q"] == "actively exploited kernel bugs"
-    print("✓ L402 loop: 402 -> pay -> minted token -> authorized search")
-
-
-def test_lethe_rejected_token_reparks(monkeypatch):
-    import requests
-    lcfg = config.get_config()["tools"].setdefault("lethe", {})
-    monkeypatch.setitem(lcfg, "url", "https://lethe.example.com")
-    dbp = _fresh_db()
-    conn = sqlite3.connect(dbp)
-    nwc._ensure_schema(conn)
-    conn.execute("INSERT INTO l402_tokens VALUES (?, ?, ?, ?)",
-                 ("lethe.example.com", "STALE", "00" * 32, "2026-01-01"))
-    conn.commit(); conn.close()
-
-    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(402, headers={
-        "WWW-Authenticate": 'LSAT macaroon="NEW", invoice="lnbc10n1p...z"'}))
-    out = nwc.lethe_search(dbp, "x")
-    assert out["status"] == "payment_required"       # legacy LSAT header parses too
-    conn = sqlite3.connect(dbp)
-    assert conn.execute("SELECT COUNT(*) FROM l402_tokens").fetchone()[0] == 0
-    assert conn.execute("SELECT macaroon FROM l402_challenges").fetchone()[0] == "NEW"
-    conn.close()
-    print("✓ rejected/stale token is dropped and the new challenge parked")
-
-
-def test_lethe_input_validation(monkeypatch):
-    lcfg = config.get_config()["tools"].setdefault("lethe", {})
-    monkeypatch.setitem(lcfg, "url", "https://lethe.example.com")
-    dbp = _fresh_db()
-    assert "query is required" in nwc.lethe_search(dbp, "  ")["error"]
-    assert "invalid vertical" in nwc.lethe_search(dbp, "x",
-                                                  vertical="../etc")["error"]
-    monkeypatch.setitem(lcfg, "url", "")
-    assert "not configured" in nwc.lethe_search(dbp, "x")["error"]
-    print("✓ lethe_search input validation + self-gating error")
-
-
 # --- executor wiring -------------------------------------------------------------
 
 def test_build_tools_gating_and_dispatch(monkeypatch):
     dbp = os.environ["DB_PATH"]
-    # Unconfigured: neither tool registers.
+    # Unconfigured: the tool doesn't register.
     tools_cfg = config.get_config().setdefault("tools", {})
     monkeypatch.setitem(tools_cfg, "nwc", {})
     monkeypatch.setitem(tools_cfg, "wallet", {"provider": "nwc"})
-    monkeypatch.setitem(tools_cfg, "lethe", {})
     schemas, _, _ = main._build_tools(dbp)
-    names = {s["function"]["name"] for s in schemas}
-    assert "wallet" not in names and "lethe_search" not in names
+    assert "wallet" not in {s["function"]["name"] for s in schemas}
 
     monkeypatch.setitem(tools_cfg, "nwc", {"connections": {"default": VALID_URI}})
-    monkeypatch.setitem(tools_cfg, "lethe", {"url": "https://lethe.example.com"})
     schemas, execute, _ = main._build_tools(dbp)
-    names = {s["function"]["name"] for s in schemas}
-    assert {"wallet", "lethe_search"} <= names
+    assert "wallet" in {s["function"]["name"] for s in schemas}
 
     monkeypatch.setattr(wallet, "wallet_tool",
                         lambda dbp, key, action="get_balance", invoice=None,
@@ -477,10 +364,4 @@ def test_build_tools_gating_and_dispatch(monkeypatch):
     out = json.loads(execute("wallet", {"action": "pay_invoice",
                                         "invoice": "lnbc1u1p..."}))
     assert out["echo"] == ["default", "pay_invoice", "lnbc1u1p..."]
-
-    monkeypatch.setattr(nwc, "lethe_search",
-                        lambda dbp, q, vertical=None, mode=None, limit=None:
-                        {"echo": q})
-    out = json.loads(execute("lethe_search", {"query": "cve"}))
-    assert out["echo"] == "cve"
     print("✓ executor: self-gating registration + argument dispatch")

@@ -339,6 +339,7 @@ def load_config() -> dict:
                 "read_transcript": True,   # read one stored transcript by id
                 "read_logs": True,     # agent can read its own recent server logs
                 "wallet": True,        # self-gating: needs a wallet for the user
+                "ditta_search": True,  # self-gating: needs tools.ditta.url + pubkey
             },
             "git": {
                 # Read-only forge access (Gitea; GitHub API-compatible for these
@@ -359,6 +360,19 @@ def load_config() -> dict:
                 "low_balance_sats": 0,    # >0: get_balance flags a top-up below it
                 "timeout": 30,
                 "lnbits": {"url": None, "wallets": {}},
+            },
+            "ditta": {
+                # The user's DITTA broker (ditta.py). url may be a domain, an
+                # IP or an onion (onion needs proxy); pubkey pins the broker's
+                # signing key, so a challenge signed by anyone else is never
+                # paid. Payments come from tools.wallet.
+                "url": None,
+                "pubkey": None,
+                "max_sats_per_query": 10,
+                "results": 10,
+                "proxy": None,            # e.g. "socks5h://127.0.0.1:9050"
+                "timeout": 30,
+                "onion_timeout": 90,
             },
             "transcribe_video": {
                 "sync_max_minutes": 10,   # <= this: transcript returned in-turn
