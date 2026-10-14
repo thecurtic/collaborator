@@ -255,3 +255,20 @@ def test_onion_needs_a_proxy_and_config_gates_the_tool(monkeypatch):
     names = {s["function"]["name"] for s in main._build_tools(os.environ["DB_PATH"])[0]}
     assert "ditta_search" not in names            # no pinned pubkey, no tool
     print("✓ onion refused without a proxy; the tool needs url + pinned key")
+
+
+def test_key_mismatch_says_what_the_broker_advertises(monkeypatch):
+    broker = FakeBroker()
+    dbp, paid = _setup(monkeypatch, broker, pubkey="4af8136ba2e2c7027f55742d1d75b0a03f3388367c139f51ef19420562d129c8")
+    inner = broker.request
+
+    def with_root(method, url, **kw):
+        if url.endswith("broker.example.com/"):
+            return _Resp(200, {"pubkey": BROKER_PUBKEY})
+        return inner(method, url, **kw)
+    import requests
+    monkeypatch.setattr(requests, "request", with_root)
+    out = ditta.ditta_search(dbp, "default", "q")
+    assert "different key (88c5204e618b7294…)" in out["error"]
+    assert "pin that key" in out["error"] and paid == []
+    print("✓ a key mismatch names both keys and what the broker advertises")

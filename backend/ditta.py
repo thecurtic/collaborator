@@ -230,12 +230,21 @@ def _challenge(resp, request_id: str, pubkey: str):
     if not isinstance(body, dict):
         raise DittaError("the 402 has no signed payment challenge — not paying")
     pinned = str(_cfg().get("pubkey") or "").strip().lower()
-    if body.get("pubkey") != pinned:
-        raise DittaError("the payment challenge is signed by a different key "
-                         "than the broker pinned in config — not paying")
+    signer = str(body.get("pubkey") or "")
+    if signer != pinned:
+        raise DittaError(
+            f"the payment challenge is signed by a different key ({signer[:16]}…) "
+            f"than the one pinned in tools.ditta.pubkey ({pinned[:16]}…) — not "
+            "paying. The pin must be the broker's DITTA identity: the `pubkey` "
+            "in its GET / description, not its Lightning node key or L402 secret"
+            + _advertised_hint(signer))
     if not verify_challenge(body, pinned):
-        raise DittaError("the payment challenge's signature doesn't verify — "
-                         "not paying")
+        fields = ", ".join(sorted(body))
+        raise DittaError(
+            "the payment challenge names the pinned key but its signature "
+            f"doesn't verify — not paying (challenge fields: {fields}). If the "
+            "broker is a different version from this tool, the signed message "
+            "may differ")
     if body.get("request_id") != request_id:
         raise DittaError("the payment challenge answers a different request — "
                          "not paying")
@@ -245,6 +254,23 @@ def _challenge(resp, request_id: str, pubkey: str):
     if not isinstance(body.get("expiry"), int) or body["expiry"] < int(time.time()):
         raise DittaError("the payment challenge has already expired")
     return m.group(1), m.group(2)
+
+
+def _advertised_hint(signer: str) -> str:
+    """Diagnostics for a key mismatch: what the broker at the configured URL
+    says its key is. Never used to decide whether to pay."""
+    try:
+        r = _request("GET", _cfg()["url"].strip().rstrip("/") + "/")
+        advertised = str(r.json().get("pubkey") or "")
+    except Exception:
+        return ""
+    if not advertised:
+        return ""
+    if advertised == signer:
+        return (f". The broker at tools.ditta.url describes itself with "
+                f"{advertised[:16]}… too: if this is your broker, pin that key")
+    return (f". The broker at tools.ditta.url describes itself with "
+            f"{advertised[:16]}…, which matches neither")
 
 
 def ditta_search(db_path: str, user_key: str, query: str, n: int = None) -> dict:
