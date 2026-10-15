@@ -3,6 +3,7 @@ import {
   Check,
   Loader2,
   Mic,
+  MicOff,
   NotebookPen,
   PhoneOff,
   RotateCcw,
@@ -195,10 +196,12 @@ export function CallScreen({
     failedRanges,
     activity,
     error,
+    muted,
     logs,
     endTurn,
     interruptNow,
     end,
+    setMuted,
     retry,
     skipTo,
   } = useCall(
@@ -300,9 +303,11 @@ export function CallScreen({
         <p className="text-xs text-muted-foreground">
           {/* Honest label: during a long think nothing is being generated
               yet — say so instead of "Responding…". */}
-          {phase === 'responding' && reasoning && !speakingTurn?.text
-            ? 'Thinking…'
-            : LABELS[phase]}
+          {phase === 'listening' && muted
+            ? 'Muted — unmute to talk'
+            : phase === 'responding' && reasoning && !speakingTurn?.text
+              ? 'Thinking…'
+              : LABELS[phase]}
         </p>
         {/* Live chain-of-thought ticker (545e1a5): bottom-anchored tail of
             the newest thinking — glanceable, no interaction needed, never
@@ -411,6 +416,16 @@ export function CallScreen({
             Try again
           </Button>
         )}
+        <Button
+          variant={muted ? 'default' : 'secondary'}
+          size="icon"
+          aria-label={muted ? 'Unmute' : 'Mute'}
+          aria-pressed={muted}
+          onClick={() => setMuted(!muted)}
+          className="h-12 w-12 rounded-full active:scale-95"
+        >
+          {muted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+        </Button>
         <Button
           variant="destructive"
           size="icon"

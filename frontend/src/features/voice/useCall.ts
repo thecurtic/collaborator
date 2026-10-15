@@ -11,7 +11,11 @@ import {
 import { getCapabilities } from '@/lib/capabilities';
 import { holdPwaUpdates } from '@/pwa';
 import { currentLocation } from '@/lib/location';
-import { startCallService, stopCallService } from '@/native/nativeShell';
+import {
+  startCallService,
+  stopCallService,
+  updateCallService,
+} from '@/native/nativeShell';
 import { saveTurnSources } from '@/features/chat/sourcesStore';
 import { foldToolEvent } from '@/features/chat/toolActivity';
 import { withTimeout } from '@/lib/utils';
@@ -64,6 +68,8 @@ interface Controls {
   /** Manual barge-in — same effect as the stop word / interrupt phrase. */
   interruptNow: () => void;
   end: () => void;
+  /** Mute / unmute the mic (the call stays up; it just hears silence). */
+  setMuted: (muted: boolean) => void;
   retry: () => void;
   skipTo: (turnId: number, text: string, fromParagraph: number) => void;
 }
@@ -109,6 +115,7 @@ export function useCall(
   const [activity, setActivity] = useState<ToolActivity[]>([]);
   const activityRef = useRef<ToolActivity[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [muted, setMutedState] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const controlsRef = useRef<Controls | null>(null);
   // Read at call start; not effect deps so changing them won't restart the call.
@@ -163,9 +170,29 @@ export function useCall(
     setError(null);
     // Pause PWA update checks — an auto-update reload would drop the call.
     const releaseUpdateHold = holdPwaUpdates();
+    // Mute = the mic track hears silence: the call, the transcriber and the
+    // phrase listeners all stay up, they just get nothing to work with.
+    let mutedNow = false;
+    setMutedState(false);
+    const applyMute = () =>
+      stream?.getAudioTracks().forEach((t) => {
+        t.enabled = !mutedNow;
+      });
+    const setMuted = (m: boolean) => {
+      if (!active || m === mutedNow) return;
+      mutedNow = m;
+      applyMute();
+      setMutedState(m);
+      void updateCallService(m);
+      log(m ? 'muted' : 'unmuted');
+    };
     // Android shell: mic foreground service so capture survives screen-off
-    // (no-op in browsers). Shows the persistent "call in progress" notice.
-    void startCallService();
+    // (no-op in browsers). Shows the persistent "call in progress" notice,
+    // whose Hang up and Mute buttons drive the call from the shade.
+    void startCallService({
+      hangUp: () => controlsRef.current?.end(),
+      toggleMute: () => setMuted(!mutedNow),
+    });
     let stream: MediaStream | null = null;
     let pcm: PcmStream | null = null;
     let transcriber: Transcriber | null = null;
@@ -639,6 +666,7 @@ export function useCall(
           stream = null;
           return;
         }
+        applyMute();
         if (!usePhrases()) {
           try {
             await warmUpKeywordSpotter(); // preload model so detection is instant
@@ -684,6 +712,7 @@ export function useCall(
         cleanup();
         onClose();
       },
+      setMuted,
       // Recover from an error without ending the call: if the mic is still
       // alive just listen again; otherwise redo the full startup.
       retry: () => {
@@ -707,6 +736,10 @@ export function useCall(
     [],
   );
   const end = useCallback(() => controlsRef.current?.end(), []);
+  const setMuted = useCallback(
+    (m: boolean) => controlsRef.current?.setMuted(m),
+    [],
+  );
   const retry = useCallback(() => controlsRef.current?.retry(), []);
   const skipTo = useCallback(
     (turnId: number, text: string, fromParagraph: number) =>
@@ -726,10 +759,12 @@ export function useCall(
     failedRanges,
     activity,
     error,
+    muted,
     logs,
     endTurn,
     interruptNow,
     end,
+    setMuted,
     retry,
     skipTo,
   };

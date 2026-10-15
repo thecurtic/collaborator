@@ -200,8 +200,9 @@ notifications:
   app_url: null               # public URL of this app, so tapping a notification opens it
   ntfy:                       # a self-hosted ntfy server (https://ntfy.sh/docs/install/)
     url: null                 # e.g. "https://<ntfy-host>"
-    token: null               # access token, if your server requires auth
-    topics: {}                # per user, keyed like tools.nwc.connections
+    token: null               # access token ("tk_..."), if your server requires auth;
+                              # sent as "Authorization: Bearer <token>"
+    topics: {}                # per user, keyed like tools.wallet.lnbits.wallets
     # topics:
     #   default: "<random-topic-name>"          # authentication disabled
     #   "<user-identity-hash>": "<random-topic>" # one per user under auth
