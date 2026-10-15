@@ -5,6 +5,7 @@ import {
   LogOut,
   Smartphone,
   UserRound,
+  Wallet,
   Volume2,
   X,
 } from 'lucide-react';
@@ -58,6 +59,8 @@ interface SettingsSheetProps {
   onOpenProfile: () => void;
   /** Push the References screen (the prompts the model is shown). */
   onOpenReferences: () => void;
+  /** Push the Wallet screen (Collaborator's own wallet: top up, take out). */
+  onOpenWallet: () => void;
 }
 
 /** A row that leaves the sheet for a pushed screen. */
@@ -453,6 +456,7 @@ export function SettingsSheet({
   onClose,
   onOpenProfile,
   onOpenReferences,
+  onOpenWallet,
 }: SettingsSheetProps) {
   const debug = useDebugEnabled();
   const tools = useToolsEnabled();
@@ -512,6 +516,9 @@ export function SettingsSheet({
           <PageRow icon={BookOpen} label="References"
                    hint="The prompts the model is shown"
                    onClick={() => { onClose(); onOpenReferences(); }} />
+          <PageRow icon={Wallet} label="Wallet"
+                   hint="Top up Collaborator's wallet or take money out"
+                   onClick={() => { onClose(); onOpenWallet(); }} />
         </div>
 
         {/* Chat model (server-backed; applies immediately). */}

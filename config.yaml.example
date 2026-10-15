@@ -294,7 +294,10 @@ tools:
       memory: "recall-synthesis-prompt.md"
       web: "synthesis-web.md"
   wallet:                     # Collaborator's own Lightning wallet (wallet tool; the
-                              # DITTA tool pays through it too)
+                              # DITTA tool pays through it too; Settings -> Wallet
+                              # sends and receives). The caps restrain the MODEL:
+                              # what you send from the Wallet screen is ledgered
+                              # but neither capped nor counted toward them.
     provider: "lnbits"        # lnbits (what runs) | nwc (dormant: tools.nwc below)
     max_sats_per_payment: 100 # app-side cap per invoice, on top of the wallet's balance
     max_sats_per_day: 500     # app-side daily cap, per provider (each can be its own node)

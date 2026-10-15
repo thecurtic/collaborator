@@ -1042,6 +1042,51 @@ both lists (normalized like tags). `422` if a tag is in both, or for
 `project` itself.
 
 
+### 21. Wallet (the user's own sends and top-ups)
+
+Collaborator's own Lightning wallet (`tools.wallet`), for the user: top it up
+and take money out. The model's caps (`max_sats_per_payment`,
+`max_sats_per_day`) restrain the MODEL only: a send from here is recorded in
+the same ledger (`source: "user"`) but neither checked against the caps nor
+counted toward them. Never paying an invoice twice, the park-before-pay
+ledger and recovery of an unconfirmed payment apply to every payment.
+
+**`GET /api/wallet`** → `{ "configured": false }` when this user has no wallet; else
+```json
+{ "configured": true, "provider": "lnbits", "can_pay": true,
+  "balance_sats": 21000, "spent_today_sats": 40, "daily_cap_sats": 500,
+  "remaining_today_sats": 460,
+  "recent": [{ "created_at": "2026-10-15T01:53:00", "provider": "lnbits",
+               "amount_sats": 500, "fees_sats": 1, "reason": "...",
+               "status": "paid", "source": "user" }] }
+```
+`spent_today_sats` is the model's spending only. `recent` lists payments OUT
+(newest first, 20); `status` is `paid` | `unconfirmed`. When the wallet can't
+be asked, the balance fields are missing and `error` says why. `can_pay` is
+false for a receive-only wallet (no `admin_key`).
+
+**`POST /api/wallet/decode`** `{ "invoice": "lnbc…" }` → `{ invoice, amount_sats,
+amount_msat, description, payment_hash, expires_at?, expired? }` — what the
+user is about to pay. `amount_sats` is null for an amountless invoice (which
+`send` refuses). `422` for anything that isn't BOLT11. The signature isn't
+checked here; the wallet checks it when it pays.
+
+**`POST /api/wallet/send`** `{ "invoice": "lnbc…" }` →
+`{ "status": "paid", amount_sats, fees_sats, already_paid, recovered }`, or
+`{ "status": "unconfirmed", "detail": "..." }` when the wallet took the payment
+but didn't confirm it in time (sending the SAME invoice again checks before it
+pays). `422` with `detail` for a definitive refusal (amountless, no spend key,
+insufficient balance, ...).
+
+**`POST /api/wallet/receive`** `{ "amount_sats": 5000, "memo": "optional" }` →
+`{ amount_sats, invoice, payment_hash, memo }`: an invoice that pays INTO
+Collaborator's wallet (1 – 10,000,000 sats; else `422`).
+
+**`GET /api/wallet/invoices/{payment_hash}`** → `{ payment_hash, "paid": true |
+false | null }` — `null` when the wallet couldn't be asked. The client polls
+this while an invoice is on screen.
+
+
 ## Data Models
 
 ### Turn

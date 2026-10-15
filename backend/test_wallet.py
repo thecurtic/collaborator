@@ -382,3 +382,99 @@ def test_switching_wallets_never_repays_a_parked_attempt(monkeypatch):
     out = wallet.wallet_tool(dbp, "default", "pay_invoice", invoice="lnbc1u1p...new")
     assert out["status"] == "paid" and out["spent_today_sats"] == 100
     print("✓ switching wallets: no cross-wallet repay, separate daily caps")
+
+
+# --- the Wallet screen (/api/wallet) ----------------------------------------------
+
+SPEC_INVOICE = (  # BOLT11's own example: 250,000 sat, "1 cup coffee", 60 s expiry
+    "lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5"
+    "xysxxatsyp3k7enxv4jsxqzpuaztrnwngzn3kdzw5hydlzf03qdgm2hdq27cqv3agm2awhz5se9"
+    "03vruatfhq77w3ls4evs3ch9zw97j25emudupq63nyw24cg27h2rspfj9srp")
+
+
+def test_decode_invoice_for_the_send_screen():
+    out = wallet.decode_invoice("lightning:" + SPEC_INVOICE.upper())
+    assert out["amount_sats"] == 250_000 and out["description"] == "1 cup coffee"
+    assert out["payment_hash"] == "0001020304050607080900010203040506070809" \
+                                  "000102030405060708090102"
+    assert out["expires_at"] == 1496314658 + 60 and out["expired"] is True
+    with pytest.raises(wallet.WalletError):
+        wallet.decode_invoice("hello")
+    print("✓ decode: amount, description and expiry before the user pays")
+
+
+def test_user_sends_skip_the_models_caps(monkeypatch):
+    _wallet_cfg(monkeypatch, max_sats_per_payment=100, max_sats_per_day=250)
+    dbp = _fresh_db()
+    calls = _ScriptedNwc([{"preimage": "ef" * 32, "fees_paid": 0}] * 3)
+    monkeypatch.setattr(nwc, "nwc_call", calls)
+    # 2,000 sats is far over both caps, but it's the user taking money out.
+    res = wallet.pay(dbp, "default", "lnbc20u1p...", source="user")
+    assert res["status"] == "paid"
+    assert wallet.recent_spends(dbp)[0]["source"] == "user"
+    # ...and it doesn't eat the model's budget: 200 sats still fit today.
+    for inv in ("lnbc1u1p...a", "lnbc1u1p...b"):
+        assert wallet.pay(dbp, "default", inv)["status"] == "paid"
+    with pytest.raises(wallet.WalletCapExceeded):
+        wallet.pay(dbp, "default", "lnbc1u1p...c")
+    # The same invoice is still never paid twice, whoever pays it.
+    assert wallet.pay(dbp, "default", "lnbc20u1p...", source="user")["already_paid"]
+    assert len(calls.calls) == 3
+    print("✓ the user's own sends are ledgered but outside the model's caps")
+
+
+def test_ledger_gains_source_column_in_place():
+    dbp = _fresh_db()
+    conn = sqlite3.connect(dbp)
+    conn.execute("CREATE TABLE wallet_spends (id INTEGER PRIMARY KEY "
+                 "AUTOINCREMENT, created_at TEXT NOT NULL, day TEXT NOT NULL, "
+                 "provider TEXT NOT NULL, amount_msat INTEGER NOT NULL, "
+                 "fees_msat INTEGER, invoice TEXT NOT NULL, payment_hash TEXT, "
+                 "preimage TEXT, reason TEXT, status TEXT NOT NULL)")
+    import time as _t
+    conn.execute("INSERT INTO wallet_spends (created_at, day, provider, "
+                 "amount_msat, invoice, status) VALUES ('x', ?, 'lnbits', "
+                 "5000, 'lnbc50n1p', 'paid')", (_t.strftime("%Y-%m-%d"),))
+    conn.commit()
+    assert wallet.spent_today_msat(conn, "lnbits") == 5000   # old rows = model
+    conn.close()
+    print("✓ an existing ledger gains the source column; old rows are the model's")
+
+
+def test_wallet_endpoints(monkeypatch):
+    from starlette.testclient import TestClient
+    fake = _lnbits(monkeypatch)
+    client = TestClient(main.app)
+
+    got = client.get("/api/wallet").json()
+    assert got["configured"] and got["provider"] == "lnbits" and got["can_pay"]
+    assert got["balance_sats"] == 4200 and got["recent"] == []
+
+    inv = client.post("/api/wallet/receive", json={"amount_sats": 2100}).json()
+    assert inv["invoice"].startswith("lnbc") and inv["payment_hash"] == "22" * 32
+    assert client.get(f"/api/wallet/invoices/{'22' * 32}").json()["paid"] is False
+    fake.status["22" * 32] = {"paid": True}
+    assert client.get(f"/api/wallet/invoices/{'22' * 32}").json()["paid"] is True
+    assert client.get("/api/wallet/invoices/nothex").status_code == 422
+    assert client.post("/api/wallet/receive",
+                       json={"amount_sats": 0}).status_code == 422
+
+    d = client.post("/api/wallet/decode", json={"invoice": SPEC_INVOICE}).json()
+    assert d["amount_sats"] == 250_000
+    assert client.post("/api/wallet/decode",
+                       json={"invoice": "nope"}).status_code == 422
+
+    fake.status["11" * 32] = {"paid": True, "preimage": "ab" * 32}
+    sent = client.post("/api/wallet/send", json={"invoice": "lnbc5m1p...out"})
+    assert sent.json() == {"status": "paid", "amount_sats": 500_000,
+                           "fees_sats": 0, "already_paid": False,
+                           "recovered": False}
+    assert fake.posts[-1][1] == "ADM"
+    recent = client.get("/api/wallet").json()["recent"]
+    assert recent[0]["source"] == "user" and recent[0]["amount_sats"] == 500_000
+    assert client.post("/api/wallet/send",
+                       json={"invoice": "lnbc1pvjluez..."}).status_code == 422
+
+    monkeypatch.setitem(config.get_config()["tools"], "wallet", {})
+    assert client.get("/api/wallet").json() == {"configured": False}
+    print("✓ /api/wallet: balance, receive + paid check, decode, send")

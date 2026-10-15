@@ -473,10 +473,22 @@ def bolt11_amount_msat(invoice: str):
 _BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 
 
-def bolt11_payment_hash(invoice: str):
-    """The invoice's payment hash (64 hex chars) from its tagged data part,
-    or None when it can't be extracted. Used to match a timed-out payment
-    against the wallet's transaction history during recovery."""
+def _words_to_bytes(words) -> bytes:
+    acc = bits = 0
+    out = bytearray()
+    for w in words:
+        acc, bits = (acc << 5) | w, bits + 5
+        if bits >= 8:
+            bits -= 8
+            out.append((acc >> bits) & 0xff)
+    return bytes(out)
+
+
+def bolt11_decode(invoice: str):
+    """The tagged fields a person needs to see before paying — payment hash,
+    description, creation time and expiry — or None when the invoice's data
+    part can't be read. The signature is NOT checked: the wallet does that
+    when it pays."""
     inv = (invoice or "").strip().lower()
     pos = inv.rfind("1")
     data = inv[pos + 1:]
@@ -487,23 +499,38 @@ def bolt11_payment_hash(invoice: str):
         words = [_BECH32_CHARSET.index(c) for c in data[:-6]]
     except ValueError:
         return None
+    timestamp = 0
+    for w in words[:7]:
+        timestamp = (timestamp << 5) | w
+    out = {"payment_hash": None, "description": None, "timestamp": timestamp,
+           "expiry": 3600}                 # BOLT11's default when 'x' is absent
     i, end = 7, len(words) - 104          # skip timestamp; signature is last
     while i + 3 <= end:
         tag, length = words[i], words[i + 1] * 32 + words[i + 2]
         i += 3
         if i + length > end:
             return None
+        field = words[i:i + length]
         if tag == 1 and length == 52:     # 'p' tag: 260 bits, 256 used
-            acc = bits = 0
-            out = bytearray()
-            for w in words[i:i + 52]:
-                acc, bits = (acc << 5) | w, bits + 5
-                if bits >= 8:
-                    bits -= 8
-                    out.append((acc >> bits) & 0xff)
-            return bytes(out[:32]).hex()
+            out["payment_hash"] = _words_to_bytes(field)[:32].hex()
+        elif tag == 13:                   # 'd': short UTF-8 description
+            out["description"] = _words_to_bytes(field).decode(
+                "utf-8", errors="replace")
+        elif tag == 6:                    # 'x': expiry in seconds
+            expiry = 0
+            for w in field:
+                expiry = (expiry << 5) | w
+            out["expiry"] = expiry
         i += length
-    return None
+    return out
+
+
+def bolt11_payment_hash(invoice: str):
+    """The invoice's payment hash (64 hex chars) from its tagged data part,
+    or None when it can't be extracted. Used to match a timed-out payment
+    against the wallet's transaction history during recovery."""
+    fields = bolt11_decode(invoice)
+    return fields["payment_hash"] if fields else None
 
 
 # --- payment lookup (recovering a timed-out payment) -----------------------

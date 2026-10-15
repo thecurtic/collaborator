@@ -3836,6 +3836,86 @@ async def pin_feed_item(
     return {"key": key, "pinned": request.pinned}
 
 
+# --- Wallet screen (the user's own sends and top-ups) ----------------------------
+# Plain `def`: every call waits on the wallet over the network, so these run in
+# the threadpool rather than stalling the event loop.
+
+class WalletInvoiceRequest(BaseModel):
+    invoice: str
+
+
+class WalletReceiveRequest(BaseModel):
+    amount_sats: int
+    memo: Optional[str] = None
+
+
+def _wallet_user(passkey: Optional[str]):
+    _require_auth(passkey)
+    db_path = _resolve_db_path(passkey)
+    return db_path, wallet.user_key_for_db(db_path, auth_enabled)
+
+
+@app.get("/api/wallet")
+def get_wallet(passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Balance, the model's spending budget today, and recent spends."""
+    db_path, user_key = _wallet_user(passkey)
+    return wallet.summary(db_path, user_key)
+
+
+@app.post("/api/wallet/decode")
+def post_wallet_decode(request: WalletInvoiceRequest,
+                       passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """What an invoice asks for, shown to the user before they pay it."""
+    _wallet_user(passkey)
+    try:
+        return wallet.decode_invoice(request.invoice)
+    except wallet.WalletError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.post("/api/wallet/send")
+def post_wallet_send(request: WalletInvoiceRequest,
+                     passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """The user pays an invoice from Collaborator's wallet. The model's caps
+    don't apply; the ledger and never-pay-twice do."""
+    db_path, user_key = _wallet_user(passkey)
+    try:
+        res = wallet.pay(db_path, user_key, request.invoice,
+                         reason="Sent from the Wallet screen", source="user")
+    except wallet.WalletUnconfirmed as e:
+        return {"status": "unconfirmed", "detail": str(e)}
+    except wallet.WalletError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"status": "paid", "amount_sats": res["amount_msat"] // 1000,
+            "fees_sats": (res.get("fees_msat") or 0) // 1000,
+            "already_paid": bool(res.get("already_paid")),
+            "recovered": bool(res.get("recovered"))}
+
+
+@app.post("/api/wallet/receive")
+def post_wallet_receive(request: WalletReceiveRequest,
+                        passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Mint an invoice that pays INTO Collaborator's wallet."""
+    _, user_key = _wallet_user(passkey)
+    try:
+        return wallet.receive(user_key, request.amount_sats, request.memo)
+    except wallet.WalletError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/api/wallet/invoices/{payment_hash}")
+def get_wallet_invoice(payment_hash: str,
+                       passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Whether a received invoice has been paid; `paid` is null when the
+    wallet couldn't be asked."""
+    _, user_key = _wallet_user(passkey)
+    try:
+        return {"payment_hash": payment_hash,
+                "paid": wallet.invoice_paid(user_key, payment_hash)}
+    except wallet.WalletError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 # --- Notifications (settings list, stored log, ntfy delivery) -------------------
 
 class NotificationSettingsRequest(BaseModel):

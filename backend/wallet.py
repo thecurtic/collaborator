@@ -21,8 +21,12 @@ PER USER, keyed by identity hash like every per-user setting ("default" with
 auth off). Keys never live in the repo.
 
 Callers: the `wallet` tool (the model pays, checks the balance, or mints a
-top-up invoice for the user) and the DITTA search tool, which pays its own
-per-query invoices through `pay()` without the model ever seeing them.
+top-up invoice for the user), the DITTA search tool, which pays its own
+per-query invoices through `pay()` without the model ever seeing them, and
+the app's Wallet screen (/api/wallet), where the user tops the wallet up and
+takes money out. The caps restrain the MODEL: payments the user makes
+themselves are recorded in the ledger (source 'user') but neither checked
+against the caps nor counted toward them.
 """
 
 import re
@@ -109,6 +113,24 @@ class LnbitsProvider:
         f = cls._fields(data)
         p = str(data.get("preimage") or f.get("preimage") or "").strip().lower()
         return p if _PREIMAGE_RE.match(p) and p != "0" * 64 else None
+
+    def received(self, payment_hash: str):
+        """True/False for an invoice this wallet minted; None when LNbits
+        can't be asked right now."""
+        import requests
+        try:
+            r = self._get(f"/api/v1/payments/{payment_hash}",
+                          self._invoice_key or self._admin_key)
+        except requests.RequestException:
+            return None
+        if r.status_code == 404:
+            return False
+        if r.status_code >= 400:
+            return None
+        try:
+            return self._settled(r.json())
+        except ValueError:
+            return None
 
     def balance_msat(self) -> int:
         import requests
@@ -234,6 +256,18 @@ class NwcProvider:
             raise WalletError("the wallet minted no usable invoice")
         return res.get("payment_hash") or nwc.bolt11_payment_hash(bolt11), bolt11
 
+    def received(self, payment_hash: str):
+        try:
+            res = nwc.nwc_call(self._uri, "lookup_invoice",
+                               {"payment_hash": payment_hash},
+                               timeout=self._timeout)
+        except (nwc.NwcTimeout, nwc.NwcUnreachable):
+            return None
+        except nwc.NwcError as e:
+            return False if "not" in str(e).lower() and "found" in str(e).lower() \
+                else None
+        return bool(res.get("settled_at") or res.get("preimage"))
+
     def pay(self, bolt11: str, payment_hash):
         try:
             res = nwc.nwc_call(self._uri, "pay_invoice", {"invoice": bolt11},
@@ -293,22 +327,29 @@ def _ensure_schema(conn) -> None:
             payment_hash TEXT,
             preimage TEXT,
             reason TEXT,
-            status TEXT NOT NULL      -- 'paid' | 'unconfirmed'
+            status TEXT NOT NULL,     -- 'paid' | 'unconfirmed'
+            source TEXT NOT NULL DEFAULT 'model'   -- 'model' | 'user'
         );
         CREATE INDEX IF NOT EXISTS idx_wallet_spends_day ON wallet_spends(day);
         CREATE INDEX IF NOT EXISTS idx_wallet_spends_invoice
             ON wallet_spends(invoice);
     """)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(wallet_spends)")}
+    if "source" not in cols:
+        conn.execute("ALTER TABLE wallet_spends ADD COLUMN source TEXT "
+                     "NOT NULL DEFAULT 'model'")
     conn.commit()
 
 
 def spent_today_msat(conn, provider: str = None) -> int:
-    """Paid AND unconfirmed: an unconfirmed payment may have spent the money,
-    so it counts until it's known not to have. With `provider`, only that
-    wallet's spending: NWC and LNbits can draw on different nodes, each with
-    its own budget."""
+    """The MODEL's spending today (the user's own sends don't count against
+    its caps). Paid AND unconfirmed: an unconfirmed payment may have spent
+    the money, so it counts until it's known not to have. With `provider`,
+    only that wallet's spending: NWC and LNbits can draw on different nodes,
+    each with its own budget."""
     _ensure_schema(conn)
-    sql = "SELECT COALESCE(SUM(amount_msat), 0) FROM wallet_spends WHERE day = ?"
+    sql = ("SELECT COALESCE(SUM(amount_msat), 0) FROM wallet_spends "
+           "WHERE day = ? AND source = 'model'")
     params = [time.strftime("%Y-%m-%d")]
     if provider:
         sql += " AND provider = ?"
@@ -324,7 +365,7 @@ def _caps():
 
 
 def pay(db_path: str, user_key: str, bolt11: str, reason: str = None,
-        max_msat: int = None) -> dict:
+        max_msat: int = None, source: str = "model") -> dict:
     """Pay one BOLT11 invoice from the user's wallet, within the caps.
 
     Returns {status: "paid", preimage, amount_msat, fees_msat, recovered?}.
@@ -332,6 +373,9 @@ def pay(db_path: str, user_key: str, bolt11: str, reason: str = None,
     later: it's checked before anything is paid again) or WalletError.
     `max_msat` is the caller's own ceiling for this one payment (the DITTA
     tool's per-query cap), applied on top of the configured caps.
+    `source="user"` is the user paying from the Wallet screen: the configured
+    caps don't apply and it isn't counted toward them; everything else (the
+    ledger, recovery, never paying an invoice twice) does.
     """
     provider = provider_for(user_key)
     if provider is None:
@@ -392,12 +436,12 @@ def pay(db_path: str, user_key: str, bolt11: str, reason: str = None,
         if max_msat is not None and amount > max_msat:
             raise WalletCapExceeded(f"invoice is {amount // 1000} sats, over the "
                                     f"{max_msat // 1000}-sat ceiling for this payment")
-        if amount > cap_payment:
+        if source == "model" and amount > cap_payment:
             raise WalletCapExceeded(f"invoice is {amount // 1000} sats, over the "
                                     f"per-payment cap of {cap_payment // 1000} sats "
                                     "(tools.wallet.max_sats_per_payment)")
         spent = spent_today_msat(conn, provider.name)
-        if spent + amount > cap_day:
+        if source == "model" and spent + amount > cap_day:
             raise WalletCapExceeded(f"paying {amount // 1000} sats would exceed "
                                     f"today's cap of {cap_day // 1000} sats "
                                     f"({spent // 1000} already spent)")
@@ -406,10 +450,11 @@ def pay(db_path: str, user_key: str, bolt11: str, reason: str = None,
         # crash always leaves a trace that counts against the daily cap.
         cur = conn.execute(
             "INSERT INTO wallet_spends (created_at, day, provider, amount_msat, "
-            "invoice, payment_hash, reason, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'unconfirmed')",
+            "invoice, payment_hash, reason, status, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'unconfirmed', ?)",
             (time.strftime("%Y-%m-%dT%H:%M:%S"), time.strftime("%Y-%m-%d"),
-             provider.name, amount, inv, payment_hash, reason))
+             provider.name, amount, inv, payment_hash, reason,
+             "user" if source == "user" else "model"))
         row_id = cur.lastrowid
         conn.commit()
         try:
@@ -427,6 +472,89 @@ def pay(db_path: str, user_key: str, bolt11: str, reason: str = None,
                 "fees_msat": fees}
     finally:
         conn.close()
+
+
+# --- the Wallet screen (/api/wallet) ----------------------------------------------
+
+
+def decode_invoice(bolt11: str) -> dict:
+    """What the user is about to pay: amount, description, expiry. Raises
+    WalletError on anything that isn't a BOLT11 invoice."""
+    inv = _normalize_invoice(bolt11)
+    try:
+        amount = nwc.bolt11_amount_msat(inv)
+    except nwc.NwcError as e:
+        raise WalletError(str(e))
+    fields = nwc.bolt11_decode(inv) or {}
+    out = {"invoice": inv,
+           "amount_sats": None if amount is None else amount // 1000,
+           "amount_msat": amount,
+           "description": fields.get("description"),
+           "payment_hash": fields.get("payment_hash")}
+    if fields.get("timestamp"):
+        expires = fields["timestamp"] + int(fields.get("expiry") or 3600)
+        out["expires_at"] = expires
+        out["expired"] = expires < time.time()
+    return out
+
+
+def recent_spends(db_path: str, limit: int = 20) -> list:
+    conn = sqlite3.connect(db_path)
+    try:
+        _ensure_schema(conn)
+        rows = conn.execute(
+            "SELECT created_at, provider, amount_msat, fees_msat, reason, "
+            "status, source FROM wallet_spends ORDER BY id DESC LIMIT ?",
+            (limit,)).fetchall()
+    finally:
+        conn.close()
+    return [{"created_at": r[0], "provider": r[1],
+             "amount_sats": r[2] // 1000, "fees_sats": (r[3] or 0) // 1000,
+             "reason": r[4], "status": r[5], "source": r[6]} for r in rows]
+
+
+def summary(db_path: str, user_key: str) -> dict:
+    """The Wallet screen: balance, the model's budget today, recent spends.
+    {configured: false} when this user has no wallet."""
+    provider = provider_for(user_key)
+    if provider is None:
+        return {"configured": False}
+    out = {"configured": True, "provider": provider.name,
+           "can_pay": bool(provider.can_pay),
+           "recent": recent_spends(db_path)}
+    try:
+        out.update(_balance(db_path, provider))
+        out.pop("note", None)
+    except WalletError as e:
+        out["error"] = str(e)
+    return out
+
+
+def receive(user_key: str, amount_sats, memo: str = None) -> dict:
+    provider = provider_for(user_key)
+    if provider is None:
+        raise WalletError("no wallet is configured for this user (tools.wallet)")
+    try:
+        sats = int(amount_sats)
+    except (TypeError, ValueError):
+        raise WalletError("amount_sats must be a whole number")
+    if not 1 <= sats <= 10_000_000:
+        raise WalletError("amount_sats must be between 1 and 10,000,000")
+    memo = (memo or "Top up Collaborator's wallet").strip()[:200]
+    payment_hash, bolt11 = provider.create_invoice(sats, memo)
+    return {"amount_sats": sats, "invoice": bolt11,
+            "payment_hash": payment_hash, "memo": memo}
+
+
+def invoice_paid(user_key: str, payment_hash: str):
+    """Whether an invoice from `receive` has been paid: True, False, or None
+    when the wallet can't be asked right now."""
+    provider = provider_for(user_key)
+    if provider is None:
+        raise WalletError("no wallet is configured for this user (tools.wallet)")
+    if not re.fullmatch(r"[0-9a-f]{64}", payment_hash or ""):
+        raise WalletError("payment_hash must be 64 hex characters")
+    return provider.received(payment_hash)
 
 
 # --- the model's tool -----------------------------------------------------------
@@ -463,16 +591,10 @@ def wallet_tool(db_path: str, user_key: str, action: str = "get_balance",
         if action == "get_balance":
             return _balance(db_path, provider)
         if action == "create_invoice":
-            try:
-                sats = int(amount_sats)
-            except (TypeError, ValueError):
-                return {"error": "create_invoice needs amount_sats (a whole number)"}
-            if not 1 <= sats <= 10_000_000:
-                return {"error": "amount_sats must be between 1 and 10,000,000"}
-            memo = (memo or "Top up Collaborator's wallet").strip()[:200]
-            payment_hash, bolt11 = provider.create_invoice(sats, memo)
+            inv = receive(user_key, amount_sats, memo)
+            sats, bolt11 = inv["amount_sats"], inv["invoice"]
             return {"status": "invoice_created", "amount_sats": sats,
-                    "invoice": bolt11, "payment_hash": payment_hash,
+                    "invoice": bolt11, "payment_hash": inv["payment_hash"],
                     "instruction": (
                         "Show the user this as a markdown link they can tap, "
                         f"[Pay {sats} sats](lightning:{bolt11}), and the invoice "

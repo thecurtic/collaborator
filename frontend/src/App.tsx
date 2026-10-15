@@ -31,6 +31,7 @@ import { Button } from '@/components/ui/button';
 import { RenameSheet } from '@/components/RenameSheet';
 import { ReferencesView } from '@/features/reference/ReferencesView';
 import { ProfileView } from '@/features/notes/ProfileView';
+import { WalletView } from '@/features/wallet/WalletView';
 import { WebSearchView } from '@/features/search/WebSearchView';
 import { TranscriptsView } from '@/features/transcripts/TranscriptsView';
 import { useLongPress } from '@/lib/useLongPress';
@@ -136,7 +137,7 @@ function AppShell() {
   const [chatOpen, setChatOpen] = useState(false);
   // Web Search and Transcripts push over whatever is showing; so do Profile
   // and References, which are pages of Settings.
-  const [settingsPage, setSettingsPage] = useState<'profile' | 'references' | null>(null);
+  const [settingsPage, setSettingsPage] = useState<'profile' | 'references' | 'wallet' | null>(null);
   // Notes (the vault: list, graph, people, drafts inbox) — a pushed
   // screen from the menu; `notesLens` opens it on a lens (People).
   const [notesOpen, setNotesOpen] = useState(false);
@@ -496,7 +497,8 @@ function AppShell() {
                     ? 'Transcripts'
                     : notesOpen
                       ? notesLens === 'social-graph' ? 'People' : 'Notes'
-                      : settingsPage === 'profile' ? 'Profile' : 'References'}
+                      : settingsPage === 'profile' ? 'Profile'
+                        : settingsPage === 'wallet' ? 'Wallet' : 'References'}
               </span>
             </>
           ) : chatOpen ? (
@@ -676,6 +678,13 @@ function AppShell() {
           setChatOpen(false);
           setSettingsPage('references');
         }}
+        onOpenWallet={() => {
+          setSearchOpen(false);
+          setTranscriptsOpen(false);
+          setNotesOpen(false);
+          setChatOpen(false);
+          setSettingsPage('wallet');
+        }}
       />
 
       {/* Chat-title hold menu (+ its rename sheet). */}
@@ -713,6 +722,8 @@ function AppShell() {
           <WebSearchView onStartChat={startChatWithDraft} />
         ) : settingsPage === 'references' ? (
           <ReferencesView />
+        ) : settingsPage === 'wallet' ? (
+          <WalletView />
         ) : settingsPage === 'profile' ? (
           <ProfileView onOpenNote={(title) => {
             setSettingsPage(null);
