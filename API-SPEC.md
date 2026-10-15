@@ -120,6 +120,11 @@ X-Passkey: <your-passkey>
   tools). `true`/`false` overrides the server default (`tools.enabled`). When on, the
   model may call retrieval/synthesis tools mid-turn (see the tool events below). (Also
   accepted on `POST /api/branches/{id}`.)
+- `attachment_ids` (optional, max 10): uploads from `POST /api/attachments` that
+  this message carries (also on `POST /api/branches/{id}`); `404` for an unknown
+  id. See §22. While the backend waits for an attachment's text it streams
+  `{"type":"status","tool":"read_attachment","label":"Reading plan.pdf",...}`
+  and then an `"outcome":"ok"` event, before any tokens.
 
 **Tool SSE events** (when tools are on and the model uses them; interleaved before the
 final answer tokens):
@@ -1101,6 +1106,64 @@ Collaborator's wallet (1 – 10,000,000 sats; else `422`).
 false | null }` — `null` when the wallet couldn't be asked. The client polls
 this while an invoice is on screen.
 
+
+### 22. Attachments
+
+Files handed to a chat (`backend/attachments.py`). Every file is stored on the
+server (content-addressed under the user's data directory), so every device
+sees it. Its text is extracted ONCE in the background and stored with it:
+
+| kind | how its text is read (`text_via`) |
+|---|---|
+| `text` | the file, as UTF-8 (`text`) |
+| `document` | markitdown: DOCX, PPTX, XLSX, HTML, EPUB, CSV, JSON, … (`markitdown`) |
+| `pdf` | pypdfium2's text layer; pages without one (scans) go to the vision model (`pdf-text`, `pdf-text+vision`) |
+| `image` | the vision model transcribes the text and describes the rest (`vision`) |
+| `audio`, `video` | speech-to-text (`speech-to-text`) |
+| `file` | nothing (`text_status: "none"`) |
+
+The vision model is the chat model (§14, `inference.vision`). An image's text is
+read once the turn that carried it has been answered (the model reads the image
+itself on that turn); when the chat model can't see, it's read at upload instead.
+
+**`POST /api/attachments`** (multipart, field `file`) → `{ "attachment": {...} }`,
+at once, with `text_status` `pending` (or `done` when the same bytes were
+uploaded before: identical content is one attachment). `413` over
+`attachments.max_mb`.
+
+```json
+{ "id": 7, "created_at": "2026-10-15T10:02:11", "filename": "plan.pdf",
+  "mime": "application/pdf", "size": 48211, "kind": "pdf",
+  "text_status": "done", "text_error": null, "text_via": "pdf-text",
+  "pages": 3, "chars": 5120, "first_turn_id": 88 }
+```
+`text_status`: `pending` | `working` | `done` | `failed` (see `text_error`) |
+`none` (nothing to read, or an image with no model that reads images).
+`first_turn_id` is the user turn that first carried it (null = not sent yet).
+
+**`GET /api/attachments`** `?q=&kind=&limit=` → `{ "items": [...] }`, newest first;
+`q` keywords match the filename and the extracted text (matches carry `snippet`).
+
+**`GET /api/attachments/{id}`** → `{ "attachment": {..., "text": "..."} }`.
+
+**`GET /api/attachments/{id}/file`** → the bytes. Images, audio, video, PDF and
+plain text render inline; anything else (HTML, SVG, ...) downloads as
+`application/octet-stream`, always with `Content-Security-Policy: sandbox`.
+
+**`POST /api/attachments/{id}/extract`** → read it again (after a failure, or once
+a model that reads images is loaded); returns at once, poll for the result.
+
+**`DELETE /api/attachments/{id}`** → `{ "deleted": id }` for an upload that was never
+sent; `409` once a chat carries it.
+
+**In a turn.** The user turn stores the user's own words plus a snapshot list,
+`attachments: [{id, filename, mime, kind, size}]` (on `/api/tree` nodes). At send
+time each attachment joins the message the model sees: an image AS AN IMAGE when
+the chat model reads images, everything else as a header line
+`[Attachment #7: plan.pdf — pdf, 47.1 KB, 3 pages]` plus its text up to
+`attachments.inline_chars`. In later turns' history they are always text, up to
+`attachments.history_chars`. The tools `list_attachments` and `read_attachment`
+(paged) reach any attachment from any chat.
 
 ## Data Models
 

@@ -289,6 +289,11 @@ def _migrate_turns_branching(conn) -> None:
         cursor.execute("ALTER TABLE turns ADD COLUMN recall_sources TEXT")
     if "embedding" not in existing:
         cursor.execute("ALTER TABLE turns ADD COLUMN embedding BLOB")
+    if "attachments" not in existing:
+        # JSON list of attachment snapshots ({id, filename, mime, kind, size})
+        # carried by a USER turn (attachments.py); the text is joined in at
+        # send time, never stored here.
+        cursor.execute("ALTER TABLE turns ADD COLUMN attachments TEXT")
     if "tool_activity" not in existing:
         # JSON list of the turn's tool calls ({tool, query/url/title, outcome,
         # count, error, urls}) — persisted "Sources" for assistant turns.
@@ -382,6 +387,7 @@ def create_turn(
     branched: bool = False,
     state: str = "seed",
     location: Optional[dict] = None,
+    attachments: Optional[List[dict]] = None,
 ) -> dict:
     """Create a new turn in the database.
 
@@ -397,12 +403,13 @@ def create_turn(
         INSERT INTO turns
             (user_id, role, content, context_turns, committed, model_name,
              token_count, parent_turn_id, paragraph_index, branched, state,
-             location)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             location, attachments)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (user_id, role, content, context_turns, committed, model_name,
          token_count, parent_turn_id, paragraph_index, 1 if branched else 0, state,
-         _json.dumps(location) if location else None)
+         _json.dumps(location) if location else None,
+         _json.dumps(attachments) if attachments else None)
     )
     db.commit()
 
@@ -567,6 +574,14 @@ def get_turn_tree(db, committed_only: bool = True) -> List[dict]:
         if tid in nodes:
             try:
                 nodes[tid]["tools"] = _json.loads(activity)
+            except Exception:
+                pass
+    for (tid, raw) in cursor.execute(
+        "SELECT id, attachments FROM turns WHERE attachments IS NOT NULL"
+    ).fetchall():
+        if tid in nodes:
+            try:
+                nodes[tid]["attachments"] = _json.loads(raw)
             except Exception:
                 pass
     for (tid, title) in cursor.execute(

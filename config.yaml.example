@@ -208,6 +208,19 @@ notifications:
     #   "<user-identity-hash>": "<random-topic>" # one per user under auth
     timeout: 10
 
+# Files attached to chats: stored on this server, text extracted once
+# (markitdown, PDF text layers, the chat model's vision for images and scans,
+# speech-to-text for audio/video) and kept with the attachment.
+attachments:
+  max_mb: 50                  # per file
+  inline_chars: 12000         # extracted text sent with the turn it's attached to
+  history_chars: 3000         # ...and with later turns (read_attachment has the rest)
+  return_chars: 15000         # per read_attachment part
+  max_text_chars: 500000      # stored text per attachment
+  wait_seconds: 90            # how long a send waits for text still being read
+  ocr_max_pages: 30           # scanned PDF pages the vision model reads, per file
+  image_max_side: 1600        # images are downscaled to this many px before the model
+
 # The chat card's summary (three dots on a chat): generated on demand by
 # inference.utility_model, cached on the chat, marked stale once it grows.
 # Generating it also proposes tags, which are only applied when accepted.
@@ -243,6 +256,8 @@ tools:
     transcribe_video: true    # yt-dlp audio -> STT for a new URL (never captions)
     list_transcripts: true    # catalogue of stored transcripts (cheap, browsable)
     read_transcript: true     # read one stored transcript by id, paged
+    list_attachments: true    # catalogue of files attached to chats
+    read_attachment: true     # an attachment's extracted text, paged
     read_logs: true           # agent can read its own recent server logs (ring buffer)
     wallet: true              # self-gating: active only when the requesting user has a
                               # wallet under the selected tools.wallet.provider

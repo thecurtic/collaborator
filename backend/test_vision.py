@@ -83,3 +83,18 @@ def test_prepare_image_downscales(monkeypatch):
     img = Image.open(io.BytesIO(base64.b64decode(b64)))
     assert mime == "image/jpeg" and img.size == (1600, 400)
     print("✓ images are downscaled before they reach the model")
+
+
+def test_build_messages_puts_images_on_the_current_turn(monkeypatch):
+    _setup(monkeypatch, setting=True)
+    msgs = inference._build_messages(
+        "what is this?", [{"role": "user", "content": "earlier"},
+                          {"role": "assistant", "content": "reply"}],
+        images=[("image/jpeg", "QUJD")])
+    last = msgs[-1]
+    assert last["role"] == "user" and last["content"][0] == {
+        "type": "text", "text": "what is this?"}
+    assert last["content"][1]["image_url"]["url"] == "data:image/jpeg;base64,QUJD"
+    assert all(isinstance(m["content"], str) for m in msgs[:-1])   # history is text
+    assert inference._build_messages("plain")[-1]["content"] == "plain"
+    print("✓ images ride on the current user message only")

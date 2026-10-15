@@ -290,8 +290,13 @@ def _build_messages(
     recall: Optional[str] = None,
     include_tools_guidance: bool = False,
     extra_system: Optional[str] = None,
+    images: Optional[List[tuple]] = None,
 ) -> List[Dict]:
     """Build the OpenAI-style messages array from system prompt, context, and input.
+
+    `images` ((mime, base64) pairs) ride on the CURRENT user message as
+    image_url parts — attachments sent this turn to a chat model that reads
+    images (vision.py). History is always text.
 
     Context assembly order: system prompt, recall block (if any), recent window,
     current message. The system prompt is layered: the base prompt + an auditable
@@ -368,7 +373,13 @@ def _build_messages(
     messages.append({"role": "system", "content": dynamic})
 
     # Add current user message
-    messages.append({"role": "user", "content": message})
+    if images:
+        import vision
+        messages.append({"role": "user", "content": [
+            {"type": "text", "text": message},
+            *[vision.image_part(m, b) for m, b in images]]})
+    else:
+        messages.append({"role": "user", "content": message})
     return messages
 
 
@@ -413,6 +424,7 @@ def stream_llm_tokens(
     recall: Optional[str] = None,
     extra_system: Optional[str] = None,
     include_reasoning: bool = False,
+    images: Optional[List[tuple]] = None,
 ):
     """Yield tokens from the local LLM endpoint as they arrive (true streaming).
 
@@ -432,7 +444,7 @@ def stream_llm_tokens(
     import json
 
     messages = _build_messages(message, context_turns, mode=mode, recall=recall,
-                               extra_system=extra_system)
+                               extra_system=extra_system, images=images)
     payload = _build_payload(messages, stream=True)
 
     emitted_any = False
@@ -2142,6 +2154,7 @@ def generate_with_tools(
     emit_status: bool = True,
     emit_results: bool = False,
     extra_system: Optional[str] = None,
+    images: Optional[List[tuple]] = None,
 ):
     """Run the tool-calling loop and yield event dicts.
 
@@ -2153,7 +2166,7 @@ def generate_with_tools(
     import json
     messages = _build_messages(message, context_turns, mode=mode,
                                include_tools_guidance=bool(tool_schemas),
-                               extra_system=extra_system)
+                               extra_system=extra_system, images=images)
 
     # Tool-calling is more reliable at a lower temperature than the conversational
     # default, so run the loop at a configurable tools temperature.

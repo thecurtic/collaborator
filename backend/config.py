@@ -304,6 +304,20 @@ def load_config() -> dict:
                 "timeout": 10,
             },
         },
+        "attachments": {
+            # Files attached to chats (attachments.py): stored on the server,
+            # content-addressed under the user's data directory; text is
+            # extracted once (markitdown, pypdfium2, the chat model's vision,
+            # speech-to-text) and stored with the attachment.
+            "max_mb": 50,             # per file
+            "inline_chars": 12000,    # extracted text sent with the turn it's attached to
+            "history_chars": 3000,    # ...and with later turns (read_attachment has the rest)
+            "return_chars": 15000,    # per read_attachment part
+            "max_text_chars": 500000, # stored text per attachment
+            "wait_seconds": 90,       # how long a send waits for text still being read
+            "ocr_max_pages": 30,      # scanned PDF pages read by the vision model, per file
+            "image_max_side": 1600,   # images are downscaled to this before the model sees them
+        },
         "chat_summary": {
             # The three-dots chat card's summary: generated on demand (never
             # after every turn) by the utility model, cached on the root, and
@@ -342,6 +356,8 @@ def load_config() -> dict:
                 "transcribe_video": True,  # yt-dlp audio -> STT (never captions)
                 "list_transcripts": True,  # catalogue of stored transcripts
                 "read_transcript": True,   # read one stored transcript by id
+                "list_attachments": True,  # catalogue of files attached to chats
+                "read_attachment": True,   # an attachment's extracted text, paged
                 "read_logs": True,     # agent can read its own recent server logs
                 "wallet": True,        # self-gating: needs a wallet for the user
                 "ditta_search": True,  # self-gating: needs tools.ditta.url + pubkey
