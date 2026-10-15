@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   GitBranch,
   Loader2,
   Mic,
@@ -19,10 +20,14 @@ import {
   useState,
 } from 'react';
 import { Button } from '@/components/ui/button';
+import type { Attachment } from '@/domain/models';
+import { attachmentsApi, formatSize } from '@/features/attachments/attachmentsApi';
+import { kindIcon } from '@/features/attachments/AttachmentViews';
 import { useDictation } from '@/features/voice/useDictation';
 import { useWakeLock } from '@/features/voice/useWakeLock';
 import { useLongPress } from '@/lib/useLongPress';
 import { cleanUrlsInText } from '@/lib/urlClean';
+import { cn } from '@/lib/utils';
 import { appendQuoteToDraft } from './quote';
 
 /** Imperative surface for quote-replies and edit-and-resend prefills. */
@@ -37,9 +42,9 @@ interface ComposerProps {
   disabled: boolean;
   /**
    * Resolves false if the send failed OR was stopped mid-response — the
-   * draft is then restored for tweak-and-resend.
+   * draft (and its attachments) is then restored for tweak-and-resend.
    */
-  onSend: (message: string) => Promise<boolean>;
+  onSend: (message: string, attachments: Attachment[]) => Promise<boolean>;
   /** Abort the in-flight response stream (shown as a stop button). */
   onStop?: () => void;
   /**
@@ -55,6 +60,22 @@ interface ComposerProps {
 }
 
 const MAX_TEXTAREA_PX = 160; // matches max-h-40
+const MAX_ATTACHMENTS = 10; // the backend's per-message limit
+
+/** A file on its way into the next message: uploading, ready, or failed. */
+interface PendingFile {
+  key: string;
+  name: string;
+  size: number;
+  /** Local preview for images (revoked when the chip goes). */
+  previewUrl: string | null;
+  status: 'uploading' | 'ready' | 'error';
+  attachment?: Attachment;
+  error?: string;
+  abort?: AbortController;
+}
+
+let pendingSeq = 0;
 
 export function Composer({
   disabled,
@@ -67,6 +88,10 @@ export function Composer({
 }: ComposerProps) {
   const [value, setValue] = useState('');
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  // Attachments upload the moment they're picked (to the server, so every
+  // device sees them); the message only carries their ids.
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // Streaming dictation: transcribes WHILE you speak (live partial below the
   // input), so the final text lands near-instantly when you tap stop.
   const {
@@ -104,14 +129,80 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_PX)}px`;
   }, [value]);
 
+  function addFiles(list: FileList | File[]) {
+    const incoming = Array.from(list);
+    if (incoming.length === 0) return;
+    setFiles((prev) => {
+      const room = MAX_ATTACHMENTS - prev.length;
+      if (room <= 0) return prev;
+      const added: PendingFile[] = incoming.slice(0, room).map((file) => {
+        const abort = new AbortController();
+        const key = `f${++pendingSeq}`;
+        const name = file.name || 'pasted-file';
+        void attachmentsApi
+          .upload(file, name, abort.signal)
+          .then((attachment) =>
+            setFiles((cur) =>
+              cur.map((f) => (f.key === key ? { ...f, status: 'ready', attachment } : f)),
+            ),
+          )
+          .catch((err: unknown) => {
+            if (abort.signal.aborted) return;
+            setFiles((cur) =>
+              cur.map((f) =>
+                f.key === key
+                  ? { ...f, status: 'error', error: err instanceof Error ? err.message : 'Upload failed' }
+                  : f,
+              ),
+            );
+          });
+        return {
+          key,
+          name,
+          size: file.size,
+          previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
+          status: 'uploading',
+          abort,
+        };
+      });
+      return [...prev, ...added];
+    });
+  }
+
+  function removeFile(key: string) {
+    setFiles((cur) => {
+      const f = cur.find((x) => x.key === key);
+      if (f) {
+        f.abort?.abort();
+        if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
+        // Never sent: discard it server-side too (best-effort).
+        if (f.attachment) void attachmentsApi.remove(f.attachment.id).catch(() => {});
+      }
+      return cur.filter((x) => x.key !== key);
+    });
+  }
+
+  const uploading = files.some((f) => f.status === 'uploading');
+  const ready = files.filter((f) => f.status === 'ready' && f.attachment);
+
   async function submit() {
     const trimmed = value.trim();
-    if (!trimmed || disabled) return;
+    if ((!trimmed && ready.length === 0) || disabled || uploading) return;
     // Clear optimistically (the streaming bubble shows the text); restore the
     // draft if the send fails so the message isn't lost.
+    const sentFiles = files;
     setValue('');
-    const ok = await onSend(trimmed);
-    if (!ok) setValue((v) => (v ? v : trimmed));
+    setFiles([]);
+    const ok = await onSend(
+      trimmed,
+      ready.map((f) => f.attachment as Attachment),
+    );
+    if (!ok) {
+      setValue((v) => (v ? v : trimmed));
+      setFiles((cur) => (cur.length ? cur : sentFiles));
+    } else {
+      sentFiles.forEach((f) => f.previewUrl && URL.revokeObjectURL(f.previewUrl));
+    }
   }
 
   function handleSubmit(e: FormEvent) {
@@ -130,6 +221,12 @@ export function Composer({
   // Pasted links get their tracking params stripped at the door, so the
   // cleaned URL is what the user sees, sends, and stores.
   function handlePaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    // Pasted files (a screenshot, a copied image) become attachments.
+    if (e.clipboardData.files.length > 0) {
+      e.preventDefault();
+      addFiles(e.clipboardData.files);
+      return;
+    }
     const raw = e.clipboardData.getData('text/plain');
     if (!raw || !/https?:\/\//i.test(raw)) return;
     const cleaned = cleanUrlsInText(raw);
@@ -157,7 +254,7 @@ export function Composer({
   }
 
   const error = dictationError ?? voiceNotice;
-  const hasDraft = value.trim().length > 0;
+  const hasDraft = value.trim().length > 0 || files.length > 0;
 
   // Hold send → the draft becomes a call's opening turn (the call button is
   // hidden while a draft exists, so the hold IS the entry point). A normal
@@ -165,7 +262,8 @@ export function Composer({
   // that follows a hold, so holding never also sends.
   const sendHold = useLongPress(() => {
     const draft = value.trim();
-    if (!draft || disabled || !onStartCall) return;
+    // Calls don't take attachments yet: with files attached, hold does nothing.
+    if (!draft || disabled || !onStartCall || files.length > 0) return;
     setValue('');
     onStartCall(draft);
   });
@@ -204,8 +302,70 @@ export function Composer({
       )}
       {/* One visual box, two layers: text on top, buttons below. Extra bottom
           padding lifts the whole thing off the phone's bottom edge. */}
-      <form onSubmit={handleSubmit} className="px-3 pb-5 pt-3 sm:px-4">
+      <form
+        onSubmit={handleSubmit}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          if (e.dataTransfer.files.length > 0) {
+            e.preventDefault();
+            addFiles(e.dataTransfer.files);
+          }
+        }}
+        className="px-3 pb-5 pt-3 sm:px-4"
+      >
         <div className="rounded-2xl border border-input bg-card px-3 pb-2 pt-2.5 focus-within:ring-2 focus-within:ring-ring">
+          {files.length > 0 && (
+            <div className="mb-1.5 flex gap-1.5 overflow-x-auto pb-1">
+              {files.map((f) => {
+                const Icon = kindIcon(f.attachment?.kind ?? 'file');
+                return (
+                  <div
+                    key={f.key}
+                    className={cn(
+                      'relative flex shrink-0 items-center gap-1.5 rounded-lg border bg-muted/60 text-xs',
+                      f.previewUrl ? 'p-0' : 'max-w-[13rem] py-1.5 pl-2 pr-7',
+                      f.status === 'error' ? 'border-destructive/60' : 'border-border',
+                    )}
+                    title={f.error ?? f.name}
+                  >
+                    {f.previewUrl ? (
+                      <img src={f.previewUrl} alt={f.name} className="h-14 w-14 rounded-lg object-cover" />
+                    ) : (
+                      <>
+                        <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0">
+                          <span className="block truncate font-medium text-foreground">{f.name}</span>
+                          <span className="block text-muted-foreground">
+                            {f.status === 'error' ? 'Upload failed' : formatSize(f.size)}
+                          </span>
+                        </span>
+                      </>
+                    )}
+                    {f.status === 'uploading' && (
+                      <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/50">
+                        <Loader2 className="h-4 w-4 animate-spin text-foreground" />
+                      </span>
+                    )}
+                    {f.status === 'error' && f.previewUrl && (
+                      <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/60">
+                        <AlertCircle className="h-4 w-4 text-destructive" />
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${f.name}`}
+                      onClick={() => removeFile(f.key)}
+                      className="absolute right-0.5 top-0.5 rounded-full bg-background/80 p-0.5 text-foreground shadow-sm active:scale-90"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             value={value}
@@ -222,13 +382,24 @@ export function Composer({
             className="max-h-40 min-h-[2.25rem] w-full resize-none border-0 bg-transparent px-1 py-1.5 text-base text-foreground outline-none placeholder:text-muted-foreground sm:text-sm"
           />
           <div className="mt-1 flex items-center gap-1">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => {
+                if (e.target.files) addFiles(e.target.files);
+                e.target.value = ''; // the same file can be picked again
+              }}
+            />
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              disabled
-              aria-label="Add attachment (coming soon)"
-              title="Attachments — coming soon"
+              disabled={files.length >= MAX_ATTACHMENTS}
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Attach files"
+              title="Attach photos or files"
               className="h-9 w-9 rounded-full text-muted-foreground"
             >
               <Plus className="h-5 w-5" />
@@ -272,7 +443,7 @@ export function Composer({
                 <Button
                   type="submit"
                   size="icon"
-                  disabled={disabled}
+                  disabled={disabled || uploading}
                   {...(onStartCall ? sendHold : {})}
                   aria-label="Send message (hold to continue in a call)"
                   title="Send · hold to talk it out in a call instead"

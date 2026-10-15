@@ -611,6 +611,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
         // b23d8ea: opt-in per-turn location (absent = no placeholder).
         location: input.location,
         state: input.state,
+        attachment_ids: input.attachmentIds?.length ? input.attachmentIds : undefined,
       }),
       signal,
     });
@@ -639,6 +640,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
         tools: input.tools,
         // b23d8ea: opt-in per-turn location (absent = no placeholder).
         location: input.location,
+        attachment_ids: input.attachmentIds?.length ? input.attachmentIds : undefined,
       }),
       signal,
     });

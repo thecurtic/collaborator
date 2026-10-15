@@ -147,7 +147,29 @@ export interface ApiTreeNode {
   state?: string;
   /** Persisted tool activity for this (assistant) turn, when tools ran. */
   tools?: ApiTurnTool[];
+  /** Files a user turn carried (snapshot at send time). */
+  attachments?: ApiTurnAttachment[];
   children: ApiTreeNode[];
+}
+
+export interface ApiTurnAttachment {
+  id: number;
+  filename: string;
+  mime: string | null;
+  kind: string;
+  size: number;
+}
+
+export interface ApiAttachment extends ApiTurnAttachment {
+  created_at: string;
+  text_status: string;
+  text_error: string | null;
+  text_via: string | null;
+  pages: number | null;
+  chars: number;
+  first_turn_id: number | null;
+  text?: string | null;
+  snippet?: string;
 }
 
 /** One persisted tool call on a tree node (mirrors the status/outcome events). */

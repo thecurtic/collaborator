@@ -1,4 +1,5 @@
 import type {
+  ApiAttachment,
   ApiChatCard,
   ApiFeed,
   ApiFeedItem,
@@ -18,11 +19,14 @@ import type {
   ApiTree,
   ApiTreeNode,
   ApiTurn,
+  ApiTurnAttachment,
   ApiTtsVoices,
   ApiTurnTool,
   ApiTurnsResponse,
 } from '@/api/types';
 import type {
+  Attachment,
+  AttachmentKind,
   ChatCard,
   Feed,
   FeedItem,
@@ -44,6 +48,7 @@ import type {
   TreeNode,
   TtsVoices,
   Turn,
+  TurnAttachment,
   TurnsPage,
 } from './models';
 
@@ -124,6 +129,40 @@ export function toTurnTools(api: ApiTurnTool[] | undefined): ToolActivity[] {
   }));
 }
 
+const ATTACHMENT_KINDS: AttachmentKind[] = [
+  'image', 'pdf', 'document', 'text', 'audio', 'video', 'file',
+];
+
+export function toTurnAttachment(api: ApiTurnAttachment): TurnAttachment {
+  return {
+    id: api.id,
+    filename: api.filename,
+    mime: api.mime ?? null,
+    kind: ATTACHMENT_KINDS.includes(api.kind as AttachmentKind)
+      ? (api.kind as AttachmentKind)
+      : 'file',
+    size: api.size ?? 0,
+  };
+}
+
+const TEXT_STATUSES = ['pending', 'working', 'done', 'failed', 'none'] as const;
+
+export function toAttachment(api: ApiAttachment): Attachment {
+  return {
+    ...toTurnAttachment(api),
+    createdAt: api.created_at,
+    textStatus: (TEXT_STATUSES as readonly string[]).includes(api.text_status)
+      ? (api.text_status as Attachment['textStatus'])
+      : 'none',
+    textError: api.text_error ?? null,
+    textVia: api.text_via ?? null,
+    pages: api.pages ?? null,
+    chars: api.chars ?? 0,
+    firstTurnId: api.first_turn_id ?? null,
+    text: api.text,
+  };
+}
+
 export function toTreeNode(api: ApiTreeNode): TreeNode {
   return {
     id: api.id,
@@ -144,6 +183,7 @@ export function toTreeNode(api: ApiTreeNode): TreeNode {
     state: api.state === 'seed' ? 'seed' : 'tree',
     recall: api.recall ? toRecallBlock(api.recall) : null,
     tools: toTurnTools(api.tools),
+    attachments: (api.attachments ?? []).map(toTurnAttachment),
     children: (api.children ?? []).map(toTreeNode),
   };
 }

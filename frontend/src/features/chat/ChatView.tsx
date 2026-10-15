@@ -18,7 +18,7 @@ import { quoteForReply } from './quote';
 import { TreeBubble, UserText, type ShareScope } from './TreeBubble';
 import type { Conversation, PathEntry } from './useConversation';
 import { ActivityRow } from '@/components/ActivityRow';
-import type { TreeNode } from '@/domain/models';
+import type { Attachment, TreeNode } from '@/domain/models';
 
 interface ChatViewProps {
   /** Conversation state/actions, owned by the app shell (shared with tabs). */
@@ -303,11 +303,12 @@ export function ChatView({
   };
 
   // Resolves false on failure so the composer can restore the lost draft.
-  const handleSend = (message: string): Promise<boolean> => {
+  const handleSend = (message: string, files: Attachment[] = []): Promise<boolean> => {
+    const ids = files.map((f) => f.id);
     if (editTarget != null) {
       const target = editTarget;
       setEditTarget(null);
-      return editResend(target, message);
+      return editResend(target, message, ids);
     }
     if (branchTarget) {
       const result = branch(
@@ -315,11 +316,12 @@ export function ChatView({
         message,
         branchTarget.paragraphIndex,
         branchTarget.withContext,
+        ids,
       );
       onBranchTargetChange(null);
       return result;
     }
-    return send(message);
+    return send(message, ids);
   };
 
   // Tapping a branch button asks with/without context first.

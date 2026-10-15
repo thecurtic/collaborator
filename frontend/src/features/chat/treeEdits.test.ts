@@ -24,6 +24,7 @@ function node(id: number, children: TreeNode[] = []): TreeNode {
     state: 'seed',
     recall: null,
     tools: [],
+    attachments: [],
     children,
   };
 }

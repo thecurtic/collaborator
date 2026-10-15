@@ -74,7 +74,41 @@ export interface TreeNode {
   recall: RecallBlock | null;
   /** Persisted tool activity for this turn (assistant turns; may be empty). */
   tools: ToolActivity[];
+  /** Files this (user) turn carried — a snapshot taken when it was sent. */
+  attachments: TurnAttachment[];
   children: TreeNode[];
+}
+
+export type AttachmentKind =
+  | 'image'
+  | 'pdf'
+  | 'document'
+  | 'text'
+  | 'audio'
+  | 'video'
+  | 'file';
+
+/** What a turn records about each file it carried. */
+export interface TurnAttachment {
+  id: number;
+  filename: string;
+  mime: string | null;
+  kind: AttachmentKind;
+  size: number;
+}
+
+/** An uploaded file (POST /api/attachments) and the state of its text. */
+export interface Attachment extends TurnAttachment {
+  createdAt: string;
+  textStatus: 'pending' | 'working' | 'done' | 'failed' | 'none';
+  textError: string | null;
+  textVia: string | null;
+  pages: number | null;
+  chars: number;
+  /** The user turn that first carried it; null = not sent yet. */
+  firstTurnId: number | null;
+  /** Only on GET /api/attachments/{id}. */
+  text?: string | null;
 }
 
 /** Display label for a conversation root: user name → LLM title → preview. */
@@ -118,6 +152,8 @@ export interface BranchInput {
   tools?: boolean;
   /** Where the user is, when they've opted in (b23d8ea); omit otherwise. */
   location?: TurnLocation;
+  /** Uploaded attachments this message carries. */
+  attachmentIds?: number[];
 }
 
 /**
@@ -482,6 +518,8 @@ export interface SendMessageInput {
   mode?: 'voice' | 'text';
   /** New-root only: conversation stage (used when a root is re-created). */
   state?: ConversationState;
+  /** Uploaded attachments this message carries. */
+  attachmentIds?: number[];
 }
 
 

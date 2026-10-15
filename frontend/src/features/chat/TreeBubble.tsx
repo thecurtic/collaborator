@@ -28,6 +28,7 @@ import { splitParagraphs } from '@/features/voice/speechUtils';
 import { useLongPress } from '@/lib/useLongPress';
 import { useModalA11y } from '@/lib/useModalA11y';
 import { cn } from '@/lib/utils';
+import { AttachmentStrip } from '@/features/attachments/AttachmentViews';
 import type { TreeNode } from '@/domain/models';
 
 export type ShareScope = 'turn' | 'context';
@@ -409,6 +410,9 @@ export function TreeBubble({
           <span className="absolute -top-2 right-3 z-10 rounded-full bg-primary px-2 py-0.5 text-[10px] font-medium text-primary-foreground shadow">
             Copied
           </span>
+        )}
+        {isUser && node.attachments.length > 0 && (
+          <AttachmentStrip items={node.attachments} onPrimary />
         )}
         {reading ? (
           <div

@@ -27,6 +27,7 @@ function node(id: number, children: TreeNode[] = [], branched = false): TreeNode
     state: 'tree',
     recall: null,
     tools: [],
+    attachments: [],
     children,
   };
 }

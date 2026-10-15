@@ -58,6 +58,11 @@ export interface Streaming {
   reply: string;
 }
 
+/** The optimistic bubble's text for a message that is only attachments. */
+function attachedLabel(ids: number[]): string {
+  return ids.length === 1 ? '📎 1 attachment' : `📎 ${ids.length} attachments`;
+}
+
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
 }
@@ -285,10 +290,10 @@ export function useConversation(reloadSignal: number) {
   const clearProposedDrafts = useCallback(() => setProposedDrafts([]), []);
 
   const send = useCallback(
-    async (message: string): Promise<boolean> => {
+    async (message: string, attachmentIds: number[] = []): Promise<boolean> => {
       const trimmed = message.trim();
-      if (!trimmed) return true;
-      const outcome = await runStream(trimmed, async (handlers, signal) =>
+      if (!trimmed && attachmentIds.length === 0) return true;
+      const outcome = await runStream(trimmed || attachedLabel(attachmentIds), async (handlers, signal) =>
         api.sendMessageStream(
           // Active leaf to continue from (omit for a brand-new conversation).
           {
@@ -296,6 +301,7 @@ export function useConversation(reloadSignal: number) {
             parentTurnId: leafRef.current ?? undefined,
             tools: getToolsEnabled(),
             location: await currentLocation(),
+            attachmentIds,
           },
           handlers,
           signal,
@@ -326,14 +332,15 @@ export function useConversation(reloadSignal: number) {
       message: string,
       paragraphIndex?: number,
       withContext = true,
+      attachmentIds: number[] = [],
     ): Promise<boolean> => {
       const trimmed = message.trim();
-      if (!trimmed) return true;
+      if (!trimmed && attachmentIds.length === 0) return true;
       // Branching is a graduation signal: capture the seed root BEFORE the
       // stream (the reload inside runStream rebuilds the index).
       const root = rootOfTurn(parentTurnId);
       const seedRootId = root?.state === 'seed' ? root.id : null;
-      const outcome = await runStream(trimmed, async (handlers, signal) =>
+      const outcome = await runStream(trimmed || attachedLabel(attachmentIds), async (handlers, signal) =>
         api.branchMessage(
           {
             parentTurnId,
@@ -341,6 +348,7 @@ export function useConversation(reloadSignal: number) {
             paragraphIndex,
             tools: getToolsEnabled(),
             location: await currentLocation(),
+            attachmentIds,
             // "Without context" → fresh branch, no prior turns injected.
             ...(withContext ? {} : { contextTurns: 0 }),
           },
@@ -367,13 +375,17 @@ export function useConversation(reloadSignal: number) {
    * UI must only offer it on a leaf exchange.
    */
   const editResend = useCallback(
-    async (assistantId: number, message: string): Promise<boolean> => {
+    async (assistantId: number, message: string, addedIds: number[] = []): Promise<boolean> => {
       const trimmed = message.trim();
-      if (!trimmed) return true;
       const { byId, parentOf } = indexRef.current;
       const a = byId.get(assistantId);
       const uId = parentOf.get(assistantId);
       const u = uId != null && uId !== VIRTUAL_ROOT ? byId.get(uId) : undefined;
+      // Regenerating keeps the files the original message carried.
+      const attachmentIds = [
+        ...new Set([...(u?.attachments ?? []).map((x) => x.id), ...addedIds]),
+      ];
+      if (!trimmed && attachmentIds.length === 0) return true;
       if (!a || !u) {
         setError('That exchange no longer exists — reload and try again.');
         return false;
@@ -398,7 +410,7 @@ export function useConversation(reloadSignal: number) {
         return false;
       }
 
-      const outcome = await runStream(trimmed, async (handlers, signal) =>
+      const outcome = await runStream(trimmed || attachedLabel(attachmentIds), async (handlers, signal) =>
         u.branched && parentId != null && parentId !== VIRTUAL_ROOT
           ? api.branchMessage(
               {
@@ -407,6 +419,7 @@ export function useConversation(reloadSignal: number) {
                 paragraphIndex: u.paragraphIndex ?? undefined,
                 tools: getToolsEnabled(),
                 location: await currentLocation(),
+                attachmentIds,
                 ...(u.contextBoundary ? { contextTurns: 0 } : {}),
               },
               handlers,
@@ -418,6 +431,7 @@ export function useConversation(reloadSignal: number) {
                 parentTurnId: isRoot ? undefined : (parentId ?? undefined),
                 tools: getToolsEnabled(),
                 location: await currentLocation(),
+                attachmentIds,
                 ...(keepState ? { state: keepState } : {}),
               },
               handlers,
