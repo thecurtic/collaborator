@@ -236,14 +236,48 @@ def test_readable_toggle():
     print("✓ per-item llm_readable toggle")
 
 
-def test_unsupported_media_action():
+def test_media_hold_send_reads_the_file(monkeypatch):
+    """Hold-send on a photo or document runs the attachment pipeline: the
+    text read from it is kept on the item and handed to the one-shot agent."""
+    import vision
     c, cfg, dbp = _fresh()
+
+    # No model reads images: an honest "nothing to read", nothing run.
+    cfg["inference"]["vision"] = False
+    cfg["tools"]["screenshot"]["vision_model"] = None
     r = c.post("/api/scratch/media",
                files={"file": ("pic.png", io.BytesIO(b"png"), "image/png")})
     out = c.post(f"/api/scratch/{r.json()['item']['id']}/act").json()["item"]
     assert out["action_result"]["kind"] == "unsupported"
     assert out["status"] == "done"
-    print("✓ image hold-send: honest unsupported (vision pipeline is future work)")
+
+    # With eyes: the photo is read, and the agent gets that text.
+    cfg["inference"]["vision"] = True
+    vision._vlm_cache.clear()
+    monkeypatch.setattr(vision, "look", lambda images, prompt, **k:
+                        "DENTIST THURSDAY 3PM\n---\nA reminder card.")
+    seen = {}
+
+    def fake_action(db_path, text, build_tools, generate):
+        seen["text"] = text
+        return {"kind": "flagged", "note": "left as a note"}
+    monkeypatch.setattr(scratch, "run_text_action", fake_action)
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 30), "white").save(buf, format="PNG")
+    r = c.post("/api/scratch/media", data={"content": "card from the front desk"},
+               files={"file": ("card.png", io.BytesIO(buf.getvalue()), "image/png")})
+    out = c.post(f"/api/scratch/{r.json()['item']['id']}/act").json()["item"]
+    assert "DENTIST THURSDAY 3PM" in seen["text"]
+    assert "card from the front desk" in seen["text"]
+    assert out["transcript"].startswith("DENTIST THURSDAY 3PM")
+
+    # A document goes through markitdown the same way.
+    r = c.post("/api/scratch/media",
+               files={"file": ("costs.csv", io.BytesIO(b"item,cost\nseeds,4\n"), "text/csv")})
+    c.post(f"/api/scratch/{r.json()['item']['id']}/act")
+    assert "| seeds | 4 |" in seen["text"]
+    print("✓ media hold-send: photos and documents are read, then acted on")
 
 
 def test_multi_proposal_retags_all_drafts():

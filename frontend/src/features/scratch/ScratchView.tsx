@@ -230,6 +230,37 @@ function DraftDecision({
   );
 }
 
+/**
+ * What was read from a capture (a voice memo's transcript, a file's text):
+ * a few lines, tap for the rest — a PDF's text shouldn't swallow the card.
+ */
+function ReadText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 280 || text.split('\n').length > 4;
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen((o) => !o)}
+      disabled={!long}
+      className="mt-1 block w-full text-left"
+    >
+      <p
+        className={cn(
+          'whitespace-pre-wrap break-words text-xs italic text-muted-foreground',
+          !open && long && 'line-clamp-4',
+        )}
+      >
+        “{text}”
+      </p>
+      {long && (
+        <span className="text-[11px] font-medium text-primary">
+          {open ? 'Show less' : 'Show all'}
+        </span>
+      )}
+    </button>
+  );
+}
+
 /** Image thumbnail / audio playback for media items (authed blob fetch). */
 function MediaBlock({ item }: { item: ScratchItem }) {
   const [url, setUrl] = useState<string | null>(null);
@@ -769,11 +800,7 @@ export function ScratchView({
                   </p>
                 )}
                 <MediaBlock item={item} />
-                {item.transcript && (
-                  <p className="mt-1 whitespace-pre-wrap break-words text-xs italic text-muted-foreground">
-                    “{item.transcript}”
-                  </p>
-                )}
+                {item.transcript && <ReadText text={item.transcript} />}
                 <ActionResult
                   item={item}
                   onDecided={() => void load(query.trim())}

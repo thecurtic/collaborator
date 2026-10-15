@@ -390,12 +390,40 @@ def _pdf(path: str) -> Tuple[str, int, str]:
     return "\n\n".join(parts), pages, via
 
 
-def _image(db_path: str, att: dict) -> str:
+def _image(path: str, mime: Optional[str]) -> str:
     import vision
-    with open(file_path(db_path, att), "rb") as f:
+    with open(path, "rb") as f:
         data = f.read()
-    mime, b64 = vision.prepare_image(data, att.get("mime"))
+    mime, b64 = vision.prepare_image(data, mime)
     return vision.look([(mime, b64)], _IMAGE_PROMPT, max_tokens=1536)
+
+
+class NothingToRead(Exception):
+    """This file has no text to take (or no model here can see it)."""
+
+
+def extract_file(path: str, kind: str, mime: Optional[str] = None):
+    """(text, via, pages) for one file on disk — the extraction itself,
+    shared by attachments and Scratch captures. Raises NothingToRead when
+    there's nothing to take, any other exception on failure."""
+    if not os.path.exists(path):
+        raise RuntimeError("the stored file is missing")
+    if kind == "text":
+        return _cap(_read_text_file(path)), "text", None
+    if kind == "document":
+        return _cap(_markitdown(path)), "markitdown", None
+    if kind == "pdf":
+        text, pages, via = _pdf(path)
+        return _cap(text), via, pages
+    if kind == "image":
+        import vision
+        if not vision.model():
+            raise NothingToRead("no model here reads images")
+        return _cap(_image(path, mime)), "vision", None
+    if kind in ("audio", "video"):
+        import voice
+        return _cap(voice.transcribe_batch(path)), "speech-to-text", None
+    raise NothingToRead("no text can be taken from this kind of file")
 
 
 def extract(db_path: str, att_id: int) -> dict:
@@ -408,33 +436,13 @@ def extract(db_path: str, att_id: int) -> dict:
     if att is None or att["text_status"] in ("done", "none"):
         return att
     _set(db_path, att_id, text_status="working")
-    path = file_path(db_path, att)
     kind = att["kind"]
-    pages, via = None, None
     try:
-        if not os.path.exists(path):
-            raise RuntimeError("the stored file is missing")
-        if kind == "text":
-            text, via = _read_text_file(path), "text"
-        elif kind == "document":
-            text, via = _markitdown(path), "markitdown"
-        elif kind == "pdf":
-            text, pages, via = _pdf(path)
-        elif kind == "image":
-            import vision
-            if not vision.model():
-                _set(db_path, att_id, text_status="none",
-                     text_error="no model here reads images")
-                return _reload(db_path, att_id)
-            text, via = _image(db_path, att), "vision"
-        elif kind in ("audio", "video"):
-            import voice
-            text, via = voice.transcribe_batch(path), "speech-to-text"
-        else:
-            _set(db_path, att_id, text_status="none")
-            return _reload(db_path, att_id)
-        _set(db_path, att_id, text=_cap(text), text_status="done",
+        text, via, pages = extract_file(file_path(db_path, att), kind, att.get("mime"))
+        _set(db_path, att_id, text=text, text_status="done",
              text_error=None, text_via=via, pages=pages)
+    except NothingToRead as e:
+        _set(db_path, att_id, text_status="none", text_error=str(e))
     except Exception as e:
         # Content-free on the logging side: the error, never the text.
         print(f"Warning: attachment #{att_id} ({kind}) extraction failed: {e}")
