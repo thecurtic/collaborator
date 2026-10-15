@@ -1545,9 +1545,9 @@ def screenshot_page(url: str, question: Optional[str] = None) -> Dict:
     """Screenshot a page via the webtool and analyze it with the local vision model.
 
     Two hops, both self-hosted: the search VM's Playwright service renders the
-    page (VPN egress, JS executed, full-page PNG) and LM Studio's vision model
-    (tools.screenshot.vision_model, loaded on demand) describes it / answers the
-    model's question about it. Returns {url, visual, page_text_excerpt?}.
+    page (VPN egress, JS executed, full-page PNG) and the vision path
+    (vision.py: the chat model itself when it reads images) describes it /
+    answers the model's question about it. Returns {url, visual, page_text_excerpt?}.
     Reuses fetch_url's URL guards; fails closed like _fetch_via_webtool.
     """
     from urllib.parse import urlparse
@@ -1564,9 +1564,10 @@ def screenshot_page(url: str, question: Optional[str] = None) -> Dict:
     base = (fcfg.get("webtool_url") or "").rstrip("/")
     if not base:
         return {"error": "screenshots need the webtool (tools.fetch_url.webtool_url)"}
-    vision_model = scfg.get("vision_model")
-    if not vision_model:
-        return {"error": "no vision model configured (tools.screenshot.vision_model)"}
+    import vision
+    if not vision.model():
+        return {"error": "no model here can read images: the chat model is "
+                         "text-only (see Settings → Model)"}
 
     try:
         response = requests.post(
@@ -1587,31 +1588,13 @@ def screenshot_page(url: str, question: Optional[str] = None) -> Dict:
         "Describe this web page screenshot for someone who cannot see it: the "
         "layout, the main content, and any text that matters. Transcribe important "
         "text accurately; say so when text is too small to read.")
-    payload = {
-        "model": vision_model,
-        "messages": [{"role": "user", "content": [
-            {"type": "image_url",
-             "image_url": {"url": f"data:image/png;base64,{png_b64}"}},
-            {"type": "text", "text": prompt},
-        ]}],
-        "temperature": scfg.get("temperature", 0.2),
-        "max_tokens": scfg.get("max_tokens", 512),
-        "stream": False,
-    }
     try:
-        # Generous timeout: LM Studio JIT-loads the vision model on first use.
-        vr = requests.post(f"{_get_endpoint_url()}/chat/completions",
-                           json=payload, timeout=scfg.get("timeout", 180))
-        vr.raise_for_status()
-        visual = (vr.json()["choices"][0]["message"]["content"] or "").strip()
-    except requests.exceptions.RequestException as e:
-        detail = ""
-        body = getattr(getattr(e, "response", None), "text", "") or ""
-        if body:
-            detail = f" — {body[:200]}"
-        return {"error": f"vision analysis failed ({vision_model}): {e}{detail}"}
-    if not visual:
-        return {"error": f"vision model {vision_model} returned no analysis"}
+        visual = vision.look([("image/png", png_b64)], prompt,
+                             max_tokens=scfg.get("max_tokens", 512),
+                             temperature=scfg.get("temperature", 0.2),
+                             timeout=scfg.get("timeout", 180))
+    except RuntimeError as e:
+        return {"error": f"vision analysis failed: {e}"}
 
     out = {"url": data.get("url") or url, "visual": visual, "via": "webtool"}
     text = (data.get("text") or "").strip()

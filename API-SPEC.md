@@ -824,6 +824,21 @@ PUT /api/model    { "model_id": "qwen/qwen3-30b-a3b", "force"?: false }
   `force: true` to set it anyway (e.g. the endpoint was momentarily unreachable).
 - ⚠️ The model is **per-install**, not per-user: switching changes it for everyone.
 
+```
+GET  /api/vision      -> { "chat_model": "…", "chat_model_sees": true, "setting": "auto",
+                           "model": "…", "lmstudio_type"?: "vlm", "legacy_fallback"?: true }
+POST /api/vision/test -> the same, plus { "ok": true, "expected": "PELICAN 47", "answer": "…" }
+                         or { "ok": false, "error": "…" }
+```
+
+- One vision path (`backend/vision.py`): images go to the CHAT model.
+  `inference.vision` decides whether it can see: `auto` asks LM Studio
+  (`/api/v0/models` type `vlm`), `true`/`false` overrides. `model` is who reads
+  images: the chat model when it can, else the legacy
+  `tools.screenshot.vision_model` when set, else null (no vision).
+- `/api/vision/test` draws a card with a known word, sends it to `model`, and
+  reports what came back: proof the image actually reached the model.
+
 > Setup: embeddings run locally on the backend by default (`fastembed`, downloads a
 > small model once). Enable via `recall.enabled` or the per-request `recall` flag.
 > Synthesis uses the LM Studio chat model. Set `recall.embedding_backend: lmstudio`

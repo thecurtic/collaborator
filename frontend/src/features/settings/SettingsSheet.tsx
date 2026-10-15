@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { synthesize } from '@/features/voice/piperTts';
 import { SPEECH_RATE } from '@/features/voice/speechUtils';
-import { ApiRequestError } from '@/api/http';
+import { ApiRequestError, request } from '@/api/http';
 import { Button } from '@/components/ui/button';
 import { useModalA11y } from '@/lib/useModalA11y';
 import { NotificationsSection } from './NotificationsSection';
@@ -77,6 +77,82 @@ function PageRow({ icon: Icon, label, hint, onClick }: {
       </span>
       <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
     </button>
+  );
+}
+
+interface VisionStatus {
+  chat_model: string | null;
+  chat_model_sees: boolean;
+  setting: string | boolean;
+  model: string | null;
+  lmstudio_type?: string | null;
+  legacy_fallback?: boolean;
+  ok?: boolean;
+  answer?: string;
+  error?: string;
+}
+
+/**
+ * Whether the chat model reads images (attachments, scanned pages and
+ * screenshots all rely on it), with a one-tap proof: a card with a known
+ * word goes to the model and its answer comes back.
+ */
+function VisionCheck() {
+  const [status, setStatus] = useState<VisionStatus | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<VisionStatus | null>(null);
+
+  useEffect(() => {
+    request<VisionStatus>('/api/vision').then(setStatus).catch(() => setStatus(null));
+  }, []);
+
+  const test = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await request<VisionStatus>('/api/vision/test', { method: 'POST' });
+      setResult(r);
+      setStatus(r);
+    } catch (err) {
+      setResult({ ...(status as VisionStatus), ok: false,
+                  error: err instanceof Error ? err.message : 'Test failed' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  let line = 'Checking whether it reads images…';
+  if (status) {
+    if (status.chat_model_sees) line = 'Reads images: attachments and screenshots go to this model.';
+    else if (status.legacy_fallback)
+      line = `Text only. Images go to the separate vision model (${status.model}) for now.`;
+    else if (status.lmstudio_type === 'llm')
+      line = 'Text only: LM Studio loaded it without its vision part (mmproj). ' +
+             'Images can’t be read until it loads as a vision model.';
+    else line = 'Text only, as far as the server can tell. Images can’t be read.';
+  }
+
+  return (
+    <div className="rounded-md bg-muted/60 px-2.5 py-2">
+      <p className="text-xs text-muted-foreground">{line}</p>
+      <button
+        type="button"
+        onClick={() => void test()}
+        disabled={testing}
+        className="mt-1 text-xs font-medium text-foreground underline underline-offset-2 disabled:opacity-60"
+      >
+        {testing ? 'Testing… (the model may need to load)' : 'Test image reading'}
+      </button>
+      {result && (
+        <p className={`mt-1 text-xs ${result.ok ? 'text-foreground' : 'text-destructive'}`}>
+          {result.ok
+            ? `✓ It read the test card: “${result.answer}”`
+            : result.error
+              ? result.error
+              : `✗ It answered “${result.answer}” — the image didn’t get through.`}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -220,6 +296,7 @@ function ModelPicker() {
             Applies to the very next message and persists. Note: this is
             per-install — it changes the model for every user, not just you.
           </p>
+          <VisionCheck key={models.current} />
         </>
       )}
     </div>

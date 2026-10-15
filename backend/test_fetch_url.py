@@ -267,6 +267,7 @@ def test_screenshot_page():
     cfg = config.get_config._config
     cfg["tools"]["fetch_url"]["webtool_url"] = "http://search-vm:8200"
     cfg["tools"]["screenshot"]["vision_model"] = "llava-v1.6-34b"
+    cfg["inference"]["vision"] = False   # text-only chat model: legacy fallback
     posts = []
 
     def fake_post(url, json=None, timeout=None, **k):
@@ -305,11 +306,13 @@ def test_screenshot_page():
         inference.requests.post = orig_post
         cfg["tools"]["screenshot"]["vision_model"] = None
         cfg["tools"]["fetch_url"]["webtool_url"] = None
+        cfg["inference"].pop("vision", None)
     print("✓ screenshot_page: webtool + vision chained, question passed, guards first")
 
 
 def test_screenshot_gating_and_shared_budget():
     cfg = config.get_config._config
+    cfg["inference"]["vision"] = False
     # Gated off without webtool_url + vision_model.
     schemas, _, _ = main._build_tools(os.environ["DB_PATH"])
     assert "screenshot_page" not in {s["function"]["name"] for s in schemas}
@@ -344,6 +347,7 @@ def test_screenshot_gating_and_shared_budget():
         cfg["tools"]["fetch_url"]["max_per_turn"] = orig_budget
         cfg["tools"]["screenshot"]["vision_model"] = None
         cfg["tools"]["fetch_url"]["webtool_url"] = None
+        cfg["inference"].pop("vision", None)
     print("✓ screenshot_page: self-gating + shares the per-turn fetch budget")
 
 

@@ -48,6 +48,7 @@ import feed
 import recurrence
 import ditta
 import nwc
+import vision
 import wallet
 import scratch
 import voice
@@ -1020,10 +1021,11 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                          "description": "only lines containing this (case-insensitive)"}},
                 "required": []}}})
 
-    # screenshot_page is self-gating: it needs both the webtool and a vision model.
+    # screenshot_page is self-gating: it needs the webtool and a model that
+    # reads images (vision.py — the chat model itself when it can).
     if (avail.get("screenshot_page", True)
             and (tcfg.get("fetch_url") or {}).get("webtool_url")
-            and (tcfg.get("screenshot") or {}).get("vision_model")):
+            and vision.model()):
         schemas.append({"type": "function", "function": {
             "name": "screenshot_page",
             "description": descs["screenshot_page"],
@@ -4034,6 +4036,22 @@ def list_models(
         return out
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/vision")
+def get_vision(passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Who reads images (vision.py): the chat model when it can, and why."""
+    _require_auth(passkey)
+    return vision.status()
+
+
+@app.post("/api/vision/test")
+def post_vision_test(passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Send the vision model a card with a known word on it and report what
+    it read back — proof that images actually reach the model."""
+    _require_auth(passkey)
+    vision._vlm_cache.clear()          # a fresh look at what LM Studio reports
+    return vision.self_test()
 
 
 @app.put("/api/model")

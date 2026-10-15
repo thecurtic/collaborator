@@ -16,6 +16,11 @@ inference:
   # (titles, recall/tool synthesis) — faster, and background work stops
   # evicting the chat model's KV cache. Note drafts always use the chat model.
   # utility_model: "qwen/qwen3-4b-2507"
+  # Can the chat model read images? One vision model by design: attachments,
+  # scanned-page OCR and screenshot_page all use the chat model. "auto" asks
+  # LM Studio (type "vlm" = loaded with its vision projector, the mmproj file);
+  # true/false for servers that don't say. Settings -> Model has a one-tap test.
+  vision: "auto"
   temperature: 0.7
   max_tokens: 2048
   thinking_mode: false
@@ -233,7 +238,7 @@ tools:
     propose_edit: true        # propose edits to an existing note -> PENDING draft too
     web_search: true          # self-gating: active only when web_search.url is set
     fetch_url: true           # read a specific page (pasted links)
-    screenshot_page: true     # self-gating: needs webtool_url + screenshot.vision_model
+    screenshot_page: true     # self-gating: needs webtool_url + a model that reads images
     transcribe_video: true    # yt-dlp audio -> STT for a new URL (never captions)
     list_transcripts: true    # catalogue of stored transcripts (cheap, browsable)
     read_transcript: true     # read one stored transcript by id, paged
@@ -280,10 +285,11 @@ tools:
     # Without webtool_url, fetches go DIRECT from this machine (pages see this
     # box's IP). A proxy can route that direct path instead:
     # proxy: "socks5h://<tor-or-vpn-host>:9050"   # needs: pip install requests[socks]
-  screenshot:                 # visual page analysis: webtool /screenshot -> vision model
-    vision_model: "qwen/qwen2.5-vl-7b"  # LM Studio loads it on demand (first call is
-                              # slow). Verified working; note llava-v1.6-34b currently
-                              # fails in LM Studio's MLX image preprocessing.
+  screenshot:                 # visual page analysis: webtool /screenshot -> the chat
+                              # model (inference.vision)
+    # vision_model: "qwen/qwen2.5-vl-7b"  # LEGACY second model: used ONLY while the
+                              # chat model can't read images. Remove it once the
+                              # Settings test passes on the chat model.
     temperature: 0.2
     max_tokens: 512
     timeout: 180              # headroom for the on-demand model load

@@ -91,6 +91,11 @@ def load_config() -> dict:
             # proposals, notes synthesis) uses the chat model; utility covers
             # ephemeral labels/summaries only.
             "utility_model": None,
+            # Can the chat model read images (vision.py)? "auto" asks LM
+            # Studio (type "vlm" = loaded with its vision projector); true /
+            # false for servers that don't say. One vision model by design:
+            # attachments, scanned-page OCR and screenshot_page all use it.
+            "vision": "auto",
             # Stream the model's chain-of-thought to the UI as 'reasoning' SSE
             # events (display-only — never saved, never re-prompted). Also
             # keeps proxies from timing out during long thinks; when off, a
@@ -415,9 +420,10 @@ def load_config() -> dict:
             },
             "screenshot": {
                 # Visual page analysis: webtool /screenshot (full-page PNG via the
-                # search VM's VPN) -> LM Studio vision model. The vision model is
-                # loaded on demand by LM Studio (JIT) — first call is slow.
-                "vision_model": None,   # e.g. "llava-v1.6-34b"; None = tool off
+                # search VM's VPN) -> the chat model when it reads images
+                # (inference.vision). LEGACY: vision_model, a separate model,
+                # is used only while the chat model can't see.
+                "vision_model": None,
                 "temperature": 0.2,
                 "max_tokens": 512,
                 "timeout": 180,         # headroom for on-demand model load
