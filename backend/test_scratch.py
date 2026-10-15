@@ -419,3 +419,18 @@ def test_delete_note_transcript_and_scratch_orphans():
     conn.close()
     assert status == "rejected"
     print("✓ delete: notes (backlinks->unresolved), transcripts, scratch orphan drafts")
+
+
+def test_media_never_serves_active_content():
+    c, cfg, dbp = _fresh()
+    r = c.post("/api/scratch/media",
+               files={"file": ("x.html", io.BytesIO(b"<script>alert(1)</script>"), "text/html")})
+    got = c.get(f"/api/scratch/{r.json()['item']['id']}/media")
+    assert got.headers["content-type"] == "application/octet-stream"
+    assert got.headers["content-disposition"].startswith("attachment")
+    assert got.headers["content-security-policy"] == "sandbox"
+    r = c.post("/api/scratch/media",
+               files={"file": ("p.png", io.BytesIO(b"png"), "image/png")})
+    got = c.get(f"/api/scratch/{r.json()['item']['id']}/media")
+    assert got.headers["content-type"] == "image/png"
+    print("✓ uploaded HTML/SVG downloads instead of running on the app's origin")

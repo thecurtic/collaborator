@@ -3429,6 +3429,23 @@ async def manual_web_search(
     return out
 
 
+def _serve_user_file(path: str, mime: Optional[str], filename: str):
+    """Serve a file the user uploaded (Scratch media, attachments). The mime
+    type came from the uploading client, so only passive media renders
+    inline: anything that could run script on this origin (HTML, SVG, XML,
+    unknown types) downloads instead, and the sandbox CSP + nosniff hold
+    even if a browser tries anyway."""
+    mime = (mime or "application/octet-stream").split(";")[0].strip().lower()
+    passive = (mime.startswith(("image/", "audio/", "video/")) and "svg" not in mime) \
+        or mime in ("application/pdf", "text/plain")
+    return FileResponse(
+        path, media_type=mime if passive else "application/octet-stream",
+        filename=filename,
+        content_disposition_type="inline" if passive else "attachment",
+        headers={"Content-Security-Policy": "sandbox",
+                 "X-Content-Type-Options": "nosniff"})
+
+
 # --- Scratch (notes-to-self) ---------------------------------------------------
 # The pipe is inert by default: capture endpoints never touch a model. The
 # only LLM entry point is POST /api/scratch/{id}/act (the hold-send gesture).
@@ -3530,8 +3547,7 @@ async def get_scratch_media(
     path = os.path.join(scratch.media_dir(db_path), row["media_path"])
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="media file missing")
-    return FileResponse(path, media_type=row.get("media_mime") or
-                        "application/octet-stream")
+    return _serve_user_file(path, row.get("media_mime"), row["media_path"])
 
 
 @app.patch("/api/scratch/{scratch_id}")
@@ -3850,18 +3866,7 @@ def get_attachment_file(
     path = attachments.file_path(db_path, att)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="file missing")
-    # Only passive media renders inline. Anything that could run script on
-    # this origin (HTML, SVG, XML, unknown types) downloads instead, and the
-    # sandbox CSP + nosniff hold even if a browser tries anyway.
-    mime = (att.get("mime") or "application/octet-stream").lower()
-    passive = (mime.startswith(("image/", "audio/", "video/")) and "svg" not in mime) \
-        or mime in ("application/pdf", "text/plain")
-    return FileResponse(
-        path, media_type=mime if passive else "application/octet-stream",
-        filename=att["filename"],
-        content_disposition_type="inline" if passive else "attachment",
-        headers={"Content-Security-Policy": "sandbox",
-                 "X-Content-Type-Options": "nosniff"})
+    return _serve_user_file(path, att.get("mime"), att["filename"])
 
 
 @app.post("/api/attachments/{attachment_id}/extract")
