@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
+import { ActiveFilter, ListFilterButton } from '@/components/ListFilter';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Note, NoteFieldsPatch, NoteMeta } from '@/domain/models';
@@ -391,6 +392,8 @@ export function NotesView({
   // Settings now.
   const lens = initialLens ?? 'all';
   const [notes, setNotes] = useState<NoteMeta[] | null>(null);
+  // The derived "no tag" filter (UX doc, Chats: "the same holds for Notes").
+  const [tagFilter, setTagFilter] = useState<'untagged' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reindexing, setReindexing] = useState(false);
   const [reindexNotice, setReindexNotice] = useState<string | null>(null);
@@ -465,6 +468,7 @@ export function NotesView({
   };
 
   const openNote = (title: string) => setScreen({ kind: 'note', title });
+  const shown = notes && tagFilter === 'untagged' ? notes.filter((n) => n.tags.length === 0) : notes;
 
   if (screen.kind === 'inbox') {
     return (
@@ -516,6 +520,14 @@ export function NotesView({
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
         <h2 className="text-2xl font-semibold">Notes</h2>
         <div className="flex items-center gap-1">
+          {lens !== 'social-graph' && (
+            <ListFilterButton
+              title="Show only"
+              options={[{ key: 'untagged', label: 'No tag' }]}
+              value={tagFilter}
+              onChange={setTagFilter}
+            />
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -583,6 +595,14 @@ export function NotesView({
         )}
       </div>
 
+      {lens !== 'social-graph' && (
+        <ActiveFilter
+          label={tagFilter ? 'No tag' : null}
+          count={shown?.length ?? 0}
+          onClear={() => setTagFilter(null)}
+        />
+      )}
+
       {!query.trim() && lens === 'social-graph' ? (
         <div className="min-h-0 flex-1">
           <PeopleView onOpenNote={openNote} />
@@ -592,25 +612,28 @@ export function NotesView({
         {error && (
           <p className="px-4 py-3 text-sm text-destructive">{error}</p>
         )}
-        {notes === null ? (
+        {shown === null ? (
           <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading notes…
           </div>
-        ) : notes.length === 0 && !error ? (
+        ) : shown.length === 0 && !error ? (
           <div className="py-16 text-center text-muted-foreground">
             <p className="text-lg font-medium text-foreground">
-              {query.trim() ? 'No matches' : 'No notes yet'}
+              {tagFilter && notes?.length ? 'Every note has a tag'
+                : query.trim() ? 'No matches' : 'No notes yet'}
             </p>
             <p className="mt-1 text-sm">
-              {query.trim()
+              {tagFilter && notes?.length
+                ? 'Nothing loose here.'
+                : query.trim()
                 ? 'Try the other search mode, or fewer words.'
                 : 'Approve drafts from the inbox to grow your vault.'}
             </p>
           </div>
         ) : (
           <ul className="divide-y divide-border">
-            {notes.map((n) => (
+            {shown.map((n) => (
               <li key={n.filename}>
                 <button
                   type="button"
@@ -622,6 +645,8 @@ export function NotesView({
                   </span>
                   <span className="flex items-center gap-2 text-xs text-muted-foreground">
                     {n.created && <span>{n.created}</span>}
+                    {/* Like a chat row: an untagged note reads as loose. */}
+                    {n.tags.length === 0 && <span className="italic opacity-70">untagged</span>}
                     {n.tags.slice(0, 4).map((t) => (
                       <span
                         key={t}

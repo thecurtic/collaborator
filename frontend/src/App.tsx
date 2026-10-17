@@ -43,6 +43,7 @@ import { ChatCardSheet } from '@/features/chat/ChatCardSheet';
 import { FeedView } from '@/features/feed/FeedView';
 import { ProjectsView } from '@/features/projects/ProjectsView';
 import { RootList } from '@/features/chat/RootList';
+import { ActiveFilter, ListFilterButton } from '@/components/ListFilter';
 import { TreeMap } from '@/features/chat/TreeMap';
 import { useConversation } from '@/features/chat/useConversation';
 import type { BranchTarget } from '@/features/chat/branchTarget';
@@ -133,6 +134,8 @@ function AppShell() {
   // Tree map, pushed within the Conversations tab (mirrors Mind's graph).
   const [mapOpen, setMapOpen] = useState(false);
   const [chatsFilter, setChatsFilter] = useState<'all' | 'conversations'>('all');
+  // The derived "no tag" filter (UX doc, Chats): rounds up loose chats.
+  const [chatsTagFilter, setChatsTagFilter] = useState<'untagged' | null>(null);
   // The chat screen is "pushed" over the tabs (back arrow returns to them).
   const [chatOpen, setChatOpen] = useState(false);
   // Web Search and Transcripts push over whatever is showing; so do Profile
@@ -339,6 +342,10 @@ function AppShell() {
     () => convo.tree.roots.filter((r) => r.state !== 'seed'),
     [convo.tree],
   );
+  const listedRoots = useMemo(() => {
+    const base = chatsFilter === 'all' ? convo.tree.roots : treeRoots;
+    return chatsTagFilter === 'untagged' ? base.filter((r) => r.chatTags.length === 0) : base;
+  }, [chatsFilter, chatsTagFilter, convo.tree, treeRoots]);
   // The map draws promoted conversations only (seeds live in the Chats tab).
   const mapTree = useMemo(
     () => ({ ...convo.tree, roots: treeRoots }),
@@ -857,6 +864,12 @@ function AppShell() {
                     </button>
                   ))}
                 </div>
+                <ListFilterButton
+                  title="Show only"
+                  options={[{ key: 'untagged', label: 'No tag' }]}
+                  value={chatsTagFilter}
+                  onChange={setChatsTagFilter}
+                />
                 <Button
                   variant="ghost"
                   size="icon"
@@ -869,11 +882,17 @@ function AppShell() {
                 </Button>
               </div>
             </div>
+            <ActiveFilter
+              label={chatsTagFilter ? 'No tag' : null}
+              count={listedRoots.length}
+              onClear={() => setChatsTagFilter(null)}
+            />
             <div className="min-h-0 flex-1">
               <RootList
-                roots={chatsFilter === 'all' ? convo.tree.roots : treeRoots}
-                emptyTitle={chatsFilter === 'all' ? 'No chats yet' : 'No conversations yet'}
-                emptyHint={chatsFilter === 'all'
+                roots={listedRoots}
+                emptyTitle={chatsTagFilter ? 'Every chat has a tag'
+                  : chatsFilter === 'all' ? 'No chats yet' : 'No conversations yet'}
+                emptyHint={chatsTagFilter ? 'Nothing loose here.' : chatsFilter === 'all'
                   ? 'Start one — it stays a seed until you name, tag, branch or synthesize it.'
                   : 'A chat becomes a conversation when you name, tag, branch or synthesize it.'}
                 onOpen={openRoot}
