@@ -291,6 +291,14 @@ export function toScratchItem(api: ApiScratchItem): ScratchItem {
       : null,
     draftId: api.draft_id ?? null,
     transcriptId: api.transcript_id ?? null,
+    pinned: Boolean(api.pinned),
+    transcriptJob: api.transcript_status
+      ? {
+          status: api.transcript_status,
+          title: api.transcript_title ?? null,
+          channel: api.transcript_channel ?? null,
+        }
+      : null,
   };
 }
 

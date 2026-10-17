@@ -216,6 +216,12 @@ def ensure_conversation_schema(conn) -> None:
         )
     """)
 
+    # pinned_at: pinned items sit above the stream, as many as I like (UX doc,
+    # Scratch). NULL = in the stream by recency.
+    sc_cols = {row[1] for row in cursor.execute("PRAGMA table_info(scratch)").fetchall()}
+    if "pinned_at" not in sc_cols:
+        cursor.execute("ALTER TABLE scratch ADD COLUMN pinned_at TEXT")
+
     # Video transcripts (STT on video audio). Short videos transcribe in-turn;
     # long ones populate this table from a background thread and are surfaced
     # via GET /api/transcripts (and re-asking the transcribe_video tool).
@@ -1139,13 +1145,31 @@ def update_note_draft(db, draft_id: int, *, title: Optional[str] = None,
 SCRATCH_COLUMNS = ["id", "created_at", "kind", "content", "media_path",
                    "media_mime", "media_size", "media_hash", "transcript",
                    "status", "llm_readable", "action_result", "draft_id",
-                   "transcript_id"]
-_SCRATCH_COLS = ", ".join("s." + c for c in SCRATCH_COLUMNS)
+                   "transcript_id", "pinned_at"]
+# Every read joins the linked draft (pending/committed derive from it) and the
+# linked transcript job (an event's live state: processing → done/failed).
+_SCRATCH_SELECT = (
+    "SELECT " + ", ".join("s." + c for c in SCRATCH_COLUMNS)
+    + ", d.status, t.status, t.title, t.channel FROM scratch s "
+    "LEFT JOIN note_drafts d ON d.id = s.draft_id "
+    "LEFT JOIN transcripts t ON t.id = s.transcript_id ")
+
+# Derived filters (UX doc, Scratch: "no manual categories"): what each item
+# already is, by kind.
+SCRATCH_TYPES = {
+    "links": ("url",),
+    "photos": ("image", "video"),
+    "documents": ("file",),
+    "text": ("text",),
+    "voice": ("audio",),
+}
 
 
 def _row_to_scratch(row) -> Dict:
-    d = dict(zip(SCRATCH_COLUMNS + ["draft_status"], row))
+    d = dict(zip(SCRATCH_COLUMNS + ["draft_status", "transcript_status",
+                                    "transcript_title", "transcript_channel"], row))
     d["llm_readable"] = bool(d["llm_readable"])
+    d["pinned"] = d["pinned_at"] is not None
     try:
         d["action_result"] = _json.loads(d["action_result"]) if d["action_result"] else None
     except Exception:
@@ -1172,15 +1196,18 @@ def create_scratch(db, kind: str, content: Optional[str] = None,
 
 
 def get_scratch(db, scratch_id: int) -> Optional[dict]:
-    row = db.cursor().execute(
-        f"SELECT {_SCRATCH_COLS}, d.status FROM scratch s "
-        "LEFT JOIN note_drafts d ON d.id = s.draft_id WHERE s.id = ?",
-        (scratch_id,)).fetchone()
+    row = db.cursor().execute(_SCRATCH_SELECT + "WHERE s.id = ?",
+                              (scratch_id,)).fetchone()
     return _row_to_scratch(row) if row else None
 
 
 def list_scratch(db, limit: int = 50, before_id: Optional[int] = None,
-                 q: Optional[str] = None) -> List[dict]:
+                 q: Optional[str] = None, pinned: Optional[bool] = None,
+                 types: Optional[List[str]] = None) -> List[dict]:
+    """Newest first. `pinned` True/False restricts to pinned/unpinned items;
+    `types` to the derived filters in SCRATCH_TYPES. A transcription event
+    that finished leaves the list (UX doc: the list is transmissions minus
+    completed events); a pinned one stays, and a failed one stays too."""
     where, params = [], []
     if before_id:
         where.append("s.id < ?"); params.append(before_id)
@@ -1188,12 +1215,34 @@ def list_scratch(db, limit: int = 50, before_id: Optional[int] = None,
         where.append("(s.content LIKE ? OR s.transcript LIKE ?)")
         like = f"%{q.strip()}%"
         params += [like, like]
-    clause = f"WHERE {' AND '.join(where)}" if where else ""
-    rows = db.cursor().execute(
-        f"SELECT {_SCRATCH_COLS}, d.status FROM scratch s "
-        f"LEFT JOIN note_drafts d ON d.id = s.draft_id {clause} "
-        "ORDER BY s.id DESC LIMIT ?", params + [limit]).fetchall()
+    if pinned is True:
+        where.append("s.pinned_at IS NOT NULL")
+    elif pinned is False:
+        where.append("s.pinned_at IS NULL")
+    if types:
+        kinds = [k for t in types for k in SCRATCH_TYPES.get(t, ())]
+        if not kinds:
+            return []
+        where.append(f"s.kind IN ({', '.join('?' * len(kinds))})")
+        params += kinds
+    where.append("NOT (s.transcript_id IS NOT NULL AND t.status = 'done' "
+                 "AND s.pinned_at IS NULL)")
+    clause = f"WHERE {' AND '.join(where)} "
+    order = "ORDER BY s.pinned_at DESC, s.id DESC " if pinned else "ORDER BY s.id DESC "
+    rows = db.cursor().execute(_SCRATCH_SELECT + clause + order + "LIMIT ?",
+                               params + [limit]).fetchall()
     return [_row_to_scratch(r) for r in rows]
+
+
+def set_scratch_pinned(db, scratch_id: int, pinned: bool) -> Optional[dict]:
+    if pinned:
+        db.cursor().execute("UPDATE scratch SET pinned_at = COALESCE(pinned_at, "
+                            "datetime('now')) WHERE id = ?", (scratch_id,))
+    else:
+        db.cursor().execute("UPDATE scratch SET pinned_at = NULL WHERE id = ?",
+                            (scratch_id,))
+    db.commit()
+    return get_scratch(db, scratch_id)
 
 
 def set_scratch_action(db, scratch_id: int, status: str,

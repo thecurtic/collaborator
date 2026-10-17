@@ -17,8 +17,8 @@ from config import get_config, resolve_path, vault_dir_for
 from data.agents_md import load_agents_md
 from db import (
     init_db, create_turn, get_recent_turns, get_turn_by_id, delete_turn,
-    create_scratch, get_scratch, list_scratch, set_scratch_action,
-    set_scratch_readable, delete_scratch,
+    create_scratch, get_scratch, list_scratch, set_scratch_action, set_scratch_pinned,
+    set_scratch_readable, delete_scratch, SCRATCH_TYPES,
     get_ancestor_chain, get_turn_tree,
     search_similar_turns, search_keyword_turns, set_turn_embedding, update_turn_tags,
     update_turn_name, update_subtree_state, set_current_recall, get_current_recall,
@@ -3456,7 +3456,8 @@ class ScratchCreate(BaseModel):
 
 
 class ScratchToggle(BaseModel):
-    llm_readable: bool
+    llm_readable: Optional[bool] = None
+    pinned: Optional[bool] = None
 
 
 @app.post("/api/scratch")
@@ -3513,19 +3514,30 @@ async def get_scratch_list(
     limit: int = 50,
     before: Optional[int] = None,
     q: Optional[str] = None,
+    type: Optional[str] = None,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
-    """Reverse-chronological scratch list; ?q= searches content + transcripts;
-    ?before=<id> pages older. Pending/committed state derives from the linked
-    draft live."""
+    """The stream, newest first, unpinned only; ?q= searches content +
+    transcripts; ?type= is a derived filter (links|photos|documents|text|
+    voice, comma-separated); ?before=<id> pages older. The first page (no
+    `before`) also carries every pinned item matching the same filters.
+    Finished transcription events have left. Pending/committed state derives
+    from the linked draft live."""
     _require_auth(passkey)
+    types = [t.strip() for t in type.split(",") if t.strip()] if type else None
+    if types and any(t not in SCRATCH_TYPES for t in types):
+        raise HTTPException(status_code=422,
+                            detail=f"type must be one of {', '.join(SCRATCH_TYPES)}")
     conn = sqlite3.connect(_resolve_db_path(passkey))
     try:
         items = list_scratch(conn, limit=max(1, min(limit, 200)),
-                             before_id=before, q=q)
+                             before_id=before, q=q, pinned=False, types=types)
+        out = {"items": items, "count": len(items)}
+        if not before:
+            out["pinned"] = list_scratch(conn, limit=200, q=q, pinned=True, types=types)
     finally:
         conn.close()
-    return {"items": items, "count": len(items)}
+    return out
 
 
 @app.get("/api/scratch/{scratch_id}/media")
@@ -3557,11 +3569,18 @@ async def toggle_scratch_readable(
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
     """Toggle whether this item may be shown to the LLM (badge + future
-    retrieval gate; hold-send sets it implicitly)."""
+    retrieval gate; hold-send sets it implicitly), and/or pin it above the
+    stream."""
     _require_auth(passkey)
+    if request.llm_readable is None and request.pinned is None:
+        raise HTTPException(status_code=422, detail="nothing to change")
     conn = sqlite3.connect(_resolve_db_path(passkey))
     try:
-        row = set_scratch_readable(conn, scratch_id, request.llm_readable)
+        row = get_scratch(conn, scratch_id)
+        if row is not None and request.llm_readable is not None:
+            row = set_scratch_readable(conn, scratch_id, request.llm_readable)
+        if row is not None and request.pinned is not None:
+            row = set_scratch_pinned(conn, scratch_id, request.pinned)
     finally:
         conn.close()
     if row is None:

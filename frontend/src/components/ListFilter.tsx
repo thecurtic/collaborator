@@ -58,10 +58,13 @@ export function ListFilterButton<K extends string>({
 export function ActiveFilter({
   label,
   count,
+  more = false,
   onClear,
 }: {
   label: string | null;
   count: number;
+  /** More match than are loaded (the count is a floor). */
+  more?: boolean;
   onClear: () => void;
 }) {
   if (!label) return null;
@@ -79,7 +82,8 @@ export function ActiveFilter({
         </button>
       </span>
       <span className="tabular-nums">
-        {count} {count === 1 ? 'item' : 'items'}
+        {count}
+        {more ? '+' : ''} {count === 1 && !more ? 'item' : 'items'}
       </span>
     </div>
   );

@@ -434,3 +434,48 @@ def test_media_never_serves_active_content():
     got = c.get(f"/api/scratch/{r.json()['item']['id']}/media")
     assert got.headers["content-type"] == "image/png"
     print("✓ uploaded HTML/SVG downloads instead of running on the app's origin")
+
+
+def test_stream_pins_filters_and_finished_events_leave():
+    c, cfg, dbp = _fresh()
+    note = c.post("/api/scratch", json={"content": "buy twine"}).json()["item"]
+    link = c.post("/api/scratch", json={"content": "https://example.com/a"}).json()["item"]
+    vid = c.post("/api/scratch", json={"content": "https://youtu.be/abcdefghijk"}).json()["item"]
+    voice = c.post("/api/scratch/media", files={"file": ("v.webm", b"OggS..", "audio/webm")}).json()["item"]
+
+    # Pin the note: it leaves the stream and rides along on the first page.
+    r = c.patch(f"/api/scratch/{note['id']}", json={"pinned": True}).json()["item"]
+    assert r["pinned"] is True and r["llm_readable"] is False
+    page = c.get("/api/scratch").json()
+    assert [i["id"] for i in page["pinned"]] == [note["id"]]
+    assert note["id"] not in [i["id"] for i in page["items"]]
+    assert "pinned" not in c.get("/api/scratch", params={"before": 999}).json()
+
+    # Derived filters (by kind), pins filtered the same way.
+    links = c.get("/api/scratch", params={"type": "links"}).json()
+    assert {i["id"] for i in links["items"]} == {link["id"], vid["id"]} and links["pinned"] == []
+    assert [i["id"] for i in c.get("/api/scratch", params={"type": "voice"}).json()["items"]] == [voice["id"]]
+    assert c.get("/api/scratch", params={"type": "text"}).json()["pinned"][0]["id"] == note["id"]
+    assert c.get("/api/scratch", params={"type": "nope"}).status_code == 422
+
+    # A transcription event shows its live state, then leaves once done.
+    conn = sqlite3.connect(dbp)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO transcripts (url, title, status) VALUES (?, ?, 'processing')",
+                ("https://youtu.be/abcdefghijk", "Raised beds"))
+    tid = cur.lastrowid
+    db.set_scratch_action(conn, vid["id"], "done", action_result={"kind": "transcript"},
+                          transcript_id=tid)
+    row = next(i for i in c.get("/api/scratch").json()["items"] if i["id"] == vid["id"])
+    assert row["transcript_status"] == "processing" and row["transcript_title"] == "Raised beds"
+    cur.execute("UPDATE transcripts SET status = 'done' WHERE id = ?", (tid,))
+    conn.commit()
+    assert vid["id"] not in [i["id"] for i in c.get("/api/scratch").json()["items"]]
+    # ...unless pinned.
+    c.patch(f"/api/scratch/{vid['id']}", json={"pinned": True})
+    assert vid["id"] in [i["id"] for i in c.get("/api/scratch").json()["pinned"]]
+    c.patch(f"/api/scratch/{note['id']}", json={"pinned": False})
+    assert note["id"] in [i["id"] for i in c.get("/api/scratch").json()["items"]]
+    assert c.patch(f"/api/scratch/{note['id']}", json={}).status_code == 422
+    conn.close()
+    print("✓ stream: pins above it, derived filters, finished events leave")

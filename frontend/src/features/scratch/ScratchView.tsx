@@ -1,5 +1,7 @@
 import {
   Check,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Eye,
   EyeOff,
@@ -8,6 +10,8 @@ import {
   MessageSquare,
   Mic,
   Paperclip,
+  Pin,
+  PinOff,
   Play,
   Search,
   SendHorizontal,
@@ -20,17 +24,23 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ClipboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { api } from '@/api/collaborator';
+import {
+  ActiveFilter,
+  ListFilterButton,
+  type FilterOption,
+} from '@/components/ListFilter';
 import { Button } from '@/components/ui/button';
 import { useLongPress } from '@/lib/useLongPress';
 import { cleanUrlsInText } from '@/lib/urlClean';
 import { cn, parseApiDate } from '@/lib/utils';
-import type { NoteDraft, ScratchItem } from '@/domain/models';
+import type { NoteDraft, ScratchFilter, ScratchItem } from '@/domain/models';
 import { categoryOf } from '@/features/notes/categories';
 import {
   draftToFields,
@@ -44,6 +54,27 @@ import { useDictation } from '@/features/voice/useDictation';
 import { scratchMediaUrl } from './mediaCache';
 
 const PAGE = 50;
+
+// Derived filters (UX doc: "no manual categories"): what each item already is.
+const FILTERS: FilterOption<ScratchFilter>[] = [
+  { key: 'links', label: 'Links' },
+  { key: 'photos', label: 'Photos and videos' },
+  { key: 'documents', label: 'Documents' },
+  { key: 'text', label: 'Text' },
+  { key: 'voice', label: 'Voice' },
+];
+
+// A transcription event's live state, from its linked job.
+const JOB_LABEL: Record<string, { label: string; tone: string }> = {
+  processing: { label: 'transcribing', tone: 'bg-amber-500/10 text-amber-700' },
+  done: { label: 'transcribed', tone: 'bg-green-500/10 text-green-700' },
+  failed: {
+    label: 'transcription failed',
+    tone: 'bg-destructive/10 text-destructive',
+  },
+};
+
+const PINS_OPEN_KEY = 'scratch.pinsOpen';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
@@ -376,7 +407,8 @@ function ActionResult({
       return (
         <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
           <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-amber-600" />
-          {r.note ?? 'Looks like a secret — left untouched, never shown to the model.'}
+          {r.note ??
+            'Looks like a secret — left untouched, never shown to the model.'}
         </p>
       );
     case 'flagged':
@@ -390,7 +422,8 @@ function ActionResult({
     case 'error':
       return (
         <p className="mt-2 text-xs text-destructive">
-          {r.note ?? 'The action failed — the note is unchanged. Hold send on it to retry.'}
+          {r.note ??
+            'The action failed — the note is unchanged. Hold send on it to retry.'}
         </p>
       );
     default:
@@ -413,7 +446,18 @@ export function ScratchView({
   onStartChat: (draft: string) => void;
   onOpenTranscripts: () => void;
 }) {
+  // The stream, newest FIRST as the API pages it; rendered oldest-to-newest
+  // so the newest sits at the bottom, nearest the composer (UX doc).
   const [items, setItems] = useState<ScratchItem[] | null>(null);
+  const [pinned, setPinned] = useState<ScratchItem[]>([]);
+  const [filter, setFilter] = useState<ScratchFilter | null>(null);
+  const [pinsOpen, setPinsOpen] = useState(() => {
+    try {
+      return localStorage.getItem(PINS_OPEN_KEY) !== '0';
+    } catch {
+      return true;
+    }
+  });
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [value, setValue] = useState('');
@@ -423,17 +467,27 @@ export function ScratchView({
   // Items with an /act call in flight (processing overlay on the card).
   const [acting, setActing] = useState<Set<number>>(new Set());
   const seqRef = useRef(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  // After a render: 'bottom' = land on the newest; a number = keep the
+  // reader where they were after older items were added above.
+  const scrollPlan = useRef<'bottom' | number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const load = useCallback(async (q: string) => {
+  const load = useCallback(async (q: string, type: ScratchFilter | null) => {
     const seq = ++seqRef.current;
     setError(null);
     try {
-      const page = await api.listScratch({ q: q || undefined, limit: PAGE });
+      const page = await api.listScratch({
+        q: q || undefined,
+        type,
+        limit: PAGE,
+      });
       if (seqRef.current !== seq) return;
-      setItems(page);
-      setHasMore(page.length === PAGE);
+      scrollPlan.current = 'bottom';
+      setItems(page.items);
+      setPinned(page.pinned);
+      setHasMore(page.items.length === PAGE);
     } catch (err) {
       if (seqRef.current !== seq) return;
       setError(errMessage(err));
@@ -445,12 +499,26 @@ export function ScratchView({
   useEffect(() => {
     const q = query.trim();
     if (!q) {
-      void load('');
+      void load('', filter);
       return;
     }
-    const t = setTimeout(() => void load(q), 300);
+    const t = setTimeout(() => void load(q, filter), 300);
     return () => clearTimeout(t);
-  }, [query, load]);
+  }, [query, filter, load]);
+
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    const plan = scrollPlan.current;
+    if (!el || plan === null) return;
+    scrollPlan.current = null;
+    el.scrollTop = plan === 'bottom' ? el.scrollHeight : el.scrollHeight - plan;
+  });
+
+  /** A new capture lands at the bottom; follow it there. */
+  const addItem = (item: ScratchItem) => {
+    scrollPlan.current = 'bottom';
+    setItems((prev) => [item, ...(prev ?? [])]);
+  };
 
   const loadMore = async () => {
     if (!items || items.length === 0) return;
@@ -458,11 +526,14 @@ export function ScratchView({
     try {
       const older = await api.listScratch({
         q: query.trim() || undefined,
+        type: filter,
         before: items[items.length - 1].id,
         limit: PAGE,
       });
-      setItems((prev) => [...(prev ?? []), ...older]);
-      setHasMore(older.length === PAGE);
+      const el = listRef.current;
+      if (el) scrollPlan.current = el.scrollHeight - el.scrollTop;
+      setItems((prev) => [...(prev ?? []), ...older.items]);
+      setHasMore(older.items.length === PAGE);
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -470,10 +541,12 @@ export function ScratchView({
     }
   };
 
-  const replaceItem = (next: ScratchItem) =>
+  const replaceItem = (next: ScratchItem) => {
     setItems((prev) =>
       prev ? prev.map((i) => (i.id === next.id ? next : i)) : prev,
     );
+    setPinned((prev) => prev.map((i) => (i.id === next.id ? next : i)));
+  };
 
   /** The hold-send action, shared by text/media/voice captures. */
   const runAct = async (item: ScratchItem) => {
@@ -564,7 +637,7 @@ export function ScratchView({
           text || undefined,
         );
         setValue('');
-        setItems((prev) => [item, ...(prev ?? [])]);
+        addItem(item);
         if (act) await runAct(item);
       } catch (err) {
         setError(errMessage(err));
@@ -579,7 +652,7 @@ export function ScratchView({
     setSending(true);
     try {
       const item = await api.addScratch(text);
-      setItems((prev) => [item, ...(prev ?? [])]);
+      addItem(item);
       if (act) await runAct(item);
     } catch (err) {
       setError(errMessage(err));
@@ -600,7 +673,7 @@ export function ScratchView({
         value.trim() || undefined,
       );
       setValue('');
-      setItems((prev) => [item, ...(prev ?? [])]);
+      addItem(item);
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -666,16 +739,75 @@ export function ScratchView({
 
   const remove = (item: ScratchItem) => {
     const idx = items?.findIndex((i) => i.id === item.id) ?? -1;
+    const pinIdx = pinned.findIndex((i) => i.id === item.id);
     setItems((prev) => prev?.filter((i) => i.id !== item.id) ?? prev);
+    setPinned((prev) => prev.filter((i) => i.id !== item.id));
     api.deleteScratch(item.id).catch((err: unknown) => {
-      setItems((prev) => {
-        const next = prev ? [...prev] : [];
-        next.splice(Math.min(Math.max(idx, 0), next.length), 0, item);
-        return next;
-      });
+      if (pinIdx >= 0) {
+        setPinned((prev) => {
+          const next = [...prev];
+          next.splice(Math.min(pinIdx, next.length), 0, item);
+          return next;
+        });
+      } else {
+        setItems((prev) => {
+          const next = prev ? [...prev] : [];
+          next.splice(Math.min(Math.max(idx, 0), next.length), 0, item);
+          return next;
+        });
+      }
       setError(errMessage(err));
     });
   };
+
+  /** Pin above the stream, or put it back in the stream by its age. */
+  const togglePin = (item: ScratchItem) => {
+    const next = { ...item, pinned: !item.pinned };
+    if (next.pinned) {
+      setItems((prev) => prev?.filter((i) => i.id !== item.id) ?? prev);
+      setPinned((prev) => [next, ...prev]);
+      setPinsOpen(true);
+    } else {
+      setPinned((prev) => prev.filter((i) => i.id !== item.id));
+      setItems((prev) => {
+        if (!prev) return prev;
+        const oldest = prev[prev.length - 1];
+        // Older than everything loaded: it'll come back with "Load older".
+        if (hasMore && oldest && item.id < oldest.id) return prev;
+        return [...prev, next].sort((a, b) => b.id - a.id);
+      });
+    }
+    api
+      .setScratchPinned(item.id, next.pinned)
+      .then(replaceItem, (err: unknown) => {
+        setError(errMessage(err));
+        void load(query.trim(), filter);
+      });
+  };
+
+  const setPinsOpenRemembered = (open: boolean) => {
+    setPinsOpen(open);
+    try {
+      localStorage.setItem(PINS_OPEN_KEY, open ? '1' : '0');
+    } catch {
+      /* per-device nicety only */
+    }
+  };
+
+  const card = (item: ScratchItem) => (
+    <ScratchCard
+      item={item}
+      acting={acting.has(item.id)}
+      onToggleReadable={() => toggleReadable(item)}
+      onTogglePin={() => togglePin(item)}
+      onRemove={() => remove(item)}
+      onDecided={() => void load(query.trim(), filter)}
+      onStartChat={onStartChat}
+      onOpenTranscripts={onOpenTranscripts}
+    />
+  );
+  const filterLabel = FILTERS.find((f) => f.key === filter)?.label ?? null;
+  const stream = items ? [...items].reverse() : null;
 
   const toggleReadable = (item: ScratchItem) => {
     replaceItem({ ...item, llmReadable: !item.llmReadable });
@@ -686,8 +818,14 @@ export function ScratchView({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-border px-4 py-3">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
         <h2 className="text-2xl font-semibold">Scratch</h2>
+        <ListFilterButton
+          title="Show only"
+          options={FILTERS}
+          value={filter}
+          onChange={setFilter}
+        />
       </div>
 
       <div className="border-b border-border px-4 py-2">
@@ -701,114 +839,68 @@ export function ScratchView({
           />
         </div>
       </div>
+      <ActiveFilter
+        label={filterLabel}
+        count={(items?.length ?? 0) + pinned.length}
+        more={hasMore}
+        onClear={() => setFilter(null)}
+      />
 
-      <div className="flex-1 overflow-y-auto overscroll-contain">
-        {error && (
-          <p className="px-4 py-2 text-sm text-destructive">{error}</p>
-        )}
-        {items === null ? (
+      {/* Pinned: as many as I like, above the stream (UX doc). */}
+      {pinned.length > 0 && (
+        <div className="border-b border-border bg-muted/30">
+          <button
+            type="button"
+            onClick={() => setPinsOpenRemembered(!pinsOpen)}
+            aria-expanded={pinsOpen}
+            className="flex w-full items-center gap-1.5 px-4 py-1.5 text-left text-xs font-medium text-muted-foreground"
+          >
+            <Pin className="h-3.5 w-3.5" />
+            {pinned.length} pinned
+            {!pinsOpen && (
+              <span className="min-w-0 flex-1 truncate font-normal">
+                · {pinned[0].content || pinned[0].kind}
+              </span>
+            )}
+            {pinsOpen ? (
+              <ChevronUp className="ml-auto h-3.5 w-3.5" />
+            ) : (
+              <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0" />
+            )}
+          </button>
+          {pinsOpen && (
+            <ul className="max-h-[40vh] divide-y divide-border overflow-y-auto overscroll-contain border-t border-border">
+              {pinned.map((item) => (
+                <li key={item.id} className="px-4 py-3">
+                  {card(item)}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      <div ref={listRef} className="flex-1 overflow-y-auto overscroll-contain">
+        {error && <p className="px-4 py-2 text-sm text-destructive">{error}</p>}
+        {stream === null ? (
           <p className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
           </p>
-        ) : items.length === 0 ? (
+        ) : stream.length === 0 && pinned.length === 0 ? (
           <div className="flex flex-col items-center gap-3 px-8 py-16 text-center text-muted-foreground">
             <StickyNote className="h-10 w-10 opacity-40" />
             <p className="text-lg font-medium text-foreground">
-              {query.trim() ? 'No matches' : 'Notes to self'}
+              {query.trim() || filter ? 'Nothing here' : 'Notes to self'}
             </p>
-            {!query.trim() && (
+            {!query.trim() && !filter && (
               <p className="max-w-sm text-sm">
-                Anything you'd message yourself: links, addresses, snippets.
-                Tap send to save it silently — hold send to let the agent act
-                on it.
+                Anything you'd message yourself: links, addresses, snippets. Tap
+                send to save it silently — hold send to let the agent act on it.
               </p>
             )}
           </div>
         ) : (
           <ul className="divide-y divide-border">
-            {items.map((item) => (
-              <li key={item.id} className="px-4 py-3">
-                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span>{fmtWhen(item.createdAt)}</span>
-                  {item.kind !== 'text' && (
-                    <span className="rounded bg-accent px-1 py-px text-[10px] text-accent-foreground">
-                      {item.kind}
-                    </span>
-                  )}
-                  {item.status !== 'inert' && (
-                    <span
-                      className={cn(
-                        'rounded-full px-1.5 py-px text-[10px] font-medium',
-                        STATUS_TONE[item.status],
-                      )}
-                    >
-                      {item.status}
-                    </span>
-                  )}
-                  {acting.has(item.id) && (
-                    <span className="flex items-center gap-1 text-[10px]">
-                      <Loader2 className="h-3 w-3 animate-spin" /> agent
-                      working…
-                    </span>
-                  )}
-                  <span className="ml-auto flex items-center">
-                    <button
-                      type="button"
-                      aria-label={
-                        item.llmReadable
-                          ? 'The agent has seen this — tap to mark unread'
-                          : 'The agent has never seen this — tap to allow'
-                      }
-                      title={
-                        item.llmReadable
-                          ? 'Seen by the agent'
-                          : 'Never seen by the agent'
-                      }
-                      onClick={() => toggleReadable(item)}
-                      className="rounded p-1.5 opacity-60 hover:opacity-100"
-                    >
-                      {item.llmReadable ? (
-                        <Eye className="h-3.5 w-3.5 text-primary" />
-                      ) : (
-                        <EyeOff className="h-3.5 w-3.5" />
-                      )}
-                    </button>
-                    <CopyButton text={item.content} />
-                    <button
-                      type="button"
-                      aria-label="Delete"
-                      title="Delete"
-                      onClick={() => remove(item)}
-                      className="rounded p-1.5 opacity-60 hover:opacity-100"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </span>
-                </div>
-                {item.kind === 'url' && /^https?:\/\//i.test(item.content) ? (
-                  <a
-                    href={item.content}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-1 block break-all text-sm text-primary underline-offset-2 hover:underline"
-                  >
-                    {item.content}
-                  </a>
-                ) : (
-                  <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground">
-                    {item.content}
-                  </p>
-                )}
-                <MediaBlock item={item} />
-                {item.transcript && <ReadText text={item.transcript} />}
-                <ActionResult
-                  item={item}
-                  onDecided={() => void load(query.trim())}
-                  onStartChat={onStartChat}
-                  onOpenTranscripts={onOpenTranscripts}
-                />
-              </li>
-            ))}
             {hasMore && (
               <li className="px-4 py-3 text-center">
                 <Button
@@ -826,6 +918,11 @@ export function ScratchView({
                 </Button>
               </li>
             )}
+            {stream.map((item) => (
+              <li key={item.id} className="px-4 py-3">
+                {card(item)}
+              </li>
+            ))}
           </ul>
         )}
       </div>
@@ -939,6 +1036,131 @@ export function ScratchView({
         </div>
       </div>
     </div>
+  );
+}
+
+/** One Scratch item, in the stream or among the pins. */
+function ScratchCard({
+  item,
+  acting,
+  onToggleReadable,
+  onTogglePin,
+  onRemove,
+  onDecided,
+  onStartChat,
+  onOpenTranscripts,
+}: {
+  item: ScratchItem;
+  acting: boolean;
+  onToggleReadable: () => void;
+  onTogglePin: () => void;
+  onRemove: () => void;
+  onDecided: () => void;
+  onStartChat: (draft: string) => void;
+  onOpenTranscripts: () => void;
+}) {
+  return (
+    <>
+      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <span>{fmtWhen(item.createdAt)}</span>
+        {item.kind !== 'text' && (
+          <span className="rounded bg-accent px-1 py-px text-[10px] text-accent-foreground">
+            {item.kind}
+          </span>
+        )}
+        {item.transcriptJob && JOB_LABEL[item.transcriptJob.status] && (
+          <span
+            className={cn(
+              'rounded-full px-1.5 py-px text-[10px] font-medium',
+              JOB_LABEL[item.transcriptJob.status].tone,
+            )}
+          >
+            {JOB_LABEL[item.transcriptJob.status].label}
+          </span>
+        )}
+        {item.status !== 'inert' && !item.transcriptJob && (
+          <span
+            className={cn(
+              'rounded-full px-1.5 py-px text-[10px] font-medium',
+              STATUS_TONE[item.status],
+            )}
+          >
+            {item.status}
+          </span>
+        )}
+        {acting && (
+          <span className="flex items-center gap-1 text-[10px]">
+            <Loader2 className="h-3 w-3 animate-spin" /> agent working…
+          </span>
+        )}
+        <span className="ml-auto flex items-center">
+          <button
+            type="button"
+            aria-label={
+              item.llmReadable
+                ? 'The agent has seen this — tap to mark unread'
+                : 'The agent has never seen this — tap to allow'
+            }
+            title={
+              item.llmReadable ? 'Seen by the agent' : 'Never seen by the agent'
+            }
+            onClick={onToggleReadable}
+            className="rounded p-1.5 opacity-60 hover:opacity-100"
+          >
+            {item.llmReadable ? (
+              <Eye className="h-3.5 w-3.5 text-primary" />
+            ) : (
+              <EyeOff className="h-3.5 w-3.5" />
+            )}
+          </button>
+          <button
+            type="button"
+            aria-label={item.pinned ? 'Unpin' : 'Pin'}
+            title={item.pinned ? 'Unpin' : 'Pin above the stream'}
+            onClick={onTogglePin}
+            className="rounded p-1.5 opacity-60 hover:opacity-100"
+          >
+            {item.pinned ? (
+              <PinOff className="h-3.5 w-3.5 text-primary" />
+            ) : (
+              <Pin className="h-3.5 w-3.5" />
+            )}
+          </button>
+          <CopyButton text={item.content} />
+          <button
+            type="button"
+            aria-label="Delete"
+            title="Delete"
+            onClick={onRemove}
+            className="rounded p-1.5 opacity-60 hover:opacity-100"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </span>
+      </div>
+      {item.kind === 'url' && /^https?:\/\//i.test(item.content) ? (
+        <a
+          href={item.content}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 block break-all text-sm text-primary underline-offset-2 hover:underline"
+        >
+          {item.content}
+        </a>
+      ) : (
+        <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground">
+          {item.content}
+        </p>
+      )}
+      <MediaBlock item={item} />
+      {item.transcript && <ReadText text={item.transcript} />}
+      <ActionResult
+        item={item}
+        onDecided={onDecided}
+        onStartChat={onStartChat}
+        onOpenTranscripts={onOpenTranscripts}
+      />
+    </>
   );
 }
 

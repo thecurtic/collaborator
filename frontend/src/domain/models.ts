@@ -241,7 +241,14 @@ export interface ScratchItem {
   } | null;
   draftId: number | null;
   transcriptId: number | null;
+  /** Pinned above the stream. */
+  pinned: boolean;
+  /** The linked transcription job, for an event's live state. */
+  transcriptJob: { status: string; title: string | null; channel: string | null } | null;
 }
+
+/** Scratch's derived filters (by what each item already is). */
+export type ScratchFilter = 'links' | 'photos' | 'documents' | 'text' | 'voice';
 
 /** A video-transcription job (b23d8ea): STT over the audio, never captions. */
 /** GET /api/transcripts: the jobs plus the tag vocabulary in use. */

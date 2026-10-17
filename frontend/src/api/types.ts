@@ -62,11 +62,17 @@ export interface ApiScratchItem {
   } | null;
   draft_id?: number | null;
   transcript_id?: number | null;
+  pinned?: boolean;
+  transcript_status?: string | null;
+  transcript_title?: string | null;
+  transcript_channel?: string | null;
 }
 
 /** GET /api/scratch */
 export interface ApiScratchList {
   items: ApiScratchItem[];
+  /** First page only: every pinned item matching the same filters. */
+  pinned?: ApiScratchItem[];
 }
 
 /** GET /api/tts/voices */

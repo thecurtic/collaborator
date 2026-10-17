@@ -12,6 +12,7 @@ import type {
   PromptInfo,
   ProposedDraft,
   RecallBlock,
+  ScratchFilter,
   ScratchItem,
   ReindexResult,
   SendMessageInput,
@@ -532,15 +533,19 @@ export interface CollaboratorApi {
   /** Authenticated media bytes for an item (thumbnails, audio playback). */
   getScratchMedia(id: number): Promise<Blob>;
   /** Newest first; `q` searches content + transcripts; `before` pages older. */
+  /** The stream (newest first, unpinned); the first page also carries pins. */
   listScratch(params?: {
     q?: string;
     before?: number;
     limit?: number;
-  }): Promise<ScratchItem[]>;
+    type?: ScratchFilter | null;
+  }): Promise<{ items: ScratchItem[]; pinned: ScratchItem[] }>;
   /** The hold-send gesture: one-shot agent action on this item. */
   actScratch(id: number): Promise<ScratchItem>;
   /** Toggle the has-the-LLM-seen-this flag. */
   setScratchReadable(id: number, readable: boolean): Promise<ScratchItem>;
+  /** Pin above the stream, or back into it. */
+  setScratchPinned(id: number, pinned: boolean): Promise<ScratchItem>;
   deleteScratch(id: number): Promise<void>;
 
   /**
@@ -1052,17 +1057,21 @@ class HttpCollaboratorApi implements CollaboratorApi {
   }
 
   async listScratch(
-    params: { q?: string; before?: number; limit?: number } = {},
-  ): Promise<ScratchItem[]> {
+    params: { q?: string; before?: number; limit?: number; type?: ScratchFilter | null } = {},
+  ): Promise<{ items: ScratchItem[]; pinned: ScratchItem[] }> {
     const search = new URLSearchParams();
     if (params.q) search.set('q', params.q);
+    if (params.type) search.set('type', params.type);
     if (params.before != null) search.set('before', String(params.before));
     if (params.limit != null) search.set('limit', String(params.limit));
     const qs = search.toString();
     const res = await request<ApiScratchList>(
       `/api/scratch${qs ? `?${qs}` : ''}`,
     );
-    return (res.items ?? []).map(toScratchItem);
+    return {
+      items: (res.items ?? []).map(toScratchItem),
+      pinned: (res.pinned ?? []).map(toScratchItem),
+    };
   }
 
   async actScratch(id: number): Promise<ScratchItem> {
@@ -1080,6 +1089,14 @@ class HttpCollaboratorApi implements CollaboratorApi {
     const res = await request<{ item: ApiScratchItem }>(`/api/scratch/${id}`, {
       method: 'PATCH',
       body: JSON.stringify({ llm_readable: readable }),
+    });
+    return toScratchItem(res.item);
+  }
+
+  async setScratchPinned(id: number, pinned: boolean): Promise<ScratchItem> {
+    const res = await request<{ item: ApiScratchItem }>(`/api/scratch/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ pinned }),
     });
     return toScratchItem(res.item);
   }

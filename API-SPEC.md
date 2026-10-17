@@ -1168,6 +1168,39 @@ the chat model reads images, everything else as a header line
 `attachments.history_chars`. The tools `list_attachments` and `read_attachment`
 (paged) reach any attachment from any chat.
 
+### 23. Scratch
+
+Notes to self, in their own table: no conversation-agent surface can read it.
+Capture is inert; only the act (hold-send) gesture shows an item to a model.
+
+**`POST /api/scratch`** `{ "content": "…" }` → `{ "item": ScratchItem }` (kind
+`text` or `url`). **`POST /api/scratch/media`** multipart `file` + optional
+`content` (caption) → `{ "item" }` (kind `image` | `audio` | `video` | `file`).
+
+**`GET /api/scratch?limit=50&before=<id>&q=<text>&type=<filters>`** → the
+stream, newest first, unpinned items only: `{ "items": [...], "count": N,
+"pinned": [...] }`. `pinned` (every pinned item, most recently pinned first)
+comes only on the first page (no `before`) and obeys the same `q` and `type`.
+`type` is a derived filter, comma-separated: `links` (url), `photos` (image,
+video), `documents` (file), `text`, `voice` (audio); `422` for anything else.
+A transcription event whose transcript finished leaves the list unless it is
+pinned; a failed one stays.
+
+**`PATCH /api/scratch/{id}`** `{ "llm_readable"?: bool, "pinned"?: bool }` →
+`{ "item" }`; `422` when neither is given.
+
+**`GET /api/scratch/{id}/media`** → the file (passive types inline, everything
+else as a download). **`DELETE /api/scratch/{id}`** → `{ "deleted": id }`.
+**`POST /api/scratch/{id}/act`** → `{ "item" }` after the one-shot action.
+
+ScratchItem: `{ id, created_at, kind, content, media_path, media_mime,
+media_size, media_hash, transcript, status, llm_readable, action_result,
+draft_id, transcript_id, pinned, pinned_at, draft_status, transcript_status,
+transcript_title, transcript_channel }`. `transcript` is text read from the
+item (speech-to-text, or a photo/PDF/document read on hold-send);
+`transcript_status` is the linked transcription job's state (`processing`,
+`done`, `failed`).
+
 ## Data Models
 
 ### Turn
