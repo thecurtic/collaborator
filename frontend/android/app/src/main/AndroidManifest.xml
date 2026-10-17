@@ -31,6 +31,16 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
 
+            <!-- Notification taps (ntfy click links, notifications.open_in:
+                 app): collaborator://open/?open=… opens here, not in the
+                 phone's browser. MainActivity loads it from the server URL. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="collaborator" android:host="open" />
+            </intent-filter>
+
         </activity>
 
         <!-- The mic-type foreground service (capawesome plugin) that keeps
@@ -40,6 +50,12 @@
             android:name="io.capawesome.capacitorjs.plugins.foregroundservice.AndroidForegroundService"
             android:foregroundServiceType="microphone"
             tools:node="merge" />
+
+        <!-- Delivers the call notification's Hang up / Mute taps to the
+             plugin (the plugin's own manifest doesn't declare it). -->
+        <receiver
+            android:name="io.capawesome.capacitorjs.plugins.foregroundservice.NotificationActionBroadcastReceiver"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
