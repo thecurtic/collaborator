@@ -18,6 +18,20 @@ const MIN_PX = HOUR_PX / 60;
 const HOLD_MS = 300;         // touch: hold this long before a drag selects
 const MOVE_CANCEL_PX = 10;   // touch: moving sooner than that is a scroll
 
+interface Press {
+  x: number;
+  y: number;
+  dayIndex: number;
+  minutes: number;
+  column: HTMLElement;
+  timer: ReturnType<typeof setTimeout> | null;
+  touch: boolean;
+  armed: boolean;
+  dragged: boolean;
+  touchId?: number;
+  scrollTop?: number;        // touch: where the grid was when the hold armed
+}
+
 interface Selection {
   dayIndex: number;
   anchor: number;            // minutes where the press started
@@ -48,25 +62,14 @@ export function WeekGrid({
   const [sel, setSel] = useState<Selection | null>(null);
   const selRef = useRef<Selection | null>(null);
   selRef.current = sel;
-  const press = useRef<{ x: number; y: number; dayIndex: number; minutes: number;
-    timer: ReturnType<typeof setTimeout> | null; touch: boolean; armed: boolean;
-    dragged: boolean } | null>(null);
+  // A press on the grid. Mouse presses run on pointer events; touch runs on
+  // native touch events, which keep coming even when the browser has
+  // decided the gesture is a scroll (pointer events get cancelled then).
+  const press = useRef<Press | null>(null);
 
   // Land on the working day, not midnight.
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 7 * HOUR_PX;
-  }, []);
-
-  // Once a touch selection is armed, stop the page from scrolling under it.
-  // (React's touchmove is passive, so this needs a native listener.)
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const block = (e: TouchEvent) => {
-      if (press.current?.armed) e.preventDefault();
-    };
-    el.addEventListener('touchmove', block, { passive: false });
-    return () => el.removeEventListener('touchmove', block);
   }, []);
 
   const minutesAt = (clientY: number, column: HTMLElement) => {
@@ -74,68 +77,145 @@ export function WeekGrid({
     return snapMinutes((clientY - rect.top) / MIN_PX);
   };
 
-  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>, dayIndex: number) => {
-    if (e.button !== 0) return;
-    const minutes = minutesAt(e.clientY, e.currentTarget);
-    const touch = e.pointerType !== 'mouse';
-    press.current = { x: e.clientX, y: e.clientY, dayIndex, minutes, timer: null, touch,
-                      armed: !touch, dragged: false };
-    if (touch) {
-      press.current.timer = setTimeout(() => {
-        if (!press.current) return;
-        press.current.armed = true;
-        setSel({ dayIndex, anchor: minutes, current: minutes + 60 });
-        navigator.vibrate?.(10);
-      }, HOLD_MS);
-    } else {
-      e.currentTarget.setPointerCapture(e.pointerId);
-      setSel({ dayIndex, anchor: minutes, current: minutes + SNAP });
-    }
-  };
+  // Mirrors of the latest render's values for the native listeners below.
+  const live = useRef({ days, onCreate });
+  live.current = { days, onCreate };
 
-  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const p = press.current;
-    if (!p) return;
-    if (!p.armed) {
-      if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > MOVE_CANCEL_PX) {
-        if (p.timer) clearTimeout(p.timer);
-        press.current = null;                       // it's a scroll
-      }
-      return;
-    }
-    const s = selRef.current;
-    if (!s) return;
-    if (Math.abs(e.clientY - p.y) > 4) p.dragged = true;
-    const minutes = minutesAt(e.clientY, e.currentTarget);
-    setSel({ ...s, current: minutes >= s.anchor ? minutes + SNAP : minutes });
-  };
-
-  const onPointerUp = () => {
-    const p = press.current;
-    press.current = null;
-    if (!p) return;
+  const finish = (p: Press) => {
     if (p.timer) clearTimeout(p.timer);
     const s = selRef.current;
     setSel(null);
-    const day = days[p.dayIndex];
+    const day = live.current.days[p.dayIndex];
     // A touch hold without a drag sized it to an hour already; a mouse
     // click (no drag) is a plain tap.
     if (!p.armed || !s || (!p.touch && !p.dragged)) {
       // A plain tap: a one-hour event at the tapped half hour.
       const start = Math.min(snapMinutes(p.minutes, 30), 23 * 60);
-      onCreate({ start: atMinutes(day, start), end: atMinutes(day, start + 60), allDay: false });
+      live.current.onCreate({ start: atMinutes(day, start), end: atMinutes(day, start + 60),
+                              allDay: false });
       return;
     }
     const lo = Math.min(s.anchor, s.current);
     const hi = Math.max(s.anchor, s.current);
-    onCreate({ start: atMinutes(day, lo), end: atMinutes(day, Math.max(hi, lo + SNAP)),
-               allDay: false });
+    live.current.onCreate({ start: atMinutes(day, lo), end: atMinutes(day, Math.max(hi, lo + SNAP)),
+                            allDay: false });
+  };
+
+  const track = (p: Press, clientY: number) => {
+    const s = selRef.current;
+    if (!s) return;
+    if (Math.abs(clientY - p.y) > 4) p.dragged = true;
+    const minutes = minutesAt(clientY, p.column);
+    const next = { ...s, current: minutes >= s.anchor ? minutes + SNAP : minutes };
+    selRef.current = next;
+    setSel(next);
   };
 
   const cancelPress = () => {
     if (press.current?.timer) clearTimeout(press.current.timer);
     press.current = null;
     setSel(null);
+  };
+
+  // Touch: hold, then drag. Native listeners so touchmove can be cancelled
+  // (React's are passive) once the hold has armed the selection.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const columnOf = (t: EventTarget | null) => {
+      const node = t instanceof Element ? t : null;
+      if (!node || node.closest('button')) return null;      // an event opens instead
+      return node.closest<HTMLElement>('[data-day-index]');
+    };
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) {
+        cancelPress();
+        return;
+      }
+      const column = columnOf(e.target);
+      if (!column) return;
+      const t = e.touches[0];
+      const dayIndex = Number(column.dataset.dayIndex);
+      const minutes = minutesAt(t.clientY, column);
+      const p: Press = { x: t.clientX, y: t.clientY, dayIndex, minutes, column, timer: null,
+                  touch: true, armed: false, dragged: false, touchId: t.identifier };
+      press.current = p;
+      p.timer = setTimeout(() => {
+        if (press.current !== p) return;
+        p.armed = true;
+        p.scrollTop = el.scrollTop;
+        const s = { dayIndex, anchor: minutes, current: minutes + 60 };
+        selRef.current = s;
+        setSel(s);
+        navigator.vibrate?.(10);
+      }, HOLD_MS);
+    };
+    const touchOf = (e: TouchEvent, id: number | undefined) =>
+      Array.from(e.changedTouches).find((t) => t.identifier === id);
+    const onMove = (e: TouchEvent) => {
+      const p = press.current;
+      if (!p?.touch) return;
+      const t = touchOf(e, p.touchId);
+      if (!t) return;
+      if (!p.armed) {
+        if (Math.hypot(t.clientX - p.x, t.clientY - p.y) > MOVE_CANCEL_PX) cancelPress(); // a scroll
+        return;
+      }
+      if (e.cancelable) e.preventDefault();
+      track(p, t.clientY);
+    };
+    const onEnd = (e: TouchEvent) => {
+      const p = press.current;
+      if (!p?.touch || !touchOf(e, p.touchId)) return;
+      press.current = null;
+      // No synthesized click: it would land on the sheet that just opened.
+      if (e.cancelable) e.preventDefault();
+      finish(p);
+    };
+    // Fallback for a browser that scrolls anyway: hold the grid still while
+    // a selection is being sized.
+    const onScroll = () => {
+      const p = press.current;
+      if (p?.armed && p.scrollTop != null && el.scrollTop !== p.scrollTop) el.scrollTop = p.scrollTop;
+    };
+    el.addEventListener('touchstart', onStart, { passive: true });
+    el.addEventListener('touchmove', onMove, { passive: false });
+    el.addEventListener('touchend', onEnd, { passive: false });
+    el.addEventListener('touchcancel', cancelPress);
+    el.addEventListener('scroll', onScroll);
+    return () => {
+      el.removeEventListener('touchstart', onStart);
+      el.removeEventListener('touchmove', onMove);
+      el.removeEventListener('touchend', onEnd);
+      el.removeEventListener('touchcancel', cancelPress);
+      el.removeEventListener('scroll', onScroll);
+    };
+    // The handlers read the latest props through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mouse: press and drag (pointer capture keeps it across columns' edges).
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>, dayIndex: number) => {
+    if (e.pointerType !== 'mouse' || e.button !== 0) return;
+    const minutes = minutesAt(e.clientY, e.currentTarget);
+    press.current = { x: e.clientX, y: e.clientY, dayIndex, minutes, column: e.currentTarget,
+                      timer: null, touch: false, armed: true, dragged: false };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const s = { dayIndex, anchor: minutes, current: minutes + SNAP };
+    selRef.current = s;
+    setSel(s);
+  };
+
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const p = press.current;
+    if (p && !p.touch) track(p, e.clientY);
+  };
+
+  const onPointerUp = () => {
+    const p = press.current;
+    if (!p || p.touch) return;
+    press.current = null;
+    finish(p);
   };
 
   const hasAllDay = days.some((d) => allDayOn(events, d).length > 0);
@@ -214,6 +294,7 @@ export function WeekGrid({
             return (
               <div
                 key={isoDay(d)}
+                data-day-index={dayIndex}
                 className={cn('relative flex-1 select-none border-l border-border/60 [-webkit-touch-callout:none]',
                   sameDay(d, today) && 'bg-primary/[0.03]')}
                 style={{
@@ -222,7 +303,7 @@ export function WeekGrid({
                 onPointerDown={(e) => onPointerDown(e, dayIndex)}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
-                onPointerCancel={cancelPress}
+                onPointerCancel={(e) => e.pointerType === 'mouse' && cancelPress()}
                 onContextMenu={(e) => e.preventDefault()}
               >
                 {placed.map((p) => (
