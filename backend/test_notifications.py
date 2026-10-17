@@ -109,6 +109,16 @@ def test_ntfy_delivery(monkeypatch):
     print("✓ ntfy: JSON publish, click link, bearer token, failures recorded")
 
 
+def test_ntfy_click_opens_the_android_app(monkeypatch):
+    c, dbp = _fresh(ntfy={"url": "https://ntfy.example", "topics": {"default": "t"}})
+    config.get_config._config["notifications"]["open_in"] = "app"
+    sent = _Sent(monkeypatch)
+    notifications.notify(dbp, "transcript_ready", "Ready", link="?open=transcript:3",
+                         background=False)
+    assert sent.calls[0]["json"]["click"] == "collaborator://open/?open=transcript:3"
+    print("✓ open_in: app → the shell's collaborator:// link, no app_url needed")
+
+
 def test_test_endpoint_needs_delivery():
     c, _ = _fresh()
     assert c.post("/api/notifications/test").status_code == 409

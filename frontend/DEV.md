@@ -136,10 +136,14 @@ curl http://localhost:3000/api/health                 # through the Vite proxy
 
 A Capacitor wrapper in **remote-URL mode**: the WebView loads your deployed
 PWA, so every frontend deploy updates the app through the service-worker
-flow and the APK is built once. Its sole job is a microphone-type
-**foreground service** so calls keep capturing with the screen off; the web
-app starts and stops it around calls via `src/native/nativeShell.ts`
-(feature-detected, a no-op in browsers).
+flow and the APK is built once (rebuild only when `android/` changes). Its
+main job is a microphone-type **foreground service** so calls keep capturing
+with the screen off; the web app starts and stops it around calls, and
+handles its notification's Hang up / Mute buttons, via
+`src/native/nativeShell.ts` (feature-detected, a no-op in browsers). It also
+forwards share-sheet text to Scratch and opens `collaborator://open/…` links
+(ntfy taps with `notifications.open_in: app`) in the app instead of the
+phone's browser.
 
 Point it at your deployment and build (needs an Android SDK):
 

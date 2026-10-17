@@ -947,7 +947,10 @@ configured. Every notification is stored either way.
 newest first: `{ id, kind, title, body, link, created_at, delivered }`.
 `delivered` is `"ntfy"`, `"not configured"`, `"ntfy failed (<ErrorClass>)"`, or
 null while sending. `link` is an in-app path (e.g. `?open=transcript:12`); with
-`notifications.app_url` set, tapping the phone notification opens it.
+`notifications.app_url` set, tapping the phone notification opens it in the
+browser. With `notifications.open_in: app` the ntfy click link is
+`collaborator://open/<link>` instead, which the Android shell handles by
+loading `<server URL>/<link>` in its own WebView.
 
 **`POST /api/notifications/test`** → `{ "delivered": "ntfy" | "ntfy failed (…)" }`,
 bypassing the kind settings; `409` when no delivery is configured.

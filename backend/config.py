@@ -297,6 +297,7 @@ def load_config() -> dict:
             # user); this block is only DELIVERY. Every notification is stored
             # either way. Nothing is sent anywhere until ntfy is configured.
             "app_url": None,       # public URL of this app, for tap-to-open links
+            "open_in": "browser",  # "app": taps open the Android app instead
             "ntfy": {
                 "url": None,       # your own ntfy server, e.g. "https://<ntfy-host>"
                 "token": None,     # access token if the server requires one

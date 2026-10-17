@@ -116,10 +116,20 @@ def delivery_status(db_path: str) -> Dict:
     return {"ntfy": configured}
 
 
+# The Android shell's own link scheme (MainActivity): a tap on a
+# "collaborator://open/…" link opens the app, not the phone's browser.
+APP_SCHEME = "collaborator://open"
+
+
 def _click_url(link: Optional[str]) -> Optional[str]:
-    """Absolute app URL for a notification's in-app link, when app_url is set."""
+    """Where tapping the phone notification goes: the in-app link, in the
+    Android app (open_in: app) or at app_url in the browser (the default)."""
+    if not link:
+        return None
+    if str(_cfg().get("open_in") or "browser").lower() == "app":
+        return f"{APP_SCHEME}/{link.lstrip('/')}"
     base = (_cfg().get("app_url") or "").strip().rstrip("/")
-    if not base or not link:
+    if not base:
         return None
     return f"{base}/{link.lstrip('/')}"
 

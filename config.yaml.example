@@ -198,6 +198,8 @@ titles:
 # the app either way; nothing leaves this box until ntfy is configured.
 notifications:
   app_url: null               # public URL of this app, so tapping a notification opens it
+  open_in: browser            # "app": tapping opens the Android app (collaborator:// link)
+                              # instead of the phone's browser; needs no app_url
   ntfy:                       # a self-hosted ntfy server (https://ntfy.sh/docs/install/)
     url: null                 # e.g. "https://<ntfy-host>"
     token: null               # access token ("tk_..."), if your server requires auth;

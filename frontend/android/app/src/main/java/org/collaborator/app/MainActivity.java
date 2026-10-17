@@ -12,6 +12,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         handleSendIntent(getIntent());
+        handleViewIntent(getIntent());
     }
 
     @Override
@@ -19,6 +20,39 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         // launchMode=singleTask: shares while the app is alive land here.
         handleSendIntent(intent);
+        handleViewIntent(intent);
+    }
+
+    /**
+     * Notification taps: collaborator://open/<path>?<query> (the ntfy click
+     * link with notifications.open_in: app) loads <server URL>/<path>?<query>
+     * in this WebView, where the web app reads ?open= as it would in a
+     * browser.
+     */
+    private void handleViewIntent(Intent intent) {
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction())) {
+            return;
+        }
+        Uri data = intent.getData();
+        if (data == null || !"collaborator".equals(data.getScheme())
+                || !"open".equals(data.getHost())) {
+            return;
+        }
+        String base = bridge.getServerUrl();
+        while (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
+        }
+        String path = data.getEncodedPath();
+        String query = data.getEncodedQuery();
+        StringBuilder url = new StringBuilder(base);
+        url.append(path == null || path.isEmpty() ? "/" : path);
+        if (query != null && !query.isEmpty()) {
+            url.append('?').append(query);
+        }
+        // Consume it so a config-change recreate doesn't re-open.
+        intent.setData(null);
+        final String target = url.toString();
+        bridge.getWebView().post(() -> bridge.getWebView().loadUrl(target));
     }
 
     /**
