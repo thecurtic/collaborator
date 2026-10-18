@@ -33,6 +33,8 @@ def configured() -> bool:
 def _call(method: str, action: str) -> Dict:
     cfg = _cfg()
     url = (cfg.get("url") or "").strip().rstrip("/")
+    if "://" not in url:
+        url = f"http://{url}"  # "<mac>:8080" alone would fail as MissingSchema
     headers = {"Authorization": f"Bearer {cfg.get('token') or ''}"}
     try:
         r = requests.request(method, f"{url}/gate/{action}", headers=headers,

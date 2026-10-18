@@ -28,6 +28,9 @@ export function InferenceSwitch() {
   const [state, setState] = useState<GateState | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  // Tapping while offline shows why, under the pill: a title tooltip never
+  // shows on a phone.
+  const [why, setWhy] = useState<string | null>(null);
   const live = useRef(true);
 
   const refresh = useCallback(async () => {
@@ -45,7 +48,8 @@ export function InferenceSwitch() {
     const t = setInterval(() => {
       if (document.visibilityState === 'visible') void refresh();
     }, POLL_MS);
-    const onVisible = () => document.visibilityState === 'visible' && void refresh();
+    const onVisible = () =>
+      document.visibilityState === 'visible' && void refresh();
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       live.current = false;
@@ -54,6 +58,10 @@ export function InferenceSwitch() {
     };
   }, [refresh]);
 
+  useEffect(() => {
+    if (state?.online) setWhy(null);
+  }, [state?.online]);
+
   if (!state?.configured) return null;
 
   const online = state.online === true;
@@ -61,6 +69,7 @@ export function InferenceSwitch() {
 
   const flip = async () => {
     if (!online) {
+      setWhy('offline');
       void refresh();
       return;
     }
@@ -70,12 +79,16 @@ export function InferenceSwitch() {
     setFailed(null);
     setState({ ...state, paused: next });
     try {
-      setState(await request<GateState>('/api/gate', {
-        method: 'PUT',
-        body: JSON.stringify({ paused: next }),
-      }));
+      setState(
+        await request<GateState>('/api/gate', {
+          method: 'PUT',
+          body: JSON.stringify({ paused: next }),
+        }),
+      );
     } catch (err) {
-      setFailed(err instanceof Error ? err.message : 'The gate didn’t answer');
+      const msg = err instanceof Error ? err.message : 'The gate didn’t answer';
+      setFailed(msg);
+      setWhy(msg);
       void refresh();
     } finally {
       setBusy(false);
@@ -84,9 +97,14 @@ export function InferenceSwitch() {
 
   const queued = state.queued ?? 0;
   const inFlight = state.in_flight ?? 0;
-  const label = !online ? 'Gate offline' : collabOnly ? 'Collab only' : 'All requests';
+  const label = !online
+    ? 'Gate offline'
+    : collabOnly
+      ? 'Collab only'
+      : 'All requests';
   const detail = !online
-    ? (state.error ?? 'The gate can’t be reached; chat is unaffected. Tap to retry.')
+    ? (state.error ??
+      'The gate can’t be reached; chat is unaffected. Tap to retry.')
     : [
         collabOnly
           ? 'Serving Collaborator only: the agents’ requests are held. Tap to serve all requests.'
@@ -100,41 +118,61 @@ export function InferenceSwitch() {
         .join(' · ');
 
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={collabOnly}
-      aria-label={`Inference: ${label}`}
-      title={detail}
-      onClick={() => void flip()}
-      className={cn(
-        'relative flex h-7 w-[7.75rem] shrink-0 items-center rounded-full border text-[11px] font-semibold transition-colors',
-        !online
-          ? 'border-border bg-muted text-muted-foreground'
-          : collabOnly
-            ? 'border-red-600 bg-red-600 text-white'
-            : 'border-border bg-secondary text-secondary-foreground',
-        busy && 'opacity-70',
+    <span className="relative shrink-0">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={collabOnly}
+        aria-label={`Inference: ${label}`}
+        title={detail}
+        onClick={() => void flip()}
+        className={cn(
+          'relative flex h-7 w-[7.75rem] shrink-0 items-center rounded-full border text-[11px] font-semibold transition-colors',
+          !online
+            ? 'border-border bg-muted text-muted-foreground'
+            : collabOnly
+              ? 'border-red-600 bg-red-600 text-white'
+              : 'border-border bg-secondary text-secondary-foreground',
+          busy && 'opacity-70',
+        )}
+      >
+        {/* The state, written on the side the knob isn't. */}
+        <span
+          className={cn(
+            'absolute inset-y-0 flex items-center whitespace-nowrap',
+            collabOnly ? 'left-2.5' : 'right-2.5',
+          )}
+        >
+          {label}
+        </span>
+        <span
+          aria-hidden
+          className={cn(
+            'absolute top-0.5 flex h-[1.375rem] w-[1.375rem] items-center justify-center rounded-full bg-background text-[10px] font-bold tabular-nums shadow transition-[left] duration-200',
+            collabOnly
+              ? 'left-[calc(100%-1.5rem)] text-red-600'
+              : 'left-0.5 text-muted-foreground',
+          )}
+        >
+          {online && queued > 0 ? queued : ''}
+        </span>
+      </button>
+      {why && (
+        <span
+          role="status"
+          onClick={() => setWhy(null)}
+          className="absolute right-0 top-full z-50 mt-1.5 w-64 rounded-md border bg-background p-2.5 text-xs leading-snug text-foreground shadow-md"
+        >
+          {why === 'offline'
+            ? (state.error ?? 'The gate can’t be reached.')
+            : why}
+          {!online && (
+            <span className="mt-1 block text-muted-foreground">
+              Chat is unaffected. Tap the switch to retry.
+            </span>
+          )}
+        </span>
       )}
-    >
-      {/* The state, written on the side the knob isn't. */}
-      <span
-        className={cn(
-          'absolute inset-y-0 flex items-center whitespace-nowrap',
-          collabOnly ? 'left-2.5' : 'right-2.5',
-        )}
-      >
-        {label}
-      </span>
-      <span
-        aria-hidden
-        className={cn(
-          'absolute top-0.5 flex h-[1.375rem] w-[1.375rem] items-center justify-center rounded-full bg-background text-[10px] font-bold tabular-nums shadow transition-[left] duration-200',
-          collabOnly ? 'left-[calc(100%-1.5rem)] text-red-600' : 'left-0.5 text-muted-foreground',
-        )}
-      >
-        {online && queued > 0 ? queued : ''}
-      </span>
-    </button>
+    </span>
   );
 }

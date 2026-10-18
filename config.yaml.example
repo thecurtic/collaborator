@@ -25,7 +25,7 @@ inference:
   # between "Collaborator only" (agents' requests held) and "all requests".
   # Collaborator keeps talking to LM Studio directly. Unset url = no switch.
   gate:
-    url: null                  # e.g. "http://<mac-tailnet-name>:8080"
+    url: null                  # e.g. "http://<mac-tailnet-name>:8080" (http:// assumed if left off)
     token: null                # the gate's GATE_TOKEN (install.sh prints it)
     timeout: 3
   temperature: 0.7

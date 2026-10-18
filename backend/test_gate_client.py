@@ -83,3 +83,15 @@ def test_offline_and_bad_token_never_raise(monkeypatch):
     monkeypatch.setattr(main.gate_client.requests, "request",
                         lambda *a, **kw: _Resp(200, {"api_version": 2, "paused": False}))
     assert "unknown gate api_version" in c.get("/api/gate").json()["warning"]
+
+
+def test_url_without_scheme_gets_http(monkeypatch):
+    c, main = _client({"url": "gate.example:8080", "token": "tk"})
+    seen = []
+
+    def fake(method, url, headers, timeout):
+        seen.append(url)
+        return _Resp(200, {"api_version": 1, "paused": False})
+    monkeypatch.setattr(main.gate_client.requests, "request", fake)
+    assert c.get("/api/gate").json()["online"] is True
+    assert seen == ["http://gate.example:8080/gate/status"]
