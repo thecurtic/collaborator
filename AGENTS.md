@@ -23,6 +23,7 @@ backend/            FastAPI app (main.py), db.py, notes_index.py, tools, voice, 
 backend/test_*.py   pytest suite
 frontend/src/       React app; frontend/android/ the Capacitor shell
 deploy/             systemd unit, reverse-proxy example
+gate/               inference gate for the Mac: self-contained, own deps and tests
 docs/               known issues, design notes
 *.md at the root    design docs + prompt files the backend loads at runtime
 config.yaml         machine-local, gitignored; config.yaml.example is the template
