@@ -4,13 +4,17 @@ import {
   Loader2,
   Mic,
   MicOff,
+  Link2,
   NotebookPen,
+  Paperclip,
   PhoneOff,
   RotateCcw,
   Settings as SettingsIcon,
   Volume2,
+  X,
 } from 'lucide-react';
-import { useEffect, useRef, type Ref } from 'react';
+import { useEffect, useRef, useState, type Ref } from 'react';
+import { ActionSheet } from '@/components/ActionSheet';
 import { ActivityRow } from '@/components/ActivityRow';
 import { Button } from '@/components/ui/button';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
@@ -19,7 +23,8 @@ import { cn } from '@/lib/utils';
 import type { BranchTarget } from '@/features/chat/branchTarget';
 import type { CallIntro } from '@/features/chat/callIntro';
 import { currentParagraphIndex, splitParagraphs } from './speechUtils';
-import { useCall, type CallPhase } from './useCall';
+import { AttachmentStrip } from '@/features/attachments/AttachmentViews';
+import { useCall, type CallPhase, type CallTurn, type Handover } from './useCall';
 import { useWakeLock } from './useWakeLock';
 
 interface CallScreenProps {
@@ -96,6 +101,7 @@ function Turn({
   failedRanges,
   onSkip,
   currentRef,
+  shared,
 }: {
   role: 'user' | 'assistant';
   text: string;
@@ -109,6 +115,8 @@ function Turn({
   onSkip?: (paragraphIndex: number) => void;
   /** Attached to the paragraph currently being read (for follow-scroll). */
   currentRef?: Ref<HTMLParagraphElement>;
+  /** User turns: what was handed over with it. */
+  shared?: CallTurn['shared'];
 }) {
   const label = role === 'user' ? 'You' : 'Collaborator';
 
@@ -167,7 +175,20 @@ function Turn({
       <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
       </p>
+      {shared && shared.files.length > 0 && (
+        <div className="mt-1">
+          <AttachmentStrip items={shared.files} />
+        </div>
+      )}
       {body}
+      {shared?.texts.map((t, i) => (
+        <p
+          key={i}
+          className="mt-1.5 line-clamp-3 break-words rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-sm text-muted-foreground"
+        >
+          {t}
+        </p>
+      ))}
     </div>
   );
 }
@@ -204,6 +225,10 @@ export function CallScreen({
     setMuted,
     retry,
     skipTo,
+    handover,
+    addFiles,
+    addText,
+    removeHandover,
   } = useCall(
     open,
     onClose,
@@ -222,6 +247,9 @@ export function CallScreen({
   // Dialog semantics + focus trap. Deliberately NO Escape-to-close: a stray
   // keypress must not end an active call — that's the red button's job.
   const dialogRef = useModalA11y<HTMLDivElement>(open);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [handMenu, setHandMenu] = useState(false);
+  const [textSheet, setTextSheet] = useState(false);
 
   // Paragraph currently being read — scrolling keys off this (not every
   // sentence tick) so the view doesn't judder mid-paragraph.
@@ -358,6 +386,7 @@ export function CallScreen({
                 readChars={speakBase + spokenChars}
                 failedRanges={failedRanges.filter((r) => r.turnId === t.id)}
                 currentRef={isSpeaking ? currentParaRef : undefined}
+                shared={t.shared}
                 onSkip={
                   t.role === 'assistant'
                     ? (i) => skipTo(t.id, t.text, i)
@@ -383,7 +412,22 @@ export function CallScreen({
         </div>
       )}
 
+      {/* Handed over mid-call: goes with whatever is said next. */}
+      {handover.length > 0 && (
+        <HandoverStrip items={handover} onRemove={removeHandover} />
+      )}
+
       <div className="flex items-center justify-center gap-6 border-t border-border p-6">
+        <Button
+          variant="secondary"
+          size="icon"
+          aria-label="Show it something"
+          title="Hand over a photo, a file, a link or some text"
+          onClick={() => setHandMenu(true)}
+          className="h-12 w-12 rounded-full active:scale-95"
+        >
+          <Paperclip className="h-5 w-5" />
+        </Button>
         {phase === 'listening' && (
           <Button
             variant="secondary"
@@ -435,6 +479,142 @@ export function CallScreen({
         >
           <PhoneOff className="h-6 w-6" />
         </Button>
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => {
+          const list = Array.from(e.target.files ?? []);
+          e.target.value = '';
+          if (list.length) addFiles(list);
+        }}
+      />
+      <ActionSheet
+        open={handMenu}
+        title="Show it something — it goes with what you say next"
+        actions={[
+          { label: 'Photo or file', icon: Paperclip, onSelect: () => fileRef.current?.click() },
+          { label: 'Text or a link', icon: Link2, onSelect: () => setTextSheet(true) },
+        ]}
+        onClose={() => setHandMenu(false)}
+      />
+      <HandTextSheet
+        open={textSheet}
+        onClose={() => setTextSheet(false)}
+        onAdd={(t) => {
+          addText(t);
+          setTextSheet(false);
+        }}
+      />
+    </div>
+  );
+}
+
+/** What's been handed over and not said yet: chips, each removable. */
+function HandoverStrip({
+  items,
+  onRemove,
+}: {
+  items: Handover[];
+  onRemove: (key: number) => void;
+}) {
+  return (
+    <div className="border-t border-border px-4 pt-3">
+      <p className="mx-auto mb-1.5 max-w-md text-[11px] text-muted-foreground">
+        Goes with what you say next
+      </p>
+      <div className="mx-auto flex max-w-md flex-wrap gap-1.5">
+        {items.map((h) => (
+          <span
+            key={h.key}
+            className={cn(
+              'flex max-w-full items-center gap-1.5 rounded-lg bg-muted py-1 pl-2.5 pr-1 text-xs',
+              h.kind === 'file' && h.status === 'failed' && 'text-destructive',
+            )}
+          >
+            {h.kind === 'file' ? (
+              h.status === 'uploading' ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              ) : (
+                <Paperclip className="h-3.5 w-3.5 shrink-0" />
+              )
+            ) : (
+              <Link2 className="h-3.5 w-3.5 shrink-0" />
+            )}
+            <span className="max-w-[14rem] truncate">
+              {h.kind === 'file'
+                ? h.status === 'failed'
+                  ? `${h.name} (upload failed)`
+                  : h.name
+                : h.text}
+            </span>
+            <button
+              type="button"
+              aria-label="Take it back"
+              onClick={() => onRemove(h.key)}
+              className="rounded p-0.5 hover:bg-background"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Paste (or type) text or a link to hand over. */
+function HandTextSheet({
+  open,
+  onClose,
+  onAdd,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onAdd: (text: string) => void;
+}) {
+  const [value, setValue] = useState('');
+  const panelRef = useModalA11y<HTMLDivElement>(open, onClose);
+  useEffect(() => {
+    if (!open) return;
+    setValue('');
+    // Prefill from the clipboard when the browser allows it.
+    navigator.clipboard
+      ?.readText?.()
+      .then((t) => t && setValue((v) => v || t))
+      .catch(() => {});
+  }, [open]);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center sm:items-center">
+      <button aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/60" />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Hand over text or a link"
+        tabIndex={-1}
+        className="pb-safe relative w-full rounded-t-2xl border border-border bg-card p-4 outline-none sm:max-w-md sm:rounded-2xl"
+      >
+        <p className="mb-2 text-sm font-medium">Text or a link</p>
+        <textarea
+          autoFocus
+          rows={4}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="Paste a link or some text"
+          className="w-full resize-none rounded-md border border-input bg-background p-2.5 text-base text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
+        />
+        <div className="mt-3 flex gap-2">
+          <Button variant="secondary" className="flex-1" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button className="flex-1" disabled={!value.trim()} onClick={() => onAdd(value)}>
+            Hand it over
+          </Button>
+        </div>
       </div>
     </div>
   );

@@ -19,7 +19,8 @@ import {
 import { saveTurnSources } from '@/features/chat/sourcesStore';
 import { foldToolEvent } from '@/features/chat/toolActivity';
 import { withTimeout } from '@/lib/utils';
-import type { ToolActivity } from '@/domain/models';
+import type { ToolActivity, TurnAttachment } from '@/domain/models';
+import { attachmentsApi } from '@/features/attachments/attachmentsApi';
 import { chimeListenStart, chimeListenStop } from './chime';
 import { DeviceTranscriber, resetDeviceWorker } from './deviceTranscriber';
 import { listenForWords, warmUpKeywordSpotter } from './keywordSpotter';
@@ -49,7 +50,25 @@ export interface CallTurn {
   id: number;
   role: 'user' | 'assistant';
   text: string;
+  /** User turns: what was handed over with it (files, text, links). */
+  shared?: { files: TurnAttachment[]; texts: string[] };
 }
+
+/**
+ * Something handed over mid-call (UX doc, Voice: a photo, a link or some
+ * text without dropping out of voice). It rides along with the next thing
+ * said: files as attachments, text and links appended to the message.
+ */
+export type Handover =
+  | {
+      key: number;
+      kind: 'file';
+      name: string;
+      status: 'uploading' | 'ready' | 'failed';
+      attachment?: TurnAttachment;
+      upload: Promise<TurnAttachment | null>;
+    }
+  | { key: number; kind: 'text'; text: string };
 
 /** A [start, end) char range of a turn's text that TTS could not speak. */
 export interface FailedRange {
@@ -116,6 +135,13 @@ export function useCall(
   const activityRef = useRef<ToolActivity[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [muted, setMutedState] = useState(false);
+  const [handover, setHandoverState] = useState<Handover[]>([]);
+  const handoverRef = useRef<Handover[]>([]);
+  const handoverKey = useRef(0);
+  const setHandover = useCallback((next: Handover[]) => {
+    handoverRef.current = next;
+    setHandoverState(next);
+  }, []);
   const [logs, setLogs] = useState<string[]>([]);
   const controlsRef = useRef<Controls | null>(null);
   // Read at call start; not effect deps so changing them won't restart the call.
@@ -162,6 +188,8 @@ export function useCall(
         prev.map((t) => (t.id === id ? { ...t, text } : t)),
       );
     setTranscript([]);
+    handoverRef.current = [];
+    setHandoverState([]);
     setDraftCount(0);
     setSpeakingId(null);
     setSpokenChars(0);
@@ -468,7 +496,25 @@ export function useCall(
     const respond = async (text: string) => {
       if (!active) return;
       log(`responding to: "${text.slice(0, 40)}"`);
-      pushTurn('user', text); // user's turn joins the transcript
+      // Whatever was handed over goes with this turn.
+      const handed = handoverRef.current;
+      setHandover([]);
+      const files = (
+        await Promise.all(
+          handed.map((h) => (h.kind === 'file' ? h.upload : Promise.resolve(null))),
+        )
+      ).filter((a): a is TurnAttachment => a !== null);
+      const texts = handed.flatMap((h) => (h.kind === 'text' ? [h.text] : []));
+      if (!active) return;
+      const message = [text, ...texts].join('\n\n');
+      const attachmentIds = files.map((f) => f.id);
+      const uid = pushTurn('user', text); // user's turn joins the transcript
+      if (files.length || texts.length) {
+        log(`handed over: ${files.length} file(s), ${texts.length} text(s)`);
+        setTranscript((prev) =>
+          prev.map((t) => (t.id === uid ? { ...t, shared: { files, texts } } : t)),
+        );
+      }
       const aid = pushTurn('assistant', ''); // grows as the reply streams
       setPartial('');
       setReasoning('');
@@ -511,7 +557,8 @@ export function useCall(
           const res = await api.branchMessage(
             {
               parentTurnId: pb.turnId,
-              message: text,
+              message,
+              attachmentIds,
               paragraphIndex: pb.paragraphIndex,
               commit: true,
               mode: 'voice',
@@ -533,7 +580,8 @@ export function useCall(
         } else {
           const res = await api.sendMessageStream(
             {
-              message: text,
+              message,
+              attachmentIds,
               parentTurnId: leafId ?? undefined, // continue the in-view branch
               commit: true,
               mode: 'voice',
@@ -747,9 +795,66 @@ export function useCall(
     [],
   );
 
+  /** Hand over files: each uploads now, and goes with the next turn. */
+  const addFiles = useCallback(
+    (list: File[]) => {
+      const added: Handover[] = list.map((file) => {
+        const key = ++handoverKey.current;
+        const upload = attachmentsApi
+          .upload(file, file.name || 'file')
+          .then((a): TurnAttachment => {
+            const att = { id: a.id, filename: a.filename, mime: a.mime, kind: a.kind, size: a.size };
+            setHandover(
+              handoverRef.current.map((h) =>
+                h.key === key && h.kind === 'file' ? { ...h, status: 'ready', attachment: att } : h,
+              ),
+            );
+            return att;
+          })
+          .catch(() => {
+            setHandover(
+              handoverRef.current.map((h) =>
+                h.key === key && h.kind === 'file' ? { ...h, status: 'failed' } : h,
+              ),
+            );
+            return null;
+          });
+        return { key, kind: 'file', name: file.name || 'file', status: 'uploading', upload };
+      });
+      setHandover([...handoverRef.current, ...added]);
+    },
+    [setHandover],
+  );
+
+  /** Hand over text or a link (pasted). */
+  const addText = useCallback(
+    (text: string) => {
+      const t = text.trim();
+      if (!t) return;
+      setHandover([...handoverRef.current, { key: ++handoverKey.current, kind: 'text', text: t }]);
+    },
+    [setHandover],
+  );
+
+  /** Take something back before it's sent (an unsent upload is discarded). */
+  const removeHandover = useCallback(
+    (key: number) => {
+      const item = handoverRef.current.find((h) => h.key === key);
+      setHandover(handoverRef.current.filter((h) => h.key !== key));
+      if (item?.kind === 'file') {
+        void item.upload.then((a) => a && attachmentsApi.remove(a.id).catch(() => {}));
+      }
+    },
+    [setHandover],
+  );
+
   return {
     phase,
     reasoning,
+    handover,
+    addFiles,
+    addText,
+    removeHandover,
     draftCount,
     partial,
     transcript,
