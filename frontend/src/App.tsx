@@ -44,6 +44,7 @@ import { FeedView } from '@/features/feed/FeedView';
 import { ProjectsView } from '@/features/projects/ProjectsView';
 import { RootList } from '@/features/chat/RootList';
 import { ActiveFilter, ListFilterButton } from '@/components/ListFilter';
+import { InferenceSwitch } from '@/features/gate/InferenceSwitch';
 import { TreeMap } from '@/features/chat/TreeMap';
 import { useConversation } from '@/features/chat/useConversation';
 import type { BranchTarget } from '@/features/chat/branchTarget';
@@ -555,6 +556,7 @@ function AppShell() {
             </div>
           )}
           <div className="flex shrink-0 items-center gap-1">
+            <InferenceSwitch />
             <AppMenu
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenWebSearch={() => {

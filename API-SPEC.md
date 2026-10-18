@@ -1212,6 +1212,23 @@ item (speech-to-text, or a photo/PDF/document read on hold-send);
 `transcript_status` is the linked transcription job's state (`processing`,
 `done`, `failed`).
 
+### 24. Inference switch (the gate)
+
+The top-bar switch flips the inference gate on the Mac (`gate/`, its own
+contract in `gate/docs/CONTROL_API.md`) between serving Collaborator only
+(paused: the agents' requests are held) and serving all requests.
+Collaborator keeps calling LM Studio directly; the backend holds the gate's
+token (`inference.gate.token`) and never sends it to the browser.
+
+**`GET /api/gate`** → `{ "configured": false }` when `inference.gate.url` is
+unset (no switch shown); otherwise `{ configured: true, online: true, paused,
+paused_since, queued, in_flight, api_version, warning? }`, or `{ configured:
+true, online: false, error }` when the gate can't be reached or refuses the
+token. Never an error status: a gate failure must not block anything.
+
+**`PUT /api/gate`** `{ "paused": bool }` → the same object after the flip;
+`409` with no gate configured, `502` when it can't be reached. Install-wide.
+
 ## Data Models
 
 ### Turn

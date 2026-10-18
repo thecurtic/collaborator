@@ -53,6 +53,7 @@ import vision
 import wallet
 import scratch
 import link_preview
+import gate_client
 import voice
 from auth import validate_passkey, create_user_db
 
@@ -4424,6 +4425,33 @@ def post_vision_test(passkey: Optional[str] = Header(None, alias="X-Passkey")):
     _require_auth(passkey)
     vision._vlm_cache.clear()          # a fresh look at what LM Studio reports
     return vision.self_test()
+
+
+class GateRequest(BaseModel):
+    paused: bool
+
+
+@app.get("/api/gate")
+def get_gate(passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """The inference switch's state, from the gate on the Mac (gate_client):
+    {configured: false} when no gate is set up; {online: false, error} when
+    it can't be reached, which never blocks chat."""
+    _require_auth(passkey)
+    return gate_client.status()
+
+
+@app.put("/api/gate")
+def put_gate(request: GateRequest,
+             passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Flip the switch: paused = Collaborator only (the agents' requests are
+    held), false = all requests. Install-wide, like the model."""
+    _require_auth(passkey)
+    out = gate_client.set_paused(request.paused)
+    if not out.get("configured"):
+        raise HTTPException(status_code=409, detail="no inference gate configured")
+    if not out.get("online"):
+        raise HTTPException(status_code=502, detail=out.get("error") or "gate unreachable")
+    return out
 
 
 @app.put("/api/model")

@@ -96,6 +96,11 @@ def load_config() -> dict:
             # false for servers that don't say. One vision model by design:
             # attachments, scanned-page OCR and screenshot_page all use it.
             "vision": "auto",
+            # The inference gate on the Mac (gate/): the top-bar switch pauses
+            # the background agents (Collaborator only) or resumes them (all
+            # requests). Collaborator itself never goes through it. url None
+            # = no switch shown.
+            "gate": {"url": None, "token": None, "timeout": 3},
             # Stream the model's chain-of-thought to the UI as 'reasoning' SSE
             # events (display-only — never saved, never re-prompted). Also
             # keeps proxies from timing out during long thinks; when off, a
