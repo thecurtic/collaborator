@@ -210,6 +210,16 @@ notifications:
     #   "<user-identity-hash>": "<random-topic>" # one per user under auth
     timeout: 10
 
+# Scratch (notes to self). Capture never touches a model; hold-send does.
+scratch:
+  max_media_mb: 50
+  max_rounds: 4                # tool rounds for the hold-send action
+  link_previews: true          # links show title + favicon, YouTube links title +
+                               # thumbnail: fetched once on capture, same exit and
+                               # guards as tools.fetch_url (via its webtool or proxy
+                               # when set; with a webtool, no icons/thumbnails).
+                               # false: plain URLs, nothing fetched
+
 # Files attached to chats: stored on this server, text extracted once
 # (markitdown, PDF text layers, the chat model's vision for images and scans,
 # speech-to-text for audio/video) and kept with the attachment.

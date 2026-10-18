@@ -1190,13 +1190,24 @@ pinned; a failed one stays.
 `{ "item" }`; `422` when neither is given.
 
 **`GET /api/scratch/{id}/media`** → the file (passive types inline, everything
-else as a download). **`DELETE /api/scratch/{id}`** → `{ "deleted": id }`.
+else as a download). **`GET /api/scratch/{id}/preview/icon`** and
+**`/preview/image`** → a link item's stored favicon or YouTube thumbnail
+(`404` when there is none). **`DELETE /api/scratch/{id}`** → `{ "deleted": id }`.
 **`POST /api/scratch/{id}/act`** → `{ "item" }` after the one-shot action.
 
 ScratchItem: `{ id, created_at, kind, content, media_path, media_mime,
 media_size, media_hash, transcript, status, llm_readable, action_result,
-draft_id, transcript_id, pinned, pinned_at, draft_status, transcript_status,
-transcript_title, transcript_channel }`. `transcript` is text read from the
+draft_id, transcript_id, pinned, pinned_at, media_name, draft_status,
+transcript_status, transcript_title, transcript_channel, preview_status,
+preview_title, preview_site, preview_icon, preview_image }`. `media_name` is
+the uploaded file's own name. The `preview_*` fields are a link's preview
+(null when there is none): `preview_status` `pending` | `done` | `failed`;
+`preview_title` the page title (og:title first) or the video title,
+`preview_site` the site name or the video's channel, `preview_icon` /
+`preview_image` whether a favicon / thumbnail is stored. Previews are fetched
+once per URL in the background on capture (or when an older link is first
+listed), through the same exit and guards as `fetch_url`;
+`scratch.link_previews: false` turns them off. `transcript` is text read from the
 item (speech-to-text, or a photo/PDF/document read on hold-send);
 `transcript_status` is the linked transcription job's state (`processing`,
 `done`, `failed`).

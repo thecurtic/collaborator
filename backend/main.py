@@ -52,6 +52,7 @@ import attachments
 import vision
 import wallet
 import scratch
+import link_preview
 import voice
 from auth import validate_passkey, create_user_db
 
@@ -3471,9 +3472,15 @@ async def create_scratch_text(
     text = (request.content or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail="content must not be empty")
-    conn = sqlite3.connect(_resolve_db_path(passkey))
+    db_path = _resolve_db_path(passkey)
+    conn = sqlite3.connect(db_path)
     try:
         row = create_scratch(conn, scratch.detect_kind(text, None), content=text)
+        if row["kind"] == "url":
+            # Title + icon (or YouTube thumbnail) fetched in the background:
+            # network, never a model.
+            link_preview.ensure(db_path, text)
+            row = get_scratch(conn, row["id"])
     finally:
         conn.close()
     return {"item": row}
@@ -3503,7 +3510,8 @@ async def create_scratch_media(
     try:
         row = create_scratch(conn, kind, content=(content or "").strip() or None,
                              media_path=name, media_mime=file.content_type,
-                             media_size=size, media_hash=digest)
+                             media_size=size, media_hash=digest,
+                             media_name=(file.filename or "")[:255] or None)
     finally:
         conn.close()
     return {"item": row}
@@ -3528,7 +3536,8 @@ async def get_scratch_list(
     if types and any(t not in SCRATCH_TYPES for t in types):
         raise HTTPException(status_code=422,
                             detail=f"type must be one of {', '.join(SCRATCH_TYPES)}")
-    conn = sqlite3.connect(_resolve_db_path(passkey))
+    db_path = _resolve_db_path(passkey)
+    conn = sqlite3.connect(db_path)
     try:
         items = list_scratch(conn, limit=max(1, min(limit, 200)),
                              before_id=before, q=q, pinned=False, types=types)
@@ -3537,6 +3546,10 @@ async def get_scratch_list(
             out["pinned"] = list_scratch(conn, limit=200, q=q, pinned=True, types=types)
     finally:
         conn.close()
+    # Links captured before previews existed get one the first time they show.
+    for it in items + out.get("pinned", []):
+        if it["kind"] == "url" and it.get("preview_status") is None:
+            link_preview.ensure(db_path, it["content"])
     return out
 
 
@@ -3560,6 +3573,36 @@ async def get_scratch_media(
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="media file missing")
     return _serve_user_file(path, row.get("media_mime"), row["media_path"])
+
+
+@app.get("/api/scratch/{scratch_id}/preview/{which}")
+async def get_scratch_preview_image(
+    scratch_id: int,
+    which: str,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """A link item's stored favicon (`icon`) or YouTube thumbnail (`image`),
+    served from here so the phone never contacts the linked site."""
+    _require_auth(passkey)
+    if which not in ("icon", "image"):
+        raise HTTPException(status_code=404, detail="no such preview image")
+    db_path = _resolve_db_path(passkey)
+    conn = sqlite3.connect(db_path)
+    try:
+        row = get_scratch(conn, scratch_id)
+        prev = None
+        if row and row["kind"] == "url":
+            prev = conn.execute(
+                f"SELECT {which}_path, {which}_mime FROM link_previews WHERE url = ?",
+                (row["content"],)).fetchone()
+    finally:
+        conn.close()
+    if not prev or not prev[0]:
+        raise HTTPException(status_code=404, detail="no preview image")
+    path = os.path.join(link_preview.preview_dir(db_path), prev[0])
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="preview image missing")
+    return _serve_user_file(path, prev[1], prev[0])
 
 
 @app.patch("/api/scratch/{scratch_id}")

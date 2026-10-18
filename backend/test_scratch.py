@@ -23,6 +23,7 @@ def _fresh():
     cfg = config.load_config()
     cfg["notes"]["vault_dir"] = os.path.join(tempfile.mkdtemp(), "vault")
     cfg["notes"]["bootstrap_user_note"] = False
+    cfg["scratch"]["link_previews"] = False     # no network in tests; opt in per test
     config.get_config._config = cfg
     importlib.reload(db)
     importlib.reload(main)
@@ -479,3 +480,93 @@ def test_stream_pins_filters_and_finished_events_leave():
     assert c.patch(f"/api/scratch/{note['id']}", json={}).status_code == 422
     conn.close()
     print("✓ stream: pins above it, derived filters, finished events leave")
+
+
+class _FakeResp:
+    def __init__(self, body, ctype, url):
+        self._body, self.url, self.status_code = body, url, 200
+        self.headers = {"content-type": ctype}
+
+    def iter_content(self, n):
+        yield self._body
+
+    def raise_for_status(self):
+        pass
+
+    def close(self):
+        pass
+
+
+_PNG = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 40)
+
+
+def test_link_previews_title_icon_and_youtube(monkeypatch):
+    import inference, link_preview
+    c, cfg, dbp = _fresh()
+    cfg["scratch"]["link_previews"] = True
+    monkeypatch.setattr(inference, "_host_is_private", lambda h: False)
+    fetched = []
+    pages = {
+        "https://example.com/post": (b"<html><head><title>Ignored</title>"
+            b"<meta property='og:title' content='Raised beds, a primer'>"
+            b"<meta property='og:site_name' content='Garden Blog'>"
+            b"<link rel='icon' type='image/svg+xml' href='/i.svg'>"
+            b"<link rel='icon' href='/fav.png'></head></html>", "text/html"),
+        "https://example.com/fav.png": (_PNG, "image/png"),
+        "https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fyoutu.be%2Fabcdefghijk":
+            (json.dumps({"title": "Building a raised bed", "author_name": "Plot Channel",
+                         "thumbnail_url": "https://i.ytimg.com/vi/abcdefghijk/hq.jpg"}).encode(),
+             "application/json"),
+        "https://i.ytimg.com/vi/abcdefghijk/hq.jpg": (b"\xff\xd8\xff" + b"\x00" * 40, "image/jpeg"),
+    }
+
+    def fake_get(url, fcfg, proxy):
+        fetched.append(url)
+        if url not in pages:
+            raise AssertionError(f"unexpected fetch {url}")
+        body, ctype = pages[url]
+        return _FakeResp(body, ctype, url)
+    monkeypatch.setattr(inference, "_get_following_safe_redirects", fake_get)
+
+    link = c.post("/api/scratch", json={"content": "https://example.com/post"}).json()["item"]
+    vid = c.post("/api/scratch", json={"content": "https://youtu.be/abcdefghijk"}).json()["item"]
+    link_preview.wait_idle()
+    items = {i["id"]: i for i in c.get("/api/scratch").json()["items"]}
+    p = items[link["id"]]
+    assert p["preview_status"] == "done" and p["preview_title"] == "Raised beds, a primer"
+    assert p["preview_site"] == "Garden Blog" and p["preview_icon"] and not p["preview_image"]
+    assert "https://example.com/i.svg" not in fetched          # never SVG
+    r = c.get(f"/api/scratch/{link['id']}/preview/icon")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    y = items[vid["id"]]
+    assert y["preview_title"] == "Building a raised bed" and y["preview_site"] == "Plot Channel"
+    assert y["preview_image"] and c.get(f"/api/scratch/{vid['id']}/preview/image").status_code == 200
+    assert c.get(f"/api/scratch/{vid['id']}/preview/other").status_code == 404
+
+    # Capturing the same URL again doesn't fetch again.
+    n = len(fetched)
+    c.post("/api/scratch", json={"content": "https://example.com/post"})
+    link_preview.wait_idle()
+    assert len(fetched) == n
+
+    # A document keeps its own filename.
+    doc = c.post("/api/scratch/media", files={"file": ("plan.pdf", b"%PDF-1.4", "application/pdf")}).json()["item"]
+    assert doc["media_name"] == "plan.pdf"
+    print("✓ previews: title + icon (no SVG), YouTube oEmbed + thumbnail, fetched once")
+
+
+def test_link_previews_off_and_private_refused(monkeypatch):
+    import inference, link_preview
+    c, cfg, dbp = _fresh()
+    monkeypatch.setattr(inference, "_get_following_safe_redirects",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("no fetch")))
+    cfg["scratch"]["link_previews"] = False
+    off = c.post("/api/scratch", json={"content": "https://example.com/x"}).json()["item"]
+    assert off["preview_status"] is None
+    cfg["scratch"]["link_previews"] = True
+    monkeypatch.setattr(inference, "_host_is_private", lambda h: True)
+    item = c.post("/api/scratch", json={"content": "http://192.168.1.5/admin"}).json()["item"]
+    link_preview.wait_idle()
+    row = next(i for i in c.get("/api/scratch").json()["items"] if i["id"] == item["id"])
+    assert row["preview_status"] == "failed" and row["preview_title"] is None
+    print("✓ previews: off means no fetch; private hosts refused")

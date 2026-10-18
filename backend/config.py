@@ -269,6 +269,10 @@ def load_config() -> dict:
             "max_media_mb": 50,
             "max_rounds": 4,             # tool rounds for the one-shot action
             "action_prompt_file": "scratch-action-prompt.md",  # editable layer
+            # Links show their page title + favicon, YouTube links their
+            # title + thumbnail, fetched once in the background on capture
+            # (same exit and guards as fetch_url). False: plain URLs, no fetch.
+            "link_previews": True,
         },
         "location": {
             # Per-turn location context (frontend sends {lat, lon, accuracy, ts}

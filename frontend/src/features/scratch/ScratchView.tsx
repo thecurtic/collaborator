@@ -6,6 +6,8 @@ import {
   Eye,
   EyeOff,
   FileQuestion,
+  FileText,
+  Globe,
   Loader2,
   MessageSquare,
   Mic,
@@ -51,7 +53,7 @@ import {
   type FieldsDraft,
 } from '@/features/notes/FieldsEditor';
 import { useDictation } from '@/features/voice/useDictation';
-import { scratchMediaUrl } from './mediaCache';
+import { scratchMediaUrl, scratchPreviewUrl } from './mediaCache';
 
 const PAGE = 50;
 
@@ -349,12 +351,196 @@ function MediaBlock({ item }: { item: ScratchItem }) {
       </button>
     );
   }
-  // video/file: metadata only for now (phase B keeps it honest, not fancy).
+  if (item.kind === 'video') {
+    return url ? (
+      // eslint-disable-next-line jsx-a11y/media-has-caption
+      <video
+        controls
+        autoPlay
+        src={url}
+        className="mt-1.5 max-h-64 w-full rounded-lg bg-black"
+      />
+    ) : (
+      <button
+        type="button"
+        onClick={() => setWanted(true)}
+        className="mt-1.5 flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <Play className="h-3.5 w-3.5" />
+        Play {item.mediaName ?? 'video'}
+      </button>
+    );
+  }
+  // A document: its filename and type, and the file itself on tap.
+  return <FileBlock item={item} />;
+}
+
+function fileType(item: ScratchItem): string {
+  const ext = item.mediaName?.match(/\.([a-z0-9]{1,8})$/i)?.[1];
+  if (ext) return ext.toUpperCase();
+  const sub = item.mediaMime?.split('/')[1]?.split(';')[0];
+  return sub ? sub.toUpperCase() : 'File';
+}
+
+function fmtSize(n: number | null): string | null {
+  if (n == null) return null;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function FileBlock({ item }: { item: ScratchItem }) {
+  const [busy, setBusy] = useState(false);
+  const open = () => {
+    if (!item.mediaHash || busy) return;
+    setBusy(true);
+    scratchMediaUrl(item.id, item.mediaHash)
+      .then((u) => {
+        const a = document.createElement('a');
+        a.href = u;
+        a.download = item.mediaName ?? 'file';
+        a.click();
+      })
+      .catch(() => {})
+      .finally(() => setBusy(false));
+  };
   return (
-    <p className="mt-1 text-xs text-muted-foreground">
-      ({item.kind}
-      {item.mediaMime ? ` · ${item.mediaMime}` : ''})
-    </p>
+    <button
+      type="button"
+      onClick={open}
+      className="mt-1.5 flex max-w-full items-center gap-2.5 rounded-lg border border-border bg-muted/40 px-3 py-2 text-left hover:bg-muted"
+    >
+      {busy ? (
+        <Loader2 className="h-5 w-5 shrink-0 animate-spin text-muted-foreground" />
+      ) : (
+        <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+      )}
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-medium text-foreground">
+          {item.mediaName ?? 'Untitled file'}
+        </span>
+        <span className="block text-xs text-muted-foreground">
+          {[fileType(item), fmtSize(item.mediaSize)]
+            .filter(Boolean)
+            .join(' · ')}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+/** A preview image (favicon / thumbnail), fetched through the app. */
+function PreviewImage({
+  id,
+  which,
+  className,
+}: {
+  id: number;
+  which: 'icon' | 'image';
+  className: string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    scratchPreviewUrl(id, which)
+      .then((u) => live && setUrl(u))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [id, which]);
+  return url ? (
+    <img src={url} alt="" className={className} />
+  ) : (
+    <span className={cn('block bg-muted', className)} />
+  );
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * A link as what it is (UX doc): the page title and favicon, or for a
+ * YouTube link its thumbnail, title and channel. Until the preview is in
+ * (or when there is none) it's the plain URL.
+ */
+function LinkPreview({ item }: { item: ScratchItem }) {
+  const p = item.preview;
+  const title = p?.title ?? item.transcriptJob?.title ?? null;
+  if (!title) {
+    return (
+      <a
+        href={item.content}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-1 block break-all text-sm text-primary underline-offset-2 hover:underline"
+      >
+        {item.content}
+      </a>
+    );
+  }
+  const site = p?.site ?? item.transcriptJob?.channel ?? null;
+  if (p?.image) {
+    return (
+      <a
+        href={item.content}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-1.5 block overflow-hidden rounded-lg border border-border hover:bg-muted/60"
+      >
+        <span className="relative block aspect-video w-full bg-muted">
+          <PreviewImage
+            id={item.id}
+            which="image"
+            className="h-full w-full object-cover"
+          />
+          <span className="absolute inset-0 flex items-center justify-center">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-black/60">
+              <Play className="h-5 w-5 fill-white text-white" />
+            </span>
+          </span>
+        </span>
+        <span className="block px-3 py-2">
+          <span className="line-clamp-2 text-sm font-medium text-foreground">
+            {title}
+          </span>
+          <span className="block truncate text-xs text-muted-foreground">
+            {[site, hostOf(item.content)].filter(Boolean).join(' · ')}
+          </span>
+        </span>
+      </a>
+    );
+  }
+  return (
+    <a
+      href={item.content}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="mt-1.5 flex items-start gap-2.5 rounded-lg border border-border px-3 py-2 hover:bg-muted/60"
+    >
+      {p?.icon ? (
+        <PreviewImage
+          id={item.id}
+          which="icon"
+          className="mt-0.5 h-4 w-4 shrink-0 rounded-sm object-contain"
+        />
+      ) : (
+        <Globe className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+      )}
+      <span className="min-w-0">
+        <span className="line-clamp-2 text-sm font-medium text-foreground">
+          {title}
+        </span>
+        <span className="block truncate text-xs text-muted-foreground">
+          {[site, hostOf(item.content)].filter(Boolean).join(' · ')}
+        </span>
+      </span>
+    </a>
   );
 }
 
@@ -513,6 +699,44 @@ export function ScratchView({
     scrollPlan.current = null;
     el.scrollTop = plan === 'bottom' ? el.scrollHeight : el.scrollHeight - plan;
   });
+
+  // Link previews are fetched in the background: while any shown item's is
+  // still pending, look again a few times and fold in what arrived (in
+  // place, so nothing moves under the reader).
+  const previewTries = useRef(0);
+  const anyPending =
+    (items ?? []).some((i) => i.preview?.status === 'pending') ||
+    pinned.some((i) => i.preview?.status === 'pending');
+  useEffect(() => {
+    if (!anyPending) {
+      previewTries.current = 0;
+      return;
+    }
+    if (previewTries.current >= 6) return;
+    const t = setTimeout(() => {
+      previewTries.current += 1;
+      api
+        .listScratch({
+          q: query.trim() || undefined,
+          type: filter,
+          limit: PAGE,
+        })
+        .then((page) => {
+          const fresh = new Map(
+            [...page.items, ...page.pinned].map((i) => [i.id, i]),
+          );
+          const fold = (list: ScratchItem[]) =>
+            list.map((i) => {
+              const f = fresh.get(i.id);
+              return f ? { ...i, preview: f.preview } : i;
+            });
+          setItems((prev) => (prev ? fold(prev) : prev));
+          setPinned((prev) => fold(prev));
+        })
+        .catch(() => {});
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [anyPending, items, pinned, query, filter]);
 
   /** A new capture lands at the bottom; follow it there. */
   const addItem = (item: ScratchItem) => {
@@ -1139,18 +1363,13 @@ function ScratchCard({
         </span>
       </div>
       {item.kind === 'url' && /^https?:\/\//i.test(item.content) ? (
-        <a
-          href={item.content}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-1 block break-all text-sm text-primary underline-offset-2 hover:underline"
-        >
-          {item.content}
-        </a>
+        <LinkPreview item={item} />
       ) : (
-        <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground">
-          {item.content}
-        </p>
+        item.content && (
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground">
+            {item.content}
+          </p>
+        )
       )}
       <MediaBlock item={item} />
       {item.transcript && <ReadText text={item.transcript} />}

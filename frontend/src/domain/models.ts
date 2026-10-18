@@ -245,6 +245,17 @@ export interface ScratchItem {
   pinned: boolean;
   /** The linked transcription job, for an event's live state. */
   transcriptJob: { status: string; title: string | null; channel: string | null } | null;
+  /** The file's own name and size (media items). */
+  mediaName: string | null;
+  mediaSize: number | null;
+  /** A link's preview: page title + site (or video title + channel). */
+  preview: {
+    status: 'pending' | 'done' | 'failed';
+    title: string | null;
+    site: string | null;
+    icon: boolean;
+    image: boolean;
+  } | null;
 }
 
 /** Scratch's derived filters (by what each item already is). */

@@ -13,12 +13,25 @@ const order: string[] = [];
 const MAX_ENTRIES = 100;
 
 export function scratchMediaUrl(id: number, hash: string): Promise<string> {
+  return cached(hash, () => api.getScratchMedia(id));
+}
+
+/** A link's stored favicon / thumbnail (keyed by item, which never changes URL). */
+export function scratchPreviewUrl(
+  id: number,
+  which: 'icon' | 'image',
+): Promise<string> {
+  return cached(`preview:${id}:${which}`, () =>
+    api.getScratchPreview(id, which),
+  );
+}
+
+function cached(hash: string, fetchBlob: () => Promise<Blob>): Promise<string> {
   const hit = urls.get(hash);
   if (hit) return Promise.resolve(hit);
   const inFlight = pending.get(hash);
   if (inFlight) return inFlight;
-  const p = api
-    .getScratchMedia(id)
+  const p = fetchBlob()
     .then((blob) => {
       const url = URL.createObjectURL(blob);
       urls.set(hash, url);

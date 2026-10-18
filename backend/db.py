@@ -221,6 +221,13 @@ def ensure_conversation_schema(conn) -> None:
     sc_cols = {row[1] for row in cursor.execute("PRAGMA table_info(scratch)").fetchall()}
     if "pinned_at" not in sc_cols:
         cursor.execute("ALTER TABLE scratch ADD COLUMN pinned_at TEXT")
+    # media_name: the file's own name, so a document shows as what it is.
+    if "media_name" not in sc_cols:
+        cursor.execute("ALTER TABLE scratch ADD COLUMN media_name TEXT")
+    # Link previews (title + favicon, YouTube title + thumbnail), one row
+    # per URL, joined onto url items (link_preview.py).
+    import link_preview
+    link_preview.ensure_schema(conn)
 
     # Video transcripts (STT on video audio). Short videos transcribe in-turn;
     # long ones populate this table from a background thread and are surfaced
@@ -1145,14 +1152,16 @@ def update_note_draft(db, draft_id: int, *, title: Optional[str] = None,
 SCRATCH_COLUMNS = ["id", "created_at", "kind", "content", "media_path",
                    "media_mime", "media_size", "media_hash", "transcript",
                    "status", "llm_readable", "action_result", "draft_id",
-                   "transcript_id", "pinned_at"]
+                   "transcript_id", "pinned_at", "media_name"]
 # Every read joins the linked draft (pending/committed derive from it) and the
 # linked transcript job (an event's live state: processing → done/failed).
 _SCRATCH_SELECT = (
     "SELECT " + ", ".join("s." + c for c in SCRATCH_COLUMNS)
-    + ", d.status, t.status, t.title, t.channel FROM scratch s "
+    + ", d.status, t.status, t.title, t.channel, p.status, p.title, p.site, "
+    "p.icon_path IS NOT NULL, p.image_path IS NOT NULL FROM scratch s "
     "LEFT JOIN note_drafts d ON d.id = s.draft_id "
-    "LEFT JOIN transcripts t ON t.id = s.transcript_id ")
+    "LEFT JOIN transcripts t ON t.id = s.transcript_id "
+    "LEFT JOIN link_previews p ON s.kind = 'url' AND p.url = s.content ")
 
 # Derived filters (UX doc, Scratch: "no manual categories"): what each item
 # already is, by kind.
@@ -1167,8 +1176,12 @@ SCRATCH_TYPES = {
 
 def _row_to_scratch(row) -> Dict:
     d = dict(zip(SCRATCH_COLUMNS + ["draft_status", "transcript_status",
-                                    "transcript_title", "transcript_channel"], row))
+                                    "transcript_title", "transcript_channel",
+                                    "preview_status", "preview_title", "preview_site",
+                                    "preview_icon", "preview_image"], row))
     d["llm_readable"] = bool(d["llm_readable"])
+    d["preview_icon"] = bool(d["preview_icon"])
+    d["preview_image"] = bool(d["preview_image"])
     d["pinned"] = d["pinned_at"] is not None
     try:
         d["action_result"] = _json.loads(d["action_result"]) if d["action_result"] else None
@@ -1185,12 +1198,13 @@ def create_scratch(db, kind: str, content: Optional[str] = None,
                    media_path: Optional[str] = None,
                    media_mime: Optional[str] = None,
                    media_size: Optional[int] = None,
-                   media_hash: Optional[str] = None) -> dict:
+                   media_hash: Optional[str] = None,
+                   media_name: Optional[str] = None) -> dict:
     cursor = db.cursor()
     cursor.execute(
         "INSERT INTO scratch (kind, content, media_path, media_mime, "
-        "media_size, media_hash) VALUES (?, ?, ?, ?, ?, ?)",
-        (kind, content, media_path, media_mime, media_size, media_hash))
+        "media_size, media_hash, media_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (kind, content, media_path, media_mime, media_size, media_hash, media_name))
     db.commit()
     return get_scratch(db, cursor.lastrowid)
 

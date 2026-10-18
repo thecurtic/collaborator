@@ -532,7 +532,8 @@ export interface CollaboratorApi {
   addScratchMedia(file: File | Blob, filename: string, content?: string): Promise<ScratchItem>;
   /** Authenticated media bytes for an item (thumbnails, audio playback). */
   getScratchMedia(id: number): Promise<Blob>;
-  /** Newest first; `q` searches content + transcripts; `before` pages older. */
+  /** A link item's stored favicon or YouTube thumbnail. */
+  getScratchPreview(id: number, which: 'icon' | 'image'): Promise<Blob>;
   /** The stream (newest first, unpinned); the first page also carries pins. */
   listScratch(params?: {
     q?: string;
@@ -1053,6 +1054,11 @@ class HttpCollaboratorApi implements CollaboratorApi {
 
   async getScratchMedia(id: number): Promise<Blob> {
     const res = await requestStream(`/api/scratch/${id}/media`);
+    return res.blob();
+  }
+
+  async getScratchPreview(id: number, which: 'icon' | 'image'): Promise<Blob> {
+    const res = await requestStream(`/api/scratch/${id}/preview/${which}`);
     return res.blob();
   }
 

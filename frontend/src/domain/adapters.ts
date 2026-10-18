@@ -292,6 +292,20 @@ export function toScratchItem(api: ApiScratchItem): ScratchItem {
     draftId: api.draft_id ?? null,
     transcriptId: api.transcript_id ?? null,
     pinned: Boolean(api.pinned),
+    mediaName: api.media_name ?? null,
+    mediaSize: api.media_size ?? null,
+    preview:
+      api.preview_status === 'pending' ||
+      api.preview_status === 'done' ||
+      api.preview_status === 'failed'
+        ? {
+            status: api.preview_status,
+            title: api.preview_title ?? null,
+            site: api.preview_site ?? null,
+            icon: Boolean(api.preview_icon),
+            image: Boolean(api.preview_image),
+          }
+        : null,
     transcriptJob: api.transcript_status
       ? {
           status: api.transcript_status,

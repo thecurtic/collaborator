@@ -66,6 +66,12 @@ export interface ApiScratchItem {
   transcript_status?: string | null;
   transcript_title?: string | null;
   transcript_channel?: string | null;
+  media_name?: string | null;
+  preview_status?: string | null;
+  preview_title?: string | null;
+  preview_site?: string | null;
+  preview_icon?: boolean;
+  preview_image?: boolean;
 }
 
 /** GET /api/scratch */
