@@ -1229,6 +1229,27 @@ token. Never an error status: a gate failure must not block anything.
 **`PUT /api/gate`** `{ "paused": bool }` → the same object after the flip;
 `409` with no gate configured, `502` when it can't be reached. Install-wide.
 
+### 25. Unified search
+
+One search over the user's own world: chats, notes (events included),
+Scratch, transcripts and attachments, grouped by pile. In-screen search bars
+use the same search scoped to their pile. **The user's search, not the
+model's:** it includes Scratch, so it is never offered as a tool or used for
+recall. Keyword matching, no model involved.
+
+**`GET /api/find?q=<words>&scope=<piles>&limit=5`** → `{ q, groups: [{ scope,
+total, items }] }`, piles in the order chats, notes, scratch, transcripts,
+attachments, empty ones left out. `scope` (comma-separated) narrows it;
+`limit` (1–100) is per pile; `422` for an unknown pile.
+
+An item: `{ type: "chat"|"note"|"scratch"|"transcript"|"attachment", id, title,
+snippet, when, tags? }`. A chat is one result per conversation (`id` the root,
+`turn_id` its best-matching turn, `matches` how many turns matched; its name
+and chat tags match too). A note's `id` is its title. Scratch matches every
+word against the text, what was read from it, the file name and a link's page
+title (the Scratch list's own `?q=` works the same way). Attachments carry
+`kind`, `mime` and `size`.
+
 ## Data Models
 
 ### Turn

@@ -1225,10 +1225,12 @@ def list_scratch(db, limit: int = 50, before_id: Optional[int] = None,
     where, params = [], []
     if before_id:
         where.append("s.id < ?"); params.append(before_id)
-    if q and q.strip():
-        where.append("(s.content LIKE ? OR s.transcript LIKE ?)")
-        like = f"%{q.strip()}%"
-        params += [like, like]
+    # Every word must match somewhere: the text, what was read from it, the
+    # file's name, or the link's page title.
+    for word in (q or "").split():
+        where.append("(s.content LIKE ? OR s.transcript LIKE ? OR s.media_name LIKE ? "
+                     "OR p.title LIKE ?)")
+        params += [f"%{word}%"] * 4
     if pinned is True:
         where.append("s.pinned_at IS NOT NULL")
     elif pinned is False:

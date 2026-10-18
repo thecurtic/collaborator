@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { ActiveFilter, ListFilterButton } from '@/components/ListFilter';
+import { SearchEverywhere } from '@/features/find/ScopedSearch';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Note, NoteFieldsPatch, NoteMeta } from '@/domain/models';
@@ -51,6 +52,8 @@ interface NotesViewProps {
   onBadgeRefresh: () => void;
   /** Jump to a turn in the conversation (source links). */
   onOpenTurn: (turnId: number) => void;
+  /** Hand the query to unified search. */
+  onSearchEverywhere?: (q: string) => void;
 }
 
 function errMessage(err: unknown): string {
@@ -383,6 +386,7 @@ export function NotesView({
   initialLens = null,
   onBadgeRefresh,
   onOpenTurn,
+  onSearchEverywhere,
 }: NotesViewProps) {
   const [screen, setScreen] = useState<Screen>({ kind: 'list' });
   const [query, setQuery] = useState('');
@@ -590,6 +594,7 @@ export function NotesView({
             </button>
           )}
         </div>
+        {onSearchEverywhere && <SearchEverywhere q={query} onSearch={onSearchEverywhere} />}
         {reindexNotice && (
           <p className="mt-1.5 text-xs text-muted-foreground">{reindexNotice}</p>
         )}

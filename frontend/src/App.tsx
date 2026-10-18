@@ -9,6 +9,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   Sprout,
   StickyNote,
   TreePine,
@@ -45,6 +46,9 @@ import { ProjectsView } from '@/features/projects/ProjectsView';
 import { RootList } from '@/features/chat/RootList';
 import { ActiveFilter, ListFilterButton } from '@/components/ListFilter';
 import { InferenceSwitch } from '@/features/gate/InferenceSwitch';
+import { FindView } from '@/features/find/FindView';
+import { ScopedResults, SearchEverywhere } from '@/features/find/ScopedSearch';
+import type { FindHit, FindScope } from '@/features/find/findApi';
 import { TreeMap } from '@/features/chat/TreeMap';
 import { useConversation } from '@/features/chat/useConversation';
 import type { BranchTarget } from '@/features/chat/branchTarget';
@@ -137,6 +141,8 @@ function AppShell() {
   const [chatsFilter, setChatsFilter] = useState<'all' | 'conversations'>('all');
   // The derived "no tag" filter (UX doc, Chats): rounds up loose chats.
   const [chatsTagFilter, setChatsTagFilter] = useState<'untagged' | null>(null);
+  // Chats' own search bar: unified search, scoped to chats.
+  const [chatsQuery, setChatsQuery] = useState('');
   // The chat screen is "pushed" over the tabs (back arrow returns to them).
   const [chatOpen, setChatOpen] = useState(false);
   // Web Search and Transcripts push over whatever is showing; so do Profile
@@ -150,6 +156,10 @@ function AppShell() {
   const [transcriptsOpen, setTranscriptsOpen] = useState(false);
   // A transcript to open straight away (from a notification's deep link).
   const [transcriptFocus, setTranscriptFocus] = useState<number | null>(null);
+  // Unified search (UX doc, Search): a pushed screen over whatever's open;
+  // in-screen bars hand off to it with their query (and pile).
+  const [find, setFind] = useState<{ q: string; scope: FindScope | null; nonce: number } | null>(null);
+  const [scratchSearch, setScratchSearch] = useState<{ q: string; nonce: number } | null>(null);
   // Composer prefill for chats spawned from search ("chat about this page").
   const [chatDraft, setChatDraft] = useState<{
     text: string;
@@ -248,6 +258,7 @@ function AppShell() {
 
   /** Open the Notes screen, optionally on a lens. */
   const openNotes = useCallback((lens: string | null = null) => {
+    setFind(null);
     setChatOpen(false);
     setSettingsPage(null);
     setSearchOpen(false);
@@ -368,6 +379,35 @@ function AppShell() {
     void api.touchFeedItem(`chat:${root.id}`); // opened = touched (warm feed)
   };
 
+  const openFind = (q: string, scope: FindScope | null) =>
+    setFind((prev) => ({ q, scope, nonce: (prev?.nonce ?? 0) + 1 }));
+
+  // A search hit → wherever that kind of thing lives.
+  const openFindHit = (hit: FindHit, q: string) => {
+    setFind(null);
+    if (hit.type === 'chat') {
+      setSettingsPage(null);
+      setSearchOpen(false);
+      setTranscriptsOpen(false);
+      setNotesOpen(false);
+      convo.selectPathTo(hit.turn_id ?? Number(hit.id));
+      setChatOpen(true);
+    } else if (hit.type === 'note') {
+      openNoteByTitle(String(hit.id));
+    } else if (hit.type === 'transcript') {
+      setNotesOpen(false);
+      setTranscriptFocus(Number(hit.id));
+      setTranscriptsOpen(true);
+    } else if (hit.type === 'scratch') {
+      setChatOpen(false);
+      setNotesOpen(false);
+      setTranscriptsOpen(false);
+      setSettingsPage(null);
+      setTab('scratch');
+      setScratchSearch((prev) => ({ q, nonce: (prev?.nonce ?? 0) + 1 }));
+    }
+  };
+
   // Warm feed → wherever each kind of item lives.
   const openFeedItem = (item: FeedItem) => {
     const r = item.ref;
@@ -479,14 +519,16 @@ function AppShell() {
     <div className="flex h-full flex-col">
       <header className="pt-safe px-safe border-b border-border">
         <div className="flex items-center gap-2 px-2 py-3">
-          {settingsPage !== null || searchOpen || transcriptsOpen || notesOpen ? (
+          {find !== null || settingsPage !== null || searchOpen || transcriptsOpen || notesOpen ? (
             <>
               <Button
                 variant="ghost"
                 size="icon"
                 aria-label="Back"
                 onClick={() =>
-                  searchOpen
+                  find !== null
+                    ? setFind(null)
+                    : searchOpen
                     ? setSearchOpen(false)
                     : transcriptsOpen
                       ? setTranscriptsOpen(false)
@@ -499,7 +541,9 @@ function AppShell() {
                 <ChevronLeft className="h-5 w-5" />
               </Button>
               <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {searchOpen
+                {find !== null
+                  ? 'Search'
+                  : searchOpen
                   ? 'Web Search'
                   : transcriptsOpen
                     ? 'Transcripts'
@@ -556,15 +600,32 @@ function AppShell() {
             </div>
           )}
           <div className="flex shrink-0 items-center gap-1">
+            {find === null && gate === 'open' && (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Search everything"
+                title="Search chats, notes, Scratch, transcripts and files"
+                onClick={() => openFind('', null)}
+                className="h-9 w-9"
+              >
+                <Search className="h-5 w-5" />
+              </Button>
+            )}
             <InferenceSwitch />
             <AppMenu
-              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenSettings={() => {
+                setFind(null);
+                setSettingsOpen(true);
+              }}
               onOpenWebSearch={() => {
+                setFind(null);
                 setSettingsPage(null);
                 setTranscriptsOpen(false);
                 setSearchOpen(true);
               }}
               onOpenTranscripts={() => {
+                setFind(null);
                 setSettingsPage(null);
                 setSearchOpen(false);
                 setNotesOpen(false);
@@ -727,6 +788,13 @@ function AppShell() {
           </div>
         ) : gate === 'locked' ? (
           <PasskeyScreen />
+        ) : find !== null ? (
+          <FindView
+            key={find.nonce}
+            initialQuery={find.q}
+            initialScope={find.scope}
+            onOpen={openFindHit}
+          />
         ) : searchOpen ? (
           <WebSearchView onStartChat={startChatWithDraft} />
         ) : settingsPage === 'references' ? (
@@ -746,6 +814,7 @@ function AppShell() {
             noteRequest={noteRequest}
             initialLens={notesLens}
             onBadgeRefresh={() => void refreshDrafts()}
+            onSearchEverywhere={(q) => openFind(q, null)}
             onOpenTurn={(turnId) => {
               setNotesOpen(false);
               convo.selectPathTo(turnId);
@@ -755,6 +824,7 @@ function AppShell() {
         ) : transcriptsOpen ? (
           <TranscriptsView
             initialId={transcriptFocus}
+            onSearchEverywhere={(q) => openFind(q, null)}
             onBack={() => {
               setTranscriptsOpen(false);
               setTranscriptFocus(null);
@@ -819,6 +889,8 @@ function AppShell() {
           <ScratchView
             onStartChat={startChatWithDraft}
             onOpenTranscripts={() => setTranscriptsOpen(true)}
+            searchRequest={scratchSearch}
+            onSearchEverywhere={(q) => openFind(q, null)}
           />
         ) : mapOpen ? (
           // The tree map, pushed within Chats (like Mind's Graph View).
@@ -884,11 +956,44 @@ function AppShell() {
                 </Button>
               </div>
             </div>
+            <div className="border-b border-border px-4 py-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  value={chatsQuery}
+                  onChange={(e) => setChatsQuery(e.target.value)}
+                  placeholder="Search chats…"
+                  aria-label="Search chats"
+                  enterKeyHint="search"
+                  className="w-full rounded-md border border-input bg-background py-2 pl-8 pr-8 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
+                />
+                {chatsQuery && (
+                  <button
+                    type="button"
+                    aria-label="Clear search"
+                    onClick={() => setChatsQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <SearchEverywhere q={chatsQuery} onSearch={(q) => openFind(q, null)} />
+            </div>
             <ActiveFilter
-              label={chatsTagFilter ? 'No tag' : null}
+              label={chatsTagFilter && !chatsQuery.trim() ? 'No tag' : null}
               count={listedRoots.length}
               onClear={() => setChatsTagFilter(null)}
             />
+            {chatsQuery.trim() ? (
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                <ScopedResults
+                  scope="chats"
+                  q={chatsQuery}
+                  onOpen={(hit) => openFindHit(hit, chatsQuery.trim())}
+                />
+              </div>
+            ) : (
             <div className="min-h-0 flex-1">
               <RootList
                 roots={listedRoots}
@@ -906,6 +1011,7 @@ function AppShell() {
                 onOpenCard={openChatCard}
               />
             </div>
+            )}
             {/* Floating pill, sitting just above the tab bar. */}
             <Button
               onClick={openNewChat}
@@ -943,7 +1049,7 @@ function AppShell() {
       )}
 
       {/* Bottom tabs — hidden while a pushed screen (chat/references/search) is open. */}
-      {!chatOpen && settingsPage === null && !searchOpen && !transcriptsOpen && !notesOpen && gate === 'open' && (
+      {find === null && !chatOpen && settingsPage === null && !searchOpen && !transcriptsOpen && !notesOpen && gate === 'open' && (
         <nav className="pb-safe px-safe border-t border-border" aria-label="Main">
           <div className="mx-auto flex max-w-3xl">
             <TabButton

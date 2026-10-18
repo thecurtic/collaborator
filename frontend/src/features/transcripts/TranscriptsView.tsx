@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
+import { SearchEverywhere } from '@/features/find/ScopedSearch';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Transcript } from '@/domain/models';
@@ -219,10 +220,13 @@ function TranscriptDetail({
 export function TranscriptsView({
   onBack,
   initialId = null,
+  onSearchEverywhere,
 }: {
   onBack: () => void;
   /** Open this transcript first (a notification's deep link). */
   initialId?: number | null;
+  /** Hand the query to unified search. */
+  onSearchEverywhere?: (q: string) => void;
 }) {
   const [items, setItems] = useState<Transcript[] | null>(null);
   const [vocabulary, setVocabulary] = useState<string[]>([]);
@@ -340,6 +344,7 @@ export function TranscriptsView({
             </button>
           )}
         </label>
+        {onSearchEverywhere && <SearchEverywhere q={query} onSearch={onSearchEverywhere} />}
         {channel && (
           <button
             type="button"

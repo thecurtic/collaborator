@@ -54,6 +54,7 @@ import wallet
 import scratch
 import link_preview
 import gate_client
+import unified_search
 import voice
 from auth import validate_passkey, create_user_db
 
@@ -3390,6 +3391,26 @@ def _persist_config_override(section: str, key: str, value) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(existing, f, indent=2)
+
+
+@app.get("/api/find")
+def find_everywhere(
+    q: str = "",
+    scope: Optional[str] = None,
+    limit: int = 5,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Unified search over my own world (unified_search.py): chats, notes,
+    Scratch, transcripts and attachments, grouped by pile; ?scope= narrows
+    it (comma-separated) and ?limit= is per pile. The user's search only:
+    Scratch is in it, so it is never a model tool."""
+    _require_auth(passkey)
+    scopes = [s.strip() for s in scope.split(",") if s.strip()] if scope else None
+    if scopes and any(s not in unified_search.SCOPES for s in scopes):
+        raise HTTPException(status_code=422,
+                            detail=f"scope must be among {', '.join(unified_search.SCOPES)}")
+    return unified_search.search(_resolve_db_path(passkey), q.strip(), scopes,
+                                 limit=max(1, min(limit, 100)))
 
 
 @app.get("/api/search")

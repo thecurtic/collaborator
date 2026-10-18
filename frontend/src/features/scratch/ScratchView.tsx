@@ -39,6 +39,7 @@ import {
   type FilterOption,
 } from '@/components/ListFilter';
 import { Button } from '@/components/ui/button';
+import { SearchEverywhere } from '@/features/find/ScopedSearch';
 import { useLongPress } from '@/lib/useLongPress';
 import { cleanUrlsInText } from '@/lib/urlClean';
 import { cn, parseApiDate } from '@/lib/utils';
@@ -628,9 +629,15 @@ function ActionResult({
 export function ScratchView({
   onStartChat,
   onOpenTranscripts,
+  searchRequest = null,
+  onSearchEverywhere,
 }: {
   onStartChat: (draft: string) => void;
   onOpenTranscripts: () => void;
+  /** From unified search: open Scratch searching for this. */
+  searchRequest?: { q: string; nonce: number } | null;
+  /** Hand the query to unified search. */
+  onSearchEverywhere?: (q: string) => void;
 }) {
   // The stream, newest FIRST as the API pages it; rendered oldest-to-newest
   // so the newest sits at the bottom, nearest the composer (UX doc).
@@ -652,6 +659,9 @@ export function ScratchView({
   const [loadingMore, setLoadingMore] = useState(false);
   // Items with an /act call in flight (processing overlay on the card).
   const [acting, setActing] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    if (searchRequest) setQuery(searchRequest.q);
+  }, [searchRequest]);
   const seqRef = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
   // After a render: 'bottom' = land on the newest; a number = keep the
@@ -1062,6 +1072,9 @@ export function ScratchView({
             className="w-full rounded-md border border-input bg-background py-2 pl-8 pr-3 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
           />
         </div>
+        {onSearchEverywhere && (
+          <SearchEverywhere q={query} onSearch={onSearchEverywhere} />
+        )}
       </div>
       <ActiveFilter
         label={filterLabel}
