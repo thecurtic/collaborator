@@ -8,6 +8,7 @@ import {
   Paperclip,
   PhoneOff,
   RotateCcw,
+  SendHorizontal,
   Settings as SettingsIcon,
   Volume2,
   X,
@@ -444,7 +445,11 @@ export function CallScreen({
 
       {/* Handed over mid-call: goes with whatever is said next. */}
       {handover.length > 0 && (
-        <HandoverStrip items={handover} onRemove={removeHandover} />
+        <HandoverStrip
+          items={handover}
+          onRemove={removeHandover}
+          onSendNow={phase === 'listening' ? endTurn : undefined}
+        />
       )}
 
       <div className="flex items-center justify-center gap-6 border-t border-border p-6">
@@ -546,15 +551,30 @@ export function CallScreen({
 function HandoverStrip({
   items,
   onRemove,
+  onSendNow,
 }: {
   items: Handover[];
   onRemove: (key: number) => void;
+  /** While listening: send it as it is, with nothing (more) said. */
+  onSendNow?: () => void;
 }) {
   return (
     <div className="border-t border-border px-4 pt-3">
-      <p className="mx-auto mb-1.5 max-w-md text-[11px] text-muted-foreground">
-        Goes with what you say next
-      </p>
+      <div className="mx-auto mb-1.5 flex max-w-md items-center justify-between gap-2">
+        <p className="text-[11px] text-muted-foreground">
+          Goes with what you say next
+        </p>
+        {onSendNow && (
+          <button
+            type="button"
+            onClick={onSendNow}
+            className="flex items-center gap-1 rounded-full bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground"
+          >
+            <SendHorizontal className="h-3 w-3" />
+            Send now
+          </button>
+        )}
+      </div>
       <div className="mx-auto flex max-w-md flex-wrap gap-1.5">
         {items.map((h) => (
           <span

@@ -466,7 +466,8 @@ export function useCall(
       // Phrase tier: the server already stripped the end phrase from `final`.
       const clean = phraseMode ? text.trim() : stripTrailingWord(text, endWord);
       log(`heard(${text.trim().length}) → "${clean.slice(0, 40)}"`);
-      if (clean) {
+      // A hand-over goes even with nothing said ("Send now").
+      if (clean || handoverRef.current.length) {
         await respond(clean);
       } else {
         void listen(); // nothing intelligible — listen again
@@ -736,8 +737,9 @@ export function useCall(
         }
         if (!active) return;
         log('ready (streaming PCM16 16k)');
-        if (pendingIntro?.kind === 'send' && pendingIntro.text) {
+        if (pendingIntro?.kind === 'send') {
           // The typed draft IS the first turn — respond to it right away.
+          // Files alone go straight to the model too, with no words added.
           log(`intro: sending typed draft (${pendingIntro.text.length} chars)`);
           void respond(pendingIntro.text);
         } else if (pendingIntro?.kind === 'speak') {

@@ -838,7 +838,7 @@ function AppShell() {
             onReviewDrafts={openInbox}
             onStartCall={(draft, attachments) => {
               // A typed draft becomes the call's opening turn; attached files
-              // go with it (or with the first thing said).
+              // go with it, or alone, straight to the model.
               setCallIntro(
                 draft || attachments?.length
                   ? { kind: 'send', text: draft ?? '', attachments }
