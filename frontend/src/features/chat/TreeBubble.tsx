@@ -21,6 +21,7 @@ import { createPortal } from 'react-dom';
 import { ActionSheet } from '@/components/ActionSheet';
 import { ActivityRow } from '@/components/ActivityRow';
 import { Markdown } from '@/components/Markdown';
+import { Thinking } from '@/components/Thinking';
 import { getTurnSources } from './sourcesStore';
 import { Button } from '@/components/ui/button';
 import { useSpeech } from '@/features/voice/SpeechContext';
@@ -72,6 +73,8 @@ interface TreeBubbleProps {
   fork?: Fork;
   /** False → this turn is outside the next message's context window (lighter). */
   inContext?: boolean;
+  /** The reasoning behind this reply, while it's still on show. */
+  thought?: string;
 }
 
 /**
@@ -343,6 +346,7 @@ export function TreeBubble({
   onRegenerate,
   fork,
   inContext = true,
+  thought,
 }: TreeBubbleProps) {
   const isUser = node.role === 'user';
   // Hold the BUBBLE (padding, footer, gaps) to copy the whole turn. Holds on
@@ -414,6 +418,7 @@ export function TreeBubble({
         {isUser && node.attachments.length > 0 && (
           <AttachmentStrip items={node.attachments} onPrimary />
         )}
+        {!isUser && thought && <Thinking text={thought} done />}
         {reading ? (
           <div
             data-selectable

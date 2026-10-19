@@ -1,5 +1,4 @@
 import {
-  Brain,
   Check,
   Loader2,
   Mic,
@@ -16,9 +15,12 @@ import {
 import { useEffect, useRef, useState, type Ref } from 'react';
 import { ActionSheet } from '@/components/ActionSheet';
 import { ActivityRow } from '@/components/ActivityRow';
+import { JumpToLatest } from '@/components/JumpToLatest';
+import { Thinking } from '@/components/Thinking';
 import { Button } from '@/components/ui/button';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import { useModalA11y } from '@/lib/useModalA11y';
+import { useScrollHold } from '@/lib/useScrollHold';
 import { cn } from '@/lib/utils';
 import type { BranchTarget } from '@/features/chat/branchTarget';
 import type { CallIntro } from '@/features/chat/callIntro';
@@ -91,26 +93,6 @@ const LABELS: Record<CallPhase, string> = {
   responding: 'Responding…',
   error: 'Call error',
 };
-
-/**
- * The model's reasoning for the reply in progress (UX doc, Voice): full
- * height and readable, streaming in place of the reply until the reply
- * starts, then kept above it through the speech. Never spoken, never saved;
- * it's gone when the mic reopens.
- */
-function Thinking({ text, done }: { text: string; done: boolean }) {
-  return (
-    <div className="mb-2 rounded-lg border border-dashed border-border bg-muted/30 px-3.5 py-3">
-      <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-        <Brain className="h-3.5 w-3.5 shrink-0" />
-        {done ? 'Thought' : 'Thinking'}
-      </p>
-      <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-muted-foreground">
-        {text}
-      </p>
-    </div>
-  );
-}
 
 function Turn({
   role,
@@ -283,51 +265,37 @@ export function CallScreen({
     ? currentParagraphIndex(speakingTurn.text, speakBase + spokenChars)
     : -1;
 
-  useEffect(() => {
-    // While the agent speaks, keep the paragraph being read in view (centered);
-    // otherwise follow the bottom (new user speech / new turns).
-    if (speakingId != null && currentParaRef.current) {
-      currentParaRef.current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center',
-      });
-    } else {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }
-  }, [transcript.length, partial, currentParaIdx, speakingId]);
-
-  // While it thinks (no reply yet), follow the reasoning as it streams.
-  // Only a finger or wheel scrolling up stops the follow (the smooth
-  // auto-scrolls fire scroll events mid-animation); scrolling back down near
-  // the end resumes it, since the text keeps growing away from "the bottom".
+  // Follow what's live — the reasoning while it thinks, then the paragraph
+  // being read (centered), else the bottom — but never against the reader:
+  // nothing moves while a finger is on it, and a scroll up by hand detaches
+  // the follow until they come back to the end, tap "Jump to latest", or the
+  // mic reopens (a new exchange).
   const scrollRef = useRef<HTMLDivElement>(null);
-  const followThinking = useRef(true);
-  const touchedAt = useRef(0);
-  const lastTop = useRef(0);
+  const hold = useScrollHold(scrollRef, open);
+  const { mayScroll, follow } = hold;
   const replyStarted = !!speakingTurn?.text.trim();
-  const onUserScroll = () => {
-    touchedAt.current = Date.now();
-  };
-  const onTranscriptScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const up = el.scrollTop < lastTop.current;
-    lastTop.current = el.scrollTop;
-    if (replyStarted) return;
-    const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (gap < 48 || (!up && gap < el.clientHeight / 3)) {
-      followThinking.current = true;
-    } else if (up && Date.now() - touchedAt.current < 1000) {
-      followThinking.current = false;
+  const thinkingNow = !!reasoning && !replyStarted;
+  const scrollToLive = (smooth: boolean) => {
+    const behavior = smooth ? 'smooth' : 'auto';
+    if (speakingId != null && currentParaRef.current) {
+      currentParaRef.current.scrollIntoView({ behavior, block: 'center' });
+    } else if (thinkingNow && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    } else {
+      bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
     }
   };
   useEffect(() => {
-    if (!reasoning) followThinking.current = true;
+    if (mayScroll()) scrollToLive(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transcript.length, partial, currentParaIdx, speakingId]);
+  useEffect(() => {
     const el = scrollRef.current;
-    if (reasoning && !replyStarted && followThinking.current && el) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [reasoning, replyStarted]);
+    if (thinkingNow && el && mayScroll()) el.scrollTop = el.scrollHeight;
+  }, [reasoning, thinkingNow, mayScroll]);
+  useEffect(() => {
+    if (phase === 'listening') follow();
+  }, [phase, follow]);
 
   if (!open) return null;
 
@@ -417,11 +385,9 @@ export function CallScreen({
       </div>
 
       {/* Scrollable conversation — readable while listening or speaking. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={scrollRef}
-        onScroll={onTranscriptScroll}
-        onWheel={onUserScroll}
-        onTouchMove={onUserScroll}
         className="flex-1 overflow-y-auto overscroll-contain px-5 py-5"
       >
         <div className="mx-auto flex max-w-md flex-col gap-5">
@@ -456,6 +422,15 @@ export function CallScreen({
           {error && <p className="text-sm text-destructive">{error}</p>}
           <div ref={bottomRef} />
         </div>
+      </div>
+      {hold.detached && (
+        <JumpToLatest
+          onClick={() => {
+            hold.follow();
+            scrollToLive(true);
+          }}
+        />
+      )}
       </div>
 
       {/* Diagnostics — toggled via Settings → Developer diagnostics. */}

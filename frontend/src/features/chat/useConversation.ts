@@ -85,6 +85,11 @@ export function useConversation(reloadSignal: number) {
   // Display-only chain-of-thought for the in-flight reply (545e1a5). Never
   // part of the transcript — discarded when the stream settles.
   const [reasoning, setReasoning] = useState('');
+  // The finished reply's reasoning stays on show under it until the next
+  // send (as in a call, until the mic reopens). Still display-only: never
+  // saved, gone on reload.
+  const [lastThought, setLastThought] = useState<{ id: number; text: string } | null>(null);
+  const reasoningRef = useRef('');
   // Live tool activity feed for the in-flight turn: a row per tool call,
   // resolved in place by its outcome event. Cleared each turn.
   const [activity, setActivity] = useState<ToolActivity[]>([]);
@@ -225,6 +230,8 @@ export function useConversation(reloadSignal: number) {
       setError(null);
       setRecall(null);
       setReasoning('');
+      reasoningRef.current = '';
+      setLastThought(null);
       setActivity([]);
       activityRef.current = [];
       setProposedDrafts([]);
@@ -236,7 +243,10 @@ export function useConversation(reloadSignal: number) {
             onToken: (c) =>
               setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
             onRecall: (block) => setRecall(block),
-            onReasoning: (c) => setReasoning((prev) => prev + c),
+            onReasoning: (c) => {
+              reasoningRef.current += c;
+              setReasoning((prev) => prev + c);
+            },
             onStatus: applyToolEvent,
             onDrafts: (drafts) =>
               setProposedDrafts((prev) => [...prev, ...drafts]),
@@ -251,6 +261,9 @@ export function useConversation(reloadSignal: number) {
         applyTree(t);
         if (res.id != null) {
           selectPathTo(res.id);
+          if (reasoningRef.current) {
+            setLastThought({ id: res.id, text: reasoningRef.current });
+          }
           // Cache the tool feed for this turn — fallback for turns whose
           // persisted `tools` haven't been fetched yet this session.
           saveTurnSources(res.id, activityRef.current);
@@ -555,6 +568,7 @@ export function useConversation(reloadSignal: number) {
     streaming,
     recall,
     reasoning,
+    lastThought,
     activity,
     proposedDrafts,
     clearProposedDrafts,

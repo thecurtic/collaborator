@@ -1,15 +1,16 @@
 import {
   Brain,
-  ChevronDown,
-  ChevronRight as ChevronRightIcon,
   Link as LinkIcon,
   Loader2,
   NotebookPen,
   X,
 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { JumpToLatest } from '@/components/JumpToLatest';
 import { Markdown } from '@/components/Markdown';
+import { Thinking } from '@/components/Thinking';
 import { useModalA11y } from '@/lib/useModalA11y';
+import { useScrollHold } from '@/lib/useScrollHold';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import type { RecallBlock } from '@/domain/models';
 import type { BranchTarget } from './branchTarget';
@@ -39,49 +40,6 @@ interface ChatViewProps {
   onDraftSeedConsumed?: () => void;
   /** The whole conversation was just deleted — return to the list. */
   onConversationGone: () => void;
-}
-
-/**
- * Live chain-of-thought pane (545e1a5) — display-only, never part of the
- * transcript; the hook discards it when the stream settles. Collapsed by
- * default; expanded it tails the newest thinking.
- */
-function ThinkingPane({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [open, text]);
-
-  return (
-    <div className="mb-2 rounded-md border border-border/60 bg-muted/30">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground"
-      >
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRightIcon className="h-3.5 w-3.5 shrink-0" />
-        )}
-        <Brain className="h-3.5 w-3.5 shrink-0" />
-        Thinking…
-      </button>
-      {open && (
-        <div
-          ref={scrollRef}
-          className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words border-t border-border/60 px-2.5 py-2 text-xs italic leading-relaxed text-muted-foreground"
-        >
-          {text}
-        </div>
-      )}
-    </div>
-  );
 }
 
 /** Plain-text export of a run of turns (for sharing the context window). */
@@ -156,6 +114,7 @@ export function ChatView({
     streaming,
     recall,
     reasoning,
+    lastThought,
     activity,
     proposedDrafts,
     clearProposedDrafts,
@@ -196,14 +155,24 @@ export function ChatView({
   // stops once this scrolls off-screen, so a long answer stays readable
   // from its start.
   const streamTopRef = useRef<HTMLDivElement>(null);
+  // Start of the reply after its thinking: with thinking, following stops
+  // once THIS would scroll off (not the user bubble, long gone by then), so
+  // the reply reads from its first line, the thinking above it.
+  const replyTopRef = useRef<HTMLDivElement>(null);
   // Follow-the-stream state machine:
   //   'auto'    — follow, but stop when the response start leaves the screen
   //   'stopped' — don't follow (auto-stop above, or the user scrolled up)
   //   'user'    — user deliberately returned to the bottom: always follow
   const followRef = useRef<'auto' | 'stopped' | 'user'>('auto');
-  // Our own scrollIntoView fires scroll events indistinguishable from the
-  // user's — flag them so they can't re-pin the view (the old "fighting").
-  const programmaticRef = useRef(false);
+  // Never against the reader: nothing auto-scrolls while a finger is on the
+  // list (or just flicked it), and a scroll up by hand stops the follow until
+  // they come back to the end or tap "Jump to latest".
+  const hold = useScrollHold(scrollRef);
+  const { mayScroll, follow } = hold;
+  useEffect(() => {
+    if (hold.detached) followRef.current = 'stopped';
+    else if (followRef.current === 'stopped') followRef.current = 'user';
+  }, [hold.detached]);
 
   const scrollToBottom = (smooth: boolean) => {
     // Long jumps (e.g. a call's worth of turns landing at once) animate as a
@@ -213,14 +182,10 @@ export function ChatView({
       const distance = c.scrollHeight - c.scrollTop - c.clientHeight;
       if (distance > c.clientHeight * 1.5) smooth = false;
     }
-    programmaticRef.current = true;
     bottomRef.current?.scrollIntoView({
       behavior: smooth ? 'smooth' : 'auto',
       block: 'end',
     });
-    setTimeout(() => {
-      programmaticRef.current = false;
-    }, smooth ? 350 : 80);
   };
 
   // Reply button on a paragraph: stack a truncated quote into the draft.
@@ -239,15 +204,6 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftSeed?.nonce]);
 
-  const handleScroll = () => {
-    const el = scrollRef.current;
-    if (!el || programmaticRef.current) return;
-    // A real user scroll: away from the bottom stops following for the rest
-    // of the turn; deliberately returning to the bottom re-engages it.
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    followRef.current = nearBottom ? 'user' : 'stopped';
-  };
-
   // Jump to the newest message when the screen opens (mount) / finishes loading.
   useLayoutEffect(() => {
     if (!loading) {
@@ -258,8 +214,15 @@ export function ChatView({
 
   // Each new turn starts following afresh.
   useEffect(() => {
-    if (sending) followRef.current = 'auto';
-  }, [sending]);
+    if (sending) {
+      follow();
+      followRef.current = 'auto';
+    }
+  }, [sending, follow]);
+
+  // Thinking then reply: follow the thinking as it streams, then the reply
+  // until its first line would leave the screen.
+  const thinkingNow = !!reasoning && !!streaming && !streaming.reply;
 
   // Follow new/streaming content per the follow state — but not when
   // switching branch forks (keep the tapped toggle under the finger).
@@ -268,12 +231,12 @@ export function ChatView({
       suppressScrollRef.current = false;
       return;
     }
-    if (loading || followRef.current === 'stopped') return;
-    if (followRef.current === 'auto' && streaming) {
+    if (loading || followRef.current === 'stopped' || !mayScroll()) return;
+    if (followRef.current === 'auto' && streaming && !thinkingNow) {
       // Auto-stop once the response start would scroll off-screen, so a long
       // answer stays readable from the top without any user action.
       const container = scrollRef.current;
-      const top = streamTopRef.current;
+      const top = reasoning ? replyTopRef.current : streamTopRef.current;
       if (container && top) {
         const wouldScrollOff =
           top.getBoundingClientRect().top <
@@ -287,7 +250,7 @@ export function ChatView({
     // Instant during streaming: smooth animations pile up across rapid
     // tokens and were the main source of scroll fighting.
     scrollToBottom(!streaming);
-  }, [path.length, streaming?.reply, streaming, activity.length, sending, loading]);
+  }, [path.length, streaming?.reply, streaming, activity.length, sending, loading, reasoning]);
 
   // Cycle a node's branch fork (keeps the tapped button under the finger).
   const switchFork = (parentId: number, dir: 1 | -1) => {
@@ -435,9 +398,9 @@ export function ChatView({
           </div>
         </div>
       )}
+      <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={scrollRef}
-        onScroll={handleScroll}
         className="flex-1 overflow-y-auto overscroll-contain"
       >
         <div className="mx-auto flex max-w-3xl flex-col gap-3 px-3 py-5 sm:gap-4 sm:px-4 sm:py-6">
@@ -498,6 +461,11 @@ export function ChatView({
                     }
                     fork={fork}
                     inContext={i >= inCtxStart}
+                    thought={
+                      lastThought?.id === entry.node.id
+                        ? lastThought.text
+                        : undefined
+                    }
                   />
                   {/* This turn's stored recall (between the message and reply). */}
                   {entry.node.recall && <RecallCard recall={entry.node.recall} />}
@@ -520,8 +488,11 @@ export function ChatView({
               {recall && debug && <RecallCard recall={recall} />}
               <div className="flex w-full justify-start">
                 <div className="w-full rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:text-sm">
-                  {/* Chain-of-thought (display-only; discarded on done). */}
-                  {reasoning && <ThinkingPane text={reasoning} />}
+                  {/* Chain-of-thought, full height (display-only; it stays
+                      under the finished reply until the next send). */}
+                  {reasoning && (
+                    <Thinking text={reasoning} done={!!streaming.reply} />
+                  )}
                   {/* Live tool activity: one row per call, resolved in place
                       (✓ n results / ∅ / ✕ reason). Persists while the answer
                       streams below it. */}
@@ -532,9 +503,10 @@ export function ChatView({
                       ))}
                     </div>
                   )}
+                  <div ref={replyTopRef} className="scroll-mt-3" />
                   {streaming.reply ? (
                     <Markdown>{streaming.reply}</Markdown>
-                  ) : (
+                  ) : reasoning ? null : (
                     <span className="flex gap-1 py-1" aria-label="Responding">
                       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.3s]" />
                       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.15s]" />
@@ -548,6 +520,16 @@ export function ChatView({
 
           <div ref={bottomRef} />
         </div>
+      </div>
+      {hold.detached && streaming && (
+        <JumpToLatest
+          onClick={() => {
+            hold.follow();
+            followRef.current = 'user';
+            scrollToBottom(true);
+          }}
+        />
+      )}
       </div>
 
       {error && (
