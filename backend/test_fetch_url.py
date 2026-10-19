@@ -266,8 +266,7 @@ def test_screenshot_page():
     """screenshot_page: webtool /screenshot -> vision model; gated, budgeted."""
     cfg = config.get_config._config
     cfg["tools"]["fetch_url"]["webtool_url"] = "http://search-vm:8200"
-    cfg["tools"]["screenshot"]["vision_model"] = "llava-v1.6-34b"
-    cfg["inference"]["vision"] = False   # text-only chat model: legacy fallback
+    cfg["inference"]["vision"] = True    # the chat model reads images
     posts = []
 
     def fake_post(url, json=None, timeout=None, **k):
@@ -293,7 +292,7 @@ def test_screenshot_page():
         # First hop: webtool /screenshot. Second: vision chat with image + question.
         assert posts[0]["endpoint"].endswith("/screenshot")
         vision = posts[1]["body"]
-        assert vision["model"] == "llava-v1.6-34b"
+        assert vision["model"] == cfg["inference"]["model_id"]
         parts = vision["messages"][0]["content"]
         assert parts[0]["image_url"]["url"] == "data:image/png;base64,aGk="
         assert parts[1]["text"] == "what does the pricing table say?"
@@ -304,7 +303,6 @@ def test_screenshot_page():
         assert posts == []
     finally:
         inference.requests.post = orig_post
-        cfg["tools"]["screenshot"]["vision_model"] = None
         cfg["tools"]["fetch_url"]["webtool_url"] = None
         cfg["inference"].pop("vision", None)
     print("✓ screenshot_page: webtool + vision chained, question passed, guards first")
@@ -313,11 +311,13 @@ def test_screenshot_page():
 def test_screenshot_gating_and_shared_budget():
     cfg = config.get_config._config
     cfg["inference"]["vision"] = False
-    # Gated off without webtool_url + vision_model.
+    # Gated off without webtool_url, and without a chat model that sees.
     schemas, _, _ = main._build_tools(os.environ["DB_PATH"])
     assert "screenshot_page" not in {s["function"]["name"] for s in schemas}
     cfg["tools"]["fetch_url"]["webtool_url"] = "http://search-vm:8200"
-    cfg["tools"]["screenshot"]["vision_model"] = "llava-v1.6-34b"
+    schemas, _, _ = main._build_tools(os.environ["DB_PATH"])
+    assert "screenshot_page" not in {s["function"]["name"] for s in schemas}
+    cfg["inference"]["vision"] = True
     orig_budget = cfg["tools"]["fetch_url"]["max_per_turn"]
     cfg["tools"]["fetch_url"]["max_per_turn"] = 1
     try:
@@ -345,7 +345,6 @@ def test_screenshot_gating_and_shared_budget():
             inference.requests.post = orig_post
     finally:
         cfg["tools"]["fetch_url"]["max_per_turn"] = orig_budget
-        cfg["tools"]["screenshot"]["vision_model"] = None
         cfg["tools"]["fetch_url"]["webtool_url"] = None
         cfg["inference"].pop("vision", None)
     print("✓ screenshot_page: self-gating + shares the per-turn fetch budget")

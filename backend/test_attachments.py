@@ -194,17 +194,15 @@ def test_image_goes_inline_then_history_gets_its_text(monkeypatch):
     print("✓ image inline on its turn, text in history; snapshot on the turn")
 
 
-def test_text_only_model_waits_for_the_images_text(monkeypatch):
+def test_text_only_model_still_sends(monkeypatch):
     main, attachments, c, dbp, seen, looks = _fresh_env(monkeypatch, sees=False)
-    monkeypatch.setitem(main.config["tools"], "screenshot", {"vision_model": "llava"})
     img = _upload(c, "sign.png", _png("blue"), "image/png")
     done, events = _done(c.post("/api/messages", json={
         "message": "read it", "attachment_ids": [img["id"]]}))
-    assert seen[-1]["images"] is None
-    assert "HELLO FROM THE PICTURE" in seen[-1]["message"]
-    # (Read at upload, since the chat model can't see it inline.)
-    assert len(looks) == 1
-    print("✓ a text-only chat model gets the image's text, read before the turn")
+    assert done and seen[-1]["images"] is None
+    assert "HELLO FROM THE PICTURE" not in seen[-1]["message"]
+    assert looks == []          # no second model to fall back on
+    print("✓ a text-only chat model gets no image, and the turn isn't held up")
 
 
 def test_unknown_attachment_is_404(monkeypatch):

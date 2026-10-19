@@ -322,9 +322,6 @@ tools:
     # proxy: "socks5h://<tor-or-vpn-host>:9050"   # needs: pip install requests[socks]
   screenshot:                 # visual page analysis: webtool /screenshot -> the chat
                               # model (inference.vision)
-    # vision_model: "qwen/qwen2.5-vl-7b"  # LEGACY second model: used ONLY while the
-                              # chat model can't read images. Remove it once the
-                              # Settings test passes on the chat model.
     temperature: 0.2
     max_tokens: 512
     timeout: 180              # headroom for the on-demand model load

@@ -245,7 +245,6 @@ def test_media_hold_send_reads_the_file(monkeypatch):
 
     # No model reads images: an honest "nothing to read", nothing run.
     cfg["inference"]["vision"] = False
-    cfg["tools"]["screenshot"]["vision_model"] = None
     r = c.post("/api/scratch/media",
                files={"file": ("pic.png", io.BytesIO(b"png"), "image/png")})
     out = c.post(f"/api/scratch/{r.json()['item']['id']}/act").json()["item"]

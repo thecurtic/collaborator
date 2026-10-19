@@ -86,7 +86,6 @@ interface VisionStatus {
   setting: string | boolean;
   model: string | null;
   lmstudio_type?: string | null;
-  legacy_fallback?: boolean;
   ok?: boolean;
   answer?: string;
   error?: string;
@@ -124,8 +123,6 @@ function VisionCheck() {
   let line = 'Checking whether it reads images…';
   if (status) {
     if (status.chat_model_sees) line = 'Reads images: attachments and screenshots go to this model.';
-    else if (status.legacy_fallback)
-      line = `Text only. Images go to the separate vision model (${status.model}) for now.`;
     else if (status.lmstudio_type === 'llm')
       line = 'Text only: LM Studio loaded it without its vision part (mmproj). ' +
              'Images can’t be read until it loads as a vision model.';

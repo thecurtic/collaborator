@@ -447,9 +447,7 @@ def load_config() -> dict:
             "screenshot": {
                 # Visual page analysis: webtool /screenshot (full-page PNG via the
                 # search VM's VPN) -> the chat model when it reads images
-                # (inference.vision). LEGACY: vision_model, a separate model,
-                # is used only while the chat model can't see.
-                "vision_model": None,
+                # (inference.vision).
                 "temperature": 0.2,
                 "max_tokens": 512,
                 "timeout": 180,         # headroom for on-demand model load

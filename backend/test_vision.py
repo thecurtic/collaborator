@@ -1,5 +1,5 @@
-"""vision.py: one vision path — the chat model when it reads images, the
-legacy screenshot model only while it can't. No network: LM Studio's model
+"""vision.py: one vision path — the chat model when it reads images, and
+nothing else. No network: LM Studio's model
 list and the chat endpoint are stubbed."""
 
 import base64
@@ -15,12 +15,10 @@ import inference
 import vision
 
 
-def _setup(monkeypatch, setting="auto", types=None, legacy=None):
+def _setup(monkeypatch, setting="auto", types=None):
     cfg = config.get_config()
     monkeypatch.setitem(cfg["inference"], "model_id", "qwen/qwen3.6-35b")
     monkeypatch.setitem(cfg["inference"], "vision", setting)
-    monkeypatch.setitem(cfg["tools"], "screenshot",
-                        {**cfg["tools"].get("screenshot", {}), "vision_model": legacy})
     monkeypatch.setattr(inference, "get_models_detail", lambda: [
         {"id": mid, "type": t} for mid, t in (types or {}).items()])
     vision._vlm_cache.clear()
@@ -36,15 +34,14 @@ def test_auto_asks_lmstudio(monkeypatch):
     print("✓ auto: LM Studio's vlm/llm type decides; unknown counts as no")
 
 
-def test_explicit_setting_and_legacy_fallback(monkeypatch):
-    _setup(monkeypatch, setting=True, types={"qwen/qwen3.6-35b": "llm"},
-           legacy="llava")
-    assert vision.model() == "qwen/qwen3.6-35b"        # chat model wins
-    _setup(monkeypatch, setting=False, legacy="llava")
-    assert vision.model() == "llava"                   # only while it can't see
+def test_explicit_setting_overrides(monkeypatch):
+    _setup(monkeypatch, setting=True, types={"qwen/qwen3.6-35b": "llm"})
+    assert vision.model() == "qwen/qwen3.6-35b"
+    _setup(monkeypatch, setting=False, types={"qwen/qwen3.6-35b": "vlm"})
+    assert vision.model() is None
     st = vision.status()
-    assert st["legacy_fallback"] and st["chat_model_sees"] is False
-    print("✓ inference.vision overrides; the legacy model only fills a gap")
+    assert st["chat_model_sees"] is False and st["model"] is None
+    print("✓ inference.vision overrides what LM Studio reports")
 
 
 def test_look_sends_image_parts(monkeypatch):

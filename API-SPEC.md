@@ -831,7 +831,7 @@ PUT /api/model    { "model_id": "qwen/qwen3-30b-a3b", "force"?: false }
 
 ```
 GET  /api/vision      -> { "chat_model": "…", "chat_model_sees": true, "setting": "auto",
-                           "model": "…", "lmstudio_type"?: "vlm", "legacy_fallback"?: true }
+                           "model": "…", "lmstudio_type"?: "vlm" }
 POST /api/vision/test -> the same, plus { "ok": true, "expected": "PELICAN 47", "answer": "…" }
                          or { "ok": false, "error": "…" }
 ```
@@ -839,8 +839,8 @@ POST /api/vision/test -> the same, plus { "ok": true, "expected": "PELICAN 47", 
 - One vision path (`backend/vision.py`): images go to the CHAT model.
   `inference.vision` decides whether it can see: `auto` asks LM Studio
   (`/api/v0/models` type `vlm`), `true`/`false` overrides. `model` is who reads
-  images: the chat model when it can, else the legacy
-  `tools.screenshot.vision_model` when set, else null (no vision).
+  images: the chat model when it can, else null (no vision). There is no
+  second vision model.
 - `/api/vision/test` draws a card with a known word, sends it to `model`, and
   reports what came back: proof the image actually reached the model.
 

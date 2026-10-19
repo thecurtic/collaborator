@@ -11,11 +11,6 @@ Whether the chat model can see is `inference.vision`:
   model loaded with its vision projector, "llm" for text only); unknown when
   the server doesn't say, which counts as no.
 - true / false: the operator says so (other OpenAI-compatible servers).
-
-LEGACY: `tools.screenshot.vision_model` (a second, separate vision model) is
-still honored, but only when the chat model can't see — so an install that
-relied on it keeps working, and it goes quiet by itself once the chat model
-reads images. It goes away entirely once that's confirmed on the real box.
 """
 
 import base64
@@ -33,11 +28,6 @@ _CACHE_S = 300
 
 def _inference() -> dict:
     return get_config().get("inference", {}) or {}
-
-
-def _legacy_model() -> Optional[str]:
-    tools = get_config().get("tools", {}) or {}
-    return ((tools.get("screenshot") or {}).get("vision_model") or None)
 
 
 def lmstudio_type(model_id: str) -> Optional[str]:
@@ -69,12 +59,10 @@ def chat_model_sees(model_id: Optional[str] = None) -> bool:
 
 
 def model() -> Optional[str]:
-    """The model that reads images: the chat model when it can, else the
-    legacy screenshot model when one is configured, else None (no vision)."""
+    """The model that reads images: the chat model when it can, else None
+    (no vision)."""
     chat = _inference().get("model_id")
-    if chat and chat_model_sees(chat):
-        return chat
-    return _legacy_model()
+    return chat if chat and chat_model_sees(chat) else None
 
 
 def status() -> dict:
@@ -87,8 +75,6 @@ def status() -> dict:
            "model": model()}
     if str(setting).lower() == "auto":
         out["lmstudio_type"] = lmstudio_type(chat) if chat else None
-    if not sees and _legacy_model():
-        out["legacy_fallback"] = True
     return out
 
 
