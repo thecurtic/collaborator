@@ -50,9 +50,9 @@ interface ComposerProps {
   /**
    * Start a voice call (the call button lives here, not the header). Any
    * current draft is passed along — it becomes the call's first turn, so the
-   * field is cleared like a send.
+   * field is cleared like a send — and so are attached files, as a hand-over.
    */
-  onStartCall?: (draft?: string) => void;
+  onStartCall?: (draft?: string, attachments?: Attachment[]) => void;
   /** When set, the next send branches from this point (shown as a chip). */
   branchLabel?: string | null;
   onCancelBranch?: () => void;
@@ -262,10 +262,17 @@ export function Composer({
   // that follows a hold, so holding never also sends.
   const sendHold = useLongPress(() => {
     const draft = value.trim();
-    // Calls don't take attachments yet: with files attached, hold does nothing.
-    if (!draft || disabled || !onStartCall || files.length > 0) return;
+    // Files go along as a hand-over; wait for them to finish uploading.
+    if ((!draft && ready.length === 0) || disabled || !onStartCall || uploading)
+      return;
+    const sentFiles = files;
     setValue('');
-    onStartCall(draft);
+    setFiles([]);
+    sentFiles.forEach((f) => f.previewUrl && URL.revokeObjectURL(f.previewUrl));
+    onStartCall(
+      draft,
+      ready.map((f) => f.attachment as Attachment),
+    );
   });
 
   return (

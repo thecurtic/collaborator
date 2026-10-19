@@ -29,7 +29,7 @@ interface ChatViewProps {
   /** Open the drafts inbox (filtered to a run) — model-proposed notes. */
   onReviewDrafts: (runId: string | null) => void;
   /** Start a voice call (button lives in the composer; draft = first turn). */
-  onStartCall: (draft?: string) => void;
+  onStartCall: (draft?: string, attachments?: Attachment[]) => void;
   /** Start a call that opens by reading this reply aloud (tip or branch). */
   onStartCallFromTurn: (node: TreeNode) => void;
   /** Prefill the composer (chats spawned from web search); nonce re-triggers. */

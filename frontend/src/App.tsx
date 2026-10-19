@@ -836,9 +836,14 @@ function AppShell() {
             branchTarget={branchTarget}
             onBranchTargetChange={setBranchTarget}
             onReviewDrafts={openInbox}
-            onStartCall={(draft) => {
-              // A typed draft becomes the call's opening turn.
-              setCallIntro(draft ? { kind: 'send', text: draft } : null);
+            onStartCall={(draft, attachments) => {
+              // A typed draft becomes the call's opening turn; attached files
+              // go with it (or with the first thing said).
+              setCallIntro(
+                draft || attachments?.length
+                  ? { kind: 'send', text: draft ?? '', attachments }
+                  : null,
+              );
               setCallOpen(true);
             }}
             onStartCallFromTurn={(node) => {

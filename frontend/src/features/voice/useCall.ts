@@ -188,8 +188,20 @@ export function useCall(
         prev.map((t) => (t.id === id ? { ...t, text } : t)),
       );
     setTranscript([]);
-    handoverRef.current = [];
-    setHandoverState([]);
+    // Files lined up in the composer arrive already uploaded.
+    const seeded: Handover[] =
+      pendingIntro?.kind === 'send'
+        ? (pendingIntro.attachments ?? []).map((a) => ({
+            key: ++handoverKey.current,
+            kind: 'file',
+            name: a.filename,
+            status: 'ready',
+            attachment: a,
+            upload: Promise.resolve(a),
+          }))
+        : [];
+    handoverRef.current = seeded;
+    setHandoverState(seeded);
     setDraftCount(0);
     setSpeakingId(null);
     setSpokenChars(0);
@@ -724,7 +736,7 @@ export function useCall(
         }
         if (!active) return;
         log('ready (streaming PCM16 16k)');
-        if (pendingIntro?.kind === 'send') {
+        if (pendingIntro?.kind === 'send' && pendingIntro.text) {
           // The typed draft IS the first turn — respond to it right away.
           log(`intro: sending typed draft (${pendingIntro.text.length} chars)`);
           void respond(pendingIntro.text);
