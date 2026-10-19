@@ -92,6 +92,26 @@ const LABELS: Record<CallPhase, string> = {
   error: 'Call error',
 };
 
+/**
+ * The model's reasoning for the reply in progress (UX doc, Voice): full
+ * height and readable, streaming in place of the reply until the reply
+ * starts, then kept above it through the speech. Never spoken, never saved;
+ * it's gone when the mic reopens.
+ */
+function Thinking({ text, done }: { text: string; done: boolean }) {
+  return (
+    <div className="mb-2 rounded-lg border border-dashed border-border bg-muted/30 px-3.5 py-3">
+      <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Brain className="h-3.5 w-3.5 shrink-0" />
+        {done ? 'Thought' : 'Thinking'}
+      </p>
+      <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-muted-foreground">
+        {text}
+      </p>
+    </div>
+  );
+}
+
 function Turn({
   role,
   text,
@@ -102,6 +122,7 @@ function Turn({
   onSkip,
   currentRef,
   shared,
+  thinking,
 }: {
   role: 'user' | 'assistant';
   text: string;
@@ -117,6 +138,8 @@ function Turn({
   currentRef?: Ref<HTMLParagraphElement>;
   /** User turns: what was handed over with it. */
   shared?: CallTurn['shared'];
+  /** Assistant turns: the reasoning behind this reply, while it's up. */
+  thinking?: string;
 }) {
   const label = role === 'user' ? 'You' : 'Collaborator';
 
@@ -180,6 +203,7 @@ function Turn({
           <AttachmentStrip items={shared.files} />
         </div>
       )}
+      {thinking && <Thinking text={thinking} done={text.trim() !== ''} />}
       {body}
       {shared?.texts.map((t, i) => (
         <p
@@ -272,6 +296,39 @@ export function CallScreen({
     }
   }, [transcript.length, partial, currentParaIdx, speakingId]);
 
+  // While it thinks (no reply yet), follow the reasoning as it streams.
+  // Only a finger or wheel scrolling up stops the follow (the smooth
+  // auto-scrolls fire scroll events mid-animation); scrolling back down near
+  // the end resumes it, since the text keeps growing away from "the bottom".
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const followThinking = useRef(true);
+  const touchedAt = useRef(0);
+  const lastTop = useRef(0);
+  const replyStarted = !!speakingTurn?.text.trim();
+  const onUserScroll = () => {
+    touchedAt.current = Date.now();
+  };
+  const onTranscriptScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const up = el.scrollTop < lastTop.current;
+    lastTop.current = el.scrollTop;
+    if (replyStarted) return;
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (gap < 48 || (!up && gap < el.clientHeight / 3)) {
+      followThinking.current = true;
+    } else if (up && Date.now() - touchedAt.current < 1000) {
+      followThinking.current = false;
+    }
+  };
+  useEffect(() => {
+    if (!reasoning) followThinking.current = true;
+    const el = scrollRef.current;
+    if (reasoning && !replyStarted && followThinking.current && el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [reasoning, replyStarted]);
+
   if (!open) return null;
 
   const speaking = phase === 'responding';
@@ -337,19 +394,6 @@ export function CallScreen({
               ? 'Thinking…'
               : LABELS[phase]}
         </p>
-        {/* Live chain-of-thought ticker (545e1a5): bottom-anchored tail of
-            the newest thinking — glanceable, no interaction needed, never
-            spoken, cleared when the next segment starts. */}
-        {phase === 'responding' && reasoning && (
-          <div className="w-full max-w-md px-2 pt-1">
-            <div className="flex items-start gap-1.5 text-[11px] italic leading-snug text-muted-foreground">
-              <Brain className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70" />
-              <div className="flex max-h-16 min-w-0 flex-1 flex-col justify-end overflow-hidden whitespace-pre-wrap break-words">
-                {reasoning}
-              </div>
-            </div>
-          </div>
-        )}
         {/* Notes proposed during this call — the spoken announcement is
             lossy (barge-in eats it), so this chip is the durable signal. */}
         {draftCount > 0 && (
@@ -373,7 +417,13 @@ export function CallScreen({
       </div>
 
       {/* Scrollable conversation — readable while listening or speaking. */}
-      <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-5">
+      <div
+        ref={scrollRef}
+        onScroll={onTranscriptScroll}
+        onWheel={onUserScroll}
+        onTouchMove={onUserScroll}
+        className="flex-1 overflow-y-auto overscroll-contain px-5 py-5"
+      >
         <div className="mx-auto flex max-w-md flex-col gap-5">
           {transcript.map((t) => {
             const isSpeaking = t.id === speakingId;
@@ -387,6 +437,11 @@ export function CallScreen({
                 failedRanges={failedRanges.filter((r) => r.turnId === t.id)}
                 currentRef={isSpeaking ? currentParaRef : undefined}
                 shared={t.shared}
+                thinking={
+                  isSpeaking && phase === 'responding' && reasoning
+                    ? reasoning
+                    : undefined
+                }
                 onSkip={
                   t.role === 'assistant'
                     ? (i) => skipTo(t.id, t.text, i)
