@@ -37,7 +37,7 @@ The bottom bar holds five destinations, left to right: Feed, Chats, Scratch, Eve
 - A destination is earned by how often I reach for it, nothing else. Events, Projects and Scratch are on the bar because I open them constantly, not because of their shape (Projects lands on a list, and that's fine). People are a directory I consult rather than land in, so it sits in the hamburger menu. Goals, questions, decisions and memories are plain tags with no type and no destination; they surface through chats, search and association.
 - Notes, in the hamburger menu, goes straight to the whole pile: the list of notes and the graph itself, with a selector to sort by date or other means.
 - Mind's lenses are accounted for individually rather than as a place. People goes to the hamburger menu, Notes and the graph with it, Projects and Events to the bottom bar, and the drafts inbox into the Feed. Profile moves into settings: it's mine, edited rarely, not browsed. Goals, decisions, questions and memories keep no lens at all.
-- Nothing floats over every screen. A permanent capture bubble is clutter in the PM channel or a review.
+- Nothing floats over every screen. A permanent capture bubble is clutter in an agent conversation or a review.
 - **The inference switch is on every screen.** It lives in the top bar next to the hamburger menu, separate from the bottom bar. It toggles local inference between serving Collaborator only and serving all requests (a separate script proxies the port on the Mac). It's a pill-shaped switch with a round knob that slides to one end and the current state written inside it on the other side, so the setting reads at a glance rather than from knob position alone. The pill is red while set to Collaborator only. It's also the switch the Notifications section refers to, so stops caused by flipping it don't notify.
 
 ### Feed
@@ -45,9 +45,9 @@ The bottom bar holds five destinations, left to right: Feed, Chats, Scratch, Eve
 Opening the app shows a single feed ordered by warmth, not a list of conversations. Warmth covers both what I was just doing and what moved while I was away.
 
 - Warmth starts dumb on purpose: an item's warmth is the later of "I last touched it" and "it last changed", and shape weight only breaks ties. Nothing is scored. I'll prune and add rules once I've lived with it.
-- The feed mixes recent chats, notes I touched, upcoming events, unread or recent pi-session-manager channel entries, and pending approvals.
+- The feed mixes recent chats, notes I touched, upcoming events, pending approvals, and from agent channels only open questions and messages the backend flags as needing me. Plain unread channel messages stay out.
 - Tapping an item opens that object or navigates to the appropriate destination (possible second tap).
-- Arrivals from the agent team that block production come as push notifications and persist until they are no longer blocking. non-blocking items may appear in the project area.
+- A message the backend flags as needing me notifies once and sits in the feed; its notification clears when the endpoint closes the question. Everything else from agents arrives quietly as unread in the project.
 - Branching conversations leave the front door. Branching stays as a chat-level feature, not an organizing concept.
 - Agent handoff chatter does not go into the warm feed; it would bury what actually needs me.
 - Pinning is necessary: some things stay at the top of the feed regardless of warmth.
@@ -93,16 +93,9 @@ What beats Google is not the gesture, which only reaches parity. It's that an ev
 
 A project is a dashboard: a window into something in motion. Not every project is software. A project is whatever a name tag gathers, and every one gets the same base view: its notes, chats, docs, events and people, with shelves for each. That is the whole of a project like the economics game or a piece of writing, and it has to stand on its own.
 
-When the project's name matches a pi-session-manager project, an agent-team layer appears on top of the base view. It is mobile-first, so it is one scrolling page split into lanes rather than side-by-side columns:
+When the project's tag matches a project an agent backend serves, the project also gets that backend's channels (see When a project has agents, below). Opening such a project lands on its conversation, not on a dashboard. How the conversation, the other channels and these shelves share the screen is deferred: the project view is being worked out separately, and none of its layout is built until then.
 
-- **Top:** the PM channel, pinned as a live strip.
-- **Lead content:** intentions in flight — what I have pushed and where each one stands.
-- **Shelves:** horizontally scrollable lanes for notes, chats, and docs, each with a count. A doc is just a note (see Open questions), so it sits on the notes shelf.
-- **Branches / activity log:** its own area, keyed to the project, with a preview so I can see motion without it demanding anything.
-- **Ambient health:** is it working (build, tests) and what did it cost (time, tokens, how long branches have been open), glanceable rather than leading.
-- **Sandbox preview:** the running testing branch of this project's repo, launched from here so I can try the work.
-
-Everything tagged with the project name belongs here. The exact lane layout is still undecided.
+Everything tagged with the project name belongs here.
 
 #### How a project forms
 
@@ -111,118 +104,89 @@ A project exists once a note is tagged `project` plus one other tag, taken as it
 - `project` marks a note or chat as belonging to a project.
 - The name tag says which project. The rule is single membership: a note belongs to exactly one project. So among the tags on project notes, the name is the one that never appears beside another name, while `bug` turns up beside many different names. The exclusivity check in the code is just how that rule is detected, not a way of discovering projects; the `project` tag already declares that. If an unrelated tag happens to behave like a name, the fix is an override in the app (pin this tag as a name, or ignore it), never retagging the notes, and the overrides sit in a small visible list in settings so they're not hidden state.
 - Kind tags like `bug` and `feature` decide where inside the project view a note or chat shows. A bug tagged with another project's name never appears in this project's view.
-- The manual state field goes, here and everywhere else it appears. It was set by hand, so it went unused, and it stopped making sense once a project became a collection of notes: a comment, an idea, a feature and a spec share no universal status. Where a status survives, it is derived from something happening to the note and belongs to that happening, not to the note. The software case is one example: a pushed note has a lifecycle (pushed, building, ready for review, merged) that lives with the PM's queue. Other kinds of project will have their own, or none.
-- There is no repo field on a project note, and no repository in note frontmatter. In the case of a software project, pi-session-manager already knows which repo belongs to a project name, so storing it here would duplicate a fact that lives elsewhere, and duplicated facts drift. Collaborator does know what a repo is — it needs one to file an issue or read code when I ask it to — but it derives that from the project view, which got it from pi-session-manager, not from anything carried on a note.
+- The manual state field goes, here and everywhere else it appears. It was set by hand, so it went unused, and it stopped making sense once a project became a collection of notes: a comment, an idea, a feature and a spec share no universal status. Where a status survives, it is derived from something happening to the note and belongs to that happening, not to the note. The software case is one example: a sent note has a lifecycle (sent, building, ready for review, merged) that the agent backend reports as events. Other kinds of project will have their own, or none.
+- There is no repo field on a project note, and no repository in note frontmatter. In the case of a software project, pi-session-manager already knows which repo belongs to a project name, so storing it here would duplicate a fact that lives elsewhere, and duplicated facts drift. Collaborator's own `git_read` and `git_issue` tools (reading code, filing an issue when I ask) take the repo they're given; they aren't part of the agent seam, and nothing about a repo is carried on a note.
 
-#### When a project has an agent team
+#### When a project has agents
 
-Everything below this point (the PM channel and team, the branch timeline, the reading view, the sandbox, and the push control on notes) is the agent-team layer. It appears only when the project's name exactly matches a pi-session-manager project tag. No project type is set by hand; the match is the switch.
+Everything below is the agent layer. It appears only when the project's tag exactly matches a project tag that an agent endpoint serves. No project type is set by hand; the match is the switch. The contract itself lives in the companion doc, *Collaborator Agent UX and Backend Seam* (2026-10-19), which wins wherever the two disagree; this section records what it means for the rest of Collaborator. pi-session-manager is one backend among possible others, and a single coding-agent session has to fit the same shape.
 
-#### PM channel and the team
+#### Channels and the conversation
 
-Chats are me thinking with Collaborator (extended cognition); the PM channel is me delegating. They should look different: the PM thread reads as a channel, not a chat.
+Chats are me thinking with Collaborator (extended cognition); agent channels are me delegating. They look different.
 
-- The PM channel is a pinned fixture in each project and moves over from Telegram once this UX is settled.
-- Its most recent or unread entries surface in the warm feed.
-- It has two jobs: taking intent and delivering outcomes (usually involves back and forth to build), and explaining the system back to me so I can learn where the seams are and it becomes less opaque. Free-flowing conversation with the PM is essential.
-- Talking to the PM is also the undo: once a note is pushed it is queued, and I amend it by talking to the PM.
-- There are two ways into the PM's queue, deliberately. In the channel I can ask live questions and direct to some extent. Pushing a note is the bigger leap: it takes deliberation in chat before it's ready.
-- The two routes differ in persistence, and that's the point of having both. A pushed note is a commit on the project's main branch, part of the project's record forever. A channel message is handled in a turn and then lives only in the PM's session. Anything that should be remembered is pushed; questions and nudges go to the channel.
-- pi-session-manager stays a separate app with its own external inference provider, which could also be local, and uses the same tag convention, so one name scopes notes, chats and agent work.
+- A backend exposes channels. Each declares a label, whether it accepts input, whether it has a firehose, a one-line status, and whether it's busy. Collaborator shows the label as it arrives and never names a role: no "PM", "engineer" or "auditor" anywhere in the UI, and no generic name for the default channel either.
+- The default channel is the one that accepts input, and its conversation is where opening the project lands. If several accept input, I choose the default and Collaborator remembers it. If none does, the project is watch-only.
+- Channels that don't accept input are read-only: a status line and a firehose to watch. Talking to one of them directly (the old engineer Q&A) is out for now. With pi-session-manager only the PM's channel accepts input; that is the backend's policy, expressed through its flags, not a Collaborator rule.
+- When the other side is mid-turn, the input shows that my message is queued, so I never resend.
+- Channel conversations live in their own table, never in Chats: the messages in input-accepting channels, questions and their answers, kept for catch-up and history. The firehose is never stored beyond a short in-memory live buffer; the backend owns that record.
+- The conversation moves over from Telegram once this UX is settled.
 
-**The team.** A control at the edge of the PM channel lets me talk directly to an individual engineer.
+#### Sending a note
 
-- Only the PM acts on conversations from Collaborator.
-- Other roles are configured and prompted to answer questions only, never change anything.
-- The UI enforces the same thing: the engineer view is a read-only Q&A window with no way to send instructions.
+A note is mine until I send it.
 
-#### Branch timeline and activity log
+- A note has a send button only when its project has a channel that accepts input. Nothing goes out until I press it.
+- The note arrives in the conversation as part of my message, carrying a snapshot and a stable note ID. Sending it again is a new message with the same ID, which the backend treats as an update to the same note and versions on its side (for pi-session-manager, commits over the same file). Whether a sent note becomes part of the project's permanent record is the backend's choice. I can also just talk about the note in the conversation.
+- Collaborator's model can stage a send from any chat through a tool call. A staged send is a draft, the way note drafts are, and goes out only when I approve it in the project or note view. That approval, and where the send button sits, belong to the deferred project-view work.
+- Collaborator never writes to a repository for agent work: no commits, no bot token, no `@pm` subject lines. The backend's managers do their own git operations, and only the one that identifies as the director can direct the team. Collaborator's own `git_read` and `git_issue` tools stay; they aren't part of the agent seam.
 
-The project log is a branch timeline, not a chat transcript. All agent activity, including handoff chatter, is visible here, scoped to the project.
+#### Status, questions and attention
 
-- The integration branch is the spine; each agent's branch spurs off it.
-- Events hang off the branch they happened on, so agent chatter reads as what was said while working on that branch.
-- On mobile: a vertical spine scrolling down, with agent branches as indented lanes.
-- The timeline is for watching. It can show that a branch is ready and link to the PM's review, but merging happens there, not here.
-- The log does not emit into the warm feed.
+What I see is either conversation or glanceable state, never a scroll of notifications.
 
-#### Reading agents against their reference
+- Milestones arrive as events: handoffs, work complete, audit verdicts, and where each thing I sent stands (intentions in flight). An event updates its channel's status line and drops a marker into its firehose. Events are status: never chat, never notifications.
+- A message can carry a question: a prompt, zero or more options, single or multiple choice, and whether free text is allowed. My answer is an ordinary message referencing it. When the endpoint closes a question, Collaborator shows the outcome in place of live controls. Merging is one of these: the endpoint asks, and I press a button. The exact question shape waits on a walk-through of what pi's ask_human passes through today.
+- Only what the backend flags as needing me notifies, once, with no repeated reminders, and the notification clears when the endpoint closes the question. Idle or stalled work is the backend's to notice: it flags its own message and Collaborator routes it. Collaborator doesn't detect idleness itself.
+- Health is one quiet badge per project when any endpoint serving it is degraded or unreachable; tapping it lists which, with cause and since-when, and it clears on recovery. Collaborator marks a silent endpoint unreachable itself. An unreachable endpoint is the badge only, never a notification. When the team is paused because I flipped the inference switch, the badge says so instead of showing it as degraded.
+- Cost (time, tokens) is out of scope for now.
 
-The branch timeline is for glancing. This is a different mode: actually reading what the agents are doing against the documents they are supposed to be following, such as the intent, the spec derived from it, and maybe the CLAUDE.md.
+#### Firehose, replay and links
 
-It is a phone view, and phone screens are vertical, so the two panes stack instead of sitting side by side.
+- A firehose is a zoomable raw stream: thinking, tool calls, file edits, test runs. It follows the live end while I watch, stops when I scroll up, offers a jump back to live, and never fights the reader.
+- Replay is built on the pi-session-manager side. pi's RPC instance keeps its session through a lost connection, so the manager can resend a channel's history; the contract gets a history request ("send this channel from sequence number X"). Collaborator still stores nothing beyond its live buffer.
+- Channel links (a message pointing at a moment in another channel's firehose) wait for replay; until then there is nowhere for a link to land.
+- Reading agents against their reference (a firehose beside the intent or spec its work came from) is deferred until replay exists. Specs remain a backend concept; Collaborator doesn't model them.
+- The branch timeline is dropped for now; git history stays with the backend. Restart controls are deferred; for now I ask in the conversation.
 
-- **Top pane: live motion.** Either the general telemetry feed across the team, or one agent's feed.
-- **Bottom pane: the reference.** Any document I select.
-- Narrowing the top pane to one agent auto-loads the document that agent's work was derived from, meaning the intent or spec it is building against. The pairing is already known from the push. I can override it and read something else.
-- Each pane scrolls on its own, and a draggable divider between them gives either one more room. Reading a spec wants space; watching telemetry doesn't always.
-- The reference pane does not try to mark where in the document the current work lands. Knowing which paragraph an agent is on would mean the agent reporting it or something guessing from the diff, and either is inference presented as fact. The right document loads on its own; finding the paragraph is mine.
-- **Restart control.** In monitoring mode there are two controls for acting on the team's machinery rather than on the work: restart the agents, and pull the latest and restart. They are separate because they are different intents, shaking something loose versus taking an update. Both are overrides I reach for when things aren't behaving or there's an update to pull, not routine actions, so both sit behind the same hold-to-confirm as hold-send. There is no readout of what's mid-task before firing: by the time I press this, that's not what I'm weighing.
+#### What crosses the seam
 
-#### Sandbox: trying the work
+- The vault never reaches agents. Nothing from Collaborator's store crosses toward a backend unless I send it by hand, as a message or a sent note, and backends never read from Collaborator.
+- Agent output is untrusted. Channel content stays out of recall and out of the model's tools, the way Scratch does, while unified search still finds it for me. One explicit tool lets the model read it, used only when I ask ("what did the PM say about X"), and its results are marked as agent output.
+- A firehose moment I pin becomes a note in the vault, marked with where it came from. That is the only way agent output enters the vault, and only by my hand.
+- Each endpoint is paired once to the user who approves it, from a short fingerprint shown on first connect. Endpoints reach Collaborator over the tailnet only, never through the public reverse proxy.
+- A backend tag with no matching Collaborator project shows in the Projects list, and opening it creates the project and its name note. A Collaborator project with no backend tag simply has no channels. Tags match exactly; a renamed tag breaks the match until it's fixed by hand.
 
-The slow part of building isn't the model writing code; it's finding out whether a change was actually good. So one button in a project's view launches that project's testing branch and shows it to me: a WebView if the work has a UI, a terminal view if it doesn't. For most software projects that is the whole feature. The testing build runs on its own, against whatever fixtures or state it normally uses, and I try it.
+#### Trying the work
 
-**Collaborator is the special case.** It is the one project, today, whose testing build has to run against my real, current state, because testing it on an empty account doesn't show what a change feels like in daily use, and real data is too precious to risk. So for Collaborator, and only Collaborator, the sandbox runs against a **session copy** of my data, not an overlay. My state is one SQLite file per user, a vault of markdown files, a media directory and a rebuildable index; the sandbox copies the first three into a session directory, points the testing build at the copies through the config paths that already exist, and the build rebuilds its own index. Every read and write lands in the copy. When the session ends the copy is deleted, since it existed only for that test; copies left behind by a crash are swept at the next start. No overlay code exists anywhere, and the testing branch migrating its own copy is what makes schema drift a non-problem. Other projects may need this later, but none do now. Collaborator's preview is otherwise ordinary: the Collaborator UI, launched from the Collaborator project like any other, with no separate button in settings.
+The slow part of building isn't the model writing code; it's finding out whether a change was actually good. The backend runs the branch and sends Collaborator a preview link on the tailnet, as an event or a message carrying a URL, and I tap it to open. Collaborator's box doesn't pull, run or render anything: previews belong to the backend.
 
-**Side effects are a policy on the tool dispatch, not a property of the copy.** Copying the data store undoes nothing that leaves the box. Every outbound thing Collaborator can do is sorted into allow, stub or block, and the sorting is enforced in one place, where tools are dispatched, under a sandbox flag the testing build reads from its config. The current sort, to be kept up to date as tools are added:
+**Collaborator as its own project (open).** The earlier design below predates backend-run previews and is kept until it's settled whether it still holds (see Open questions). Collaborator is the one project whose testing build has to run against my real, current state, because an empty account doesn't show what a change feels like in daily use, and real data is too precious to risk.
 
-- Allow: web search, video transcription, local inference and voice. Read-only or harmless.
-- Real but bounded: Lightning payments. The sandbox build is configured with its own small wallet (see Money), so paid search and payments work for real against a balance I don't mind losing.
-- Block: pushing to the PM, Gitea writes, the inference switch, and notifications. A sandbox must never create phantom work for the team or touch the real machinery.
-
-Every stubbed or blocked result says so in its text, so the model in the sandbox doesn't act on fake success.
-
-- The sandbox preview is a project-view element, next to the PM channel and the shelves.
-- It sits at gate 2: from the review I can try the change before merging. Merging then means "I used it and it's good," not "the diff looks right."
-- Papercuts I notice in the sandbox go to the PM in the channel.
-- *Collaborator only.* PM messages and agent runs live in pi-session-manager, outside Collaborator's data store, so they survive the session copy without special handling. The side-effect risk shrinks to what the testing build itself does, which the dispatch policy above covers.
-- **Where it runs.** On the dev box, beside the agents, not on the phone. A sandbox session is a git pull of the testing branch plus whatever that repo needs to run, so the dependencies stay where they already are. Any of a dozen repos can be previewed this way without installing a single runtime on the phone.
-- **Collaborator runs where its data is** *(Collaborator only)*. The agents' side never sees my vault: chats, Scratch, notes, and everything else in Collaborator's database or store stay off the agent VMs, always. So Collaborator's testing build is the one that does not run on the dev box. It runs wherever the real Collaborator backend runs, next to the real data, with the session copy made on that side; pi-session-manager hands over the branch and that box pulls and starts it. Today that is the web server, which should change for security reasons, but the rule doesn't depend on which box: code goes to the data, data never goes to the agents.
-- **How the phone reaches it.** The manager assigns a free port per session and hands the URL back to the app; the preview pane is a WebView pointed at the dev box over the tailnet. The phone stays on Tailscale permanently, so nothing needs to be exposed publicly and no fixed port is reserved.
-- **Leaving ends it.** Backing out of the preview shuts the process down; for Collaborator it also deletes the session copy. Nothing is left running or lying around to find later.
-- **Whose feature it is.** The sandbox belongs to pi-session-manager, not to Collaborator. pi-session-manager already owns repos, branches and agent machines, so it does the pull into a working directory on its own box, starts the process and reports back. Collaborator asks for a preview of a project and receives something to display. It never pulls or runs a repo itself.
-- **Not every repo is a web app.** A WebView only helps where there's a UI. For a library or a CLI the equivalent preview is a terminal view: the process output, a test run, a log stream. Worth building, since this won't only be web development.
-- **Always obvious.** A clear indicator shows I'm in a sandbox for the whole session, so I never mistake it for the real thing.
-- **A test drive, not a migration path** *(Collaborator only)*. The copy lives for one session: no save, no diff, no cherry-picking changes back into real data. Skipping the merge problem is what keeps this simple.
-- **Built for small changes** *(Collaborator only)*. UX tweaks, layout moves and single features. A schema change works mechanically, since the branch migrates its own copy, but what I learn from trying it is still limited to what I'd notice in use.
-- **I'm the test harness.** It works for changes I'd notice immediately while using the thing. It doesn't replace automated tests.
+- It ran against a **session copy** of my data, not an overlay: the SQLite file, the vault and the media directory copied into a session directory, the testing build pointed at the copies through the existing config paths, its own index rebuilt. The copy is deleted when the session ends and swept at the next start if a crash left one behind. The testing branch migrating its own copy makes schema drift a non-problem.
+- It ran where the data is, never on the agents' side: code goes to the data, data never goes to the agents.
+- Side effects were a policy on the tool dispatch under a sandbox flag, not a property of the copy. Allow: web search, video transcription, local inference and voice. Real but bounded: Lightning payments, from a small sandbox wallet (see Money). Block: sending to agent channels, Gitea writes, the inference switch and notifications. Every stubbed or blocked result says so in its text, so the model in the sandbox doesn't act on fake success.
+- A test drive, not a migration path: no save, no diff, no cherry-picking back into real data. Built for small changes I'd notice in use; it doesn't replace automated tests. A clear indicator shows I'm in a sandbox for the whole session.
 
 #### The delegation flow: chat to merge
 
-A loose thought becomes project work without me filing anything, but two gates stay mine: pushing a note to the PM, and merging.
+A loose thought becomes project work without me filing anything, but two gates stay mine: sending a note, and merging.
 
 ![Chat to merge: two gates held by me](delegation-flow.svg)
 
-The highlighted steps are my gates. Between them sits trying it: from the review I test the work in the sandbox, and it either goes on to merge or back to the team through the PM.
+The diagram predates the 2026-10-20 seam decisions: read "Push to PM" as sending a note, and "Merge to main" as answering the endpoint's merge question.
 
 **Chat to intention.** I open a new chat, and the conversation drifts into an existing project (say, the Minecraft player agent). Collaborator can notice the drift and say so in the conversation, but it doesn't reach for the tags at that point. Tags on the chat get proposed when its summary is generated from the card, or I set them myself. The substance becomes a note tagged `project` plus the project name, so it appears in that project.
 
-**Pushing.** A note is mine until I push it to the PM.
+**Sending.** I send the note from the note view, or approve a send Collaborator's model staged. It arrives in the project's conversation as part of my message, and from there the backend decides how it reaches the team.
 
-- A note has a push control only when its project name matches a pi-session-manager project tag exactly. Notes in other projects, and notes outside any project, have none: there's no one to push to.
-- Pushing sends the note as-is into the PM's queue. To amend it, I talk to the PM.
-- Mechanically, a push is a commit on the **main** branch of that project's repository, with `@pm` in the subject line and the note as the message. Main is the only branch the PM takes instructions from, and the PM merges main into its integration branch before every task, so the note reaches the team by the same path as everything else. Collaborator makes the commit through a Gitea bot token scoped to that one repository.
-- The push control is the human gate on that token. Collaborator never writes to a repository on its own: a push is proposed by the model or by me, sits as a draft the way note drafts do, and goes out only when I press the button. The same gate covers any other write Collaborator ever makes to its own repo. Restricting what gets written is done by the gate and the tool guidance, not by the token, since Gitea scopes tokens to a repository and not to paths.
-
-**Review and merge.** A PM card saying work is complete opens the project, not a standalone diff. The review is open there with full context.
-
-- From the review I can try it in the sandbox, ask the PM questions, or merge. Trying comes before merging.
-- Merging never happens from the feed or from a notification. The card takes me into the project's own view, and the merge control lives there, in the review, with the PM channel, branch timeline and sandbox on the same screen.
-- After merging, I mostly want to go see what was built.
-
-**Trying it.** The review is where I decide, and trying is how I find out. One control in the review launches the branch in the sandbox. pi-session-manager pulls it into a working directory on the dev box and starts it, and the preview opens inside the project view: a WebView if the work has a UI, a terminal view if it doesn't. An indicator stays up the whole time so I never mistake it for the real thing. If the project is Collaborator, it runs against a throwaway copy of my real data.
-
-- I use it the way I normally would. That is the test: I'm the harness, and it's for changes I'd notice in use, not a replacement for automated tests.
-- Backing out shuts the process down (and, for Collaborator, deletes the session copy) and returns me to the review, where the same choices are still open.
-- If it's right, I merge. If it isn't, I tell the PM what's wrong in the channel; the work goes back to the team, and the next completion brings me back to this review.
-- Anything I say to the PM while trying survives backing out, because the PM channel lives in pi-session-manager, not in the copy.
+**Trying and merging.** When the work is done, the endpoint says so in the conversation, with a preview link when there's something to try, and asks whether to merge. I open the link and use the change the way I normally would. If it's right, I answer merge. If it isn't, I say what's wrong in the conversation, the work goes back to the team, and the next completion asks again. After merging, I mostly want to go see what was built.
 
 ## Search
 
 Search is fragmented today: there's no search in Chats, Scratch has its own bar, Mind has another for the note graph, and web search sits behind the hamburger menu. Four bars meaning four different things.
 
-- One search over my own world. It reaches chats, notes, Scratch, transcripts and the PM channel at once, because I usually don't know which pile something landed in.
+- One search over my own world. It reaches chats, notes, Scratch, transcripts and agent conversations at once, because I usually don't know which pile something landed in.
 - This search is mine, not the model's. Scratch stays unreachable to the conversation agent, as it is today: it lives in its own table, nothing logs its content, and the model sees an item only when I hold-send it. Unified search includes Scratch for me and never feeds it into the model's search tools. Whoever builds the index has to keep that line.
 - A search bar inside a screen isn't a separate feature. It's the same search, scoped to what I'm looking at. these search bars should appear anywhere a user would intuitively expect.
 - Web search is a different job and stays as it is for now. The LLM in chats already searches the web by tool call, and for an ordinary web search outside it I'd just open Brave, so a Brave-backed bar isn't worth rebuilding.
@@ -261,8 +225,9 @@ Attaching things mid-conversation is the one item here that isn't really a UX de
 
 ## Notifications
 
-- Anything that makes an agent stop working notifies me. There are two kinds. Stopped because it needs me (a question, work ready to review) arrives as the heavy card with an action. Stopped because something broke or the machine went away is a failure, and that is also the rule for when ambient health escalates into the feed.
-- Stops I caused don't notify. If I flip the switch in Collaborator that stops LM Studio or the MacBook script listening for the agents, the team just shows as paused in ambient health. The suppression happens in Collaborator, because it's the thing that knows I flipped the switch; the agents will hit an error either way.
+- An agent notifies me only through a message its backend flags as needing me (a question, work ready to review, work that has stalled), and it arrives as the heavy card with an action. It notifies once, never as repeated reminders, and clears when the endpoint closes the question. Noticing idle or stalled work is the backend's job, not Collaborator's.
+- Infrastructure trouble never notifies. A degraded or unreachable endpoint is a quiet health badge on the project, nothing more.
+- Stops I caused show as mine. If I flip the switch in Collaborator that stops LM Studio or the MacBook script listening for the agents, the health badge says the team is paused by me rather than degraded. Collaborator knows because it flipped the switch; the agents will hit an error either way.
 - A YouTube transcript being ready notifies me.
 - None of this exists yet, at either end. There is no notification system in the app today and no delivery behind it, so this section is built from nothing rather than adjusted: the backend work is as much a part of it as the screens.
 - Notifications live in the settings menu as a list, so I can add new kinds later and make them optional.
@@ -276,7 +241,7 @@ The feed is a simple list of differently shaped objects; shape, not labels, tell
 | --- | --- | --- |
 | Recent chat | Single line of text | Light |
 | Note | Compact line or snippet | Light |
-| PM channel entry | Card from an actor | Medium |
+| Agent message flagged for me | Card from an actor | Medium |
 | Agent question / pending approval | Card with an action on it | Heavy — it is blocking on me |
 | Project | Denser block with several things inside | Medium |
 
@@ -338,25 +303,25 @@ Collaborator already proposes tags, and should somehow be made aware of what tag
 
 **The promise:** after time away, one screen shows me what's warm, and anything else is one tap away.
 
-I open the app after a day or two and land on the Feed. It mixes whatever is warm: recent chats, notes I touched, unread PM entries, anything waiting for my approval, and upcoming events, with pinned items first. Agent handoff chatter never appears here. Each item keeps its shape, so a chat reads light, a PM entry medium and an agent's question heavy; I can tell what needs me before reading a word.
+I open the app after a day or two and land on the Feed. It mixes whatever is warm: recent chats, notes I touched, agent messages flagged for me, anything waiting for my approval, and upcoming events, with pinned items first. Agent handoff chatter and plain unreads never appear here. Each item keeps its shape, so a chat reads light, a flagged agent message medium and an agent's question heavy; I can tell what needs me before reading a word.
 
-Tapping an item opens it or takes me to its destination. For anything the feed doesn't show, the bottom bar is one tap away, and search reaches all of my own world: chats, notes, Scratch, transcripts and the PM channel.
+Tapping an item opens it or takes me to its destination. For anything the feed doesn't show, the bottom bar is one tap away, and search reaches all of my own world: chats, notes, Scratch, transcripts and agent conversations.
 
 - Rests on: the warm feed is home, pinning is needed, and shape carries meaning while arrangement doesn't.
 - Still open: exactly what belongs in the feed.
 
 ## Open questions
 
-- [ ] How exactly are the project lanes laid out on mobile?
+- [ ] How exactly are the project lanes laid out on mobile? Deferred (2026-10-20) into the project-view work, which also decides how channels sit beside the shelves and where sends are approved.
 - [x] Does anything get pinned in the warm feed, or is it purely ordered by warmth?
 - [ ] What does each object shape actually look like?
-- [x] Where does merge land me? Answered: merging happens inside the project view, after trying it in the sandbox, and afterwards I go see what was built.
+- [x] Where does merge land me? Revised 2026-10-20: merge is a question the endpoint asks, with buttons, after I've tried the preview link; afterwards I go see what was built.
 - [x] Tag proposals: Collaborator proposes tags every time it drafts a note, as it already does. For chats, tags are proposed only when a chat's summary is generated from the three-dots card; otherwise chat tagging is manual. Collaborator may still remark in conversation that a chat is drifting into a project; it just doesn't apply or propose tags mechanically at that moment.
 - [x] Transcripts carry optional tags, like everything else. A transcript tagged with a project's name belongs to that project on that basis alone; there is no separate notion of a transcript being a project object.
-- [x] There are now two ways into the PM's queue: pushed notes, and papercuts told to the PM in the channel. Is that deliberate, and does the PM treat them differently?
-- [x] Reference pane marking the current paragraph: dropped. The pane auto-loads the right document and I scroll.
-- [x] The flow diagram doesn't show the try-it step at gate 2 yet.
-- [x] Restart control: two controls (restart, pull-and-restart), both hold-to-confirm, no in-flight readout.
+- [x] Two ways into the work: sent notes and messages in the conversation. Revised 2026-10-20: both are messages over the seam; a sent note carries a snapshot and a stable ID, and how each is kept is the backend's choice.
+- [x] Reference pane marking the current paragraph: dropped. The whole reading-against-reference view is deferred until replay exists (2026-10-20).
+- [ ] The flow diagram predates the 2026-10-20 seam decisions (push, sandbox, merge-in-review).
+- [x] Restart control: deferred (2026-10-20); for now I ask in the conversation. The earlier shape was two controls (restart, pull-and-restart), both hold-to-confirm, no in-flight readout.
 - [x] Untagged chats and notes: not homeless. Chats and Notes are exhaustive lists, so nothing is reachable only by remembering it; Feed shows what's warm and search finds the rest. Chats and Notes get a derived "no tag" filter, like Scratch's, so loose things can be rounded up.
 - [x] Bottom bar, or another way to keep the destinations always one tap away?
 - [x] Floating button or a composer strip above the bar for Scratch?
@@ -364,15 +329,15 @@ Tapping an item opens it or takes me to its destination. For anything the feed d
 - [x] Scratch layout: it looks like a chat, and it already nearly does. The one change is direction: today newest is at the top, and it should be newest at the bottom, the way a chat reads, with the composer under it. Transient events just disappear when they complete. Derived filters remain. Where pinned items sit in a chat-shaped list is left to implementation.
 - [x] What do mixed-type search results look like? Shape is fixed globally; grouping and ordering are the implementer's call.
 - [ ] Recall of chat turns from a note. Notes come from turns, but the model can't get back to the turns a note came from. Parked; not tangled with Events.
-- [x] Collaborator sandbox side effects beyond the data store: a policy on the tool dispatch under a sandbox flag. Allow the harmless, give payments a bounded sandbox wallet, block the PM push, Gitea writes, the inference switch and notifications. The sorted list lives in the Sandbox section and grows with the tools.
+- [x] Collaborator sandbox side effects beyond the data store: a policy on the tool dispatch under a sandbox flag. Allow the harmless, give payments a bounded sandbox wallet, block sends to agent channels, Gitea writes, the inference switch and notifications. The sorted list lives in the Trying the work section and grows with the tools. Whether any of this survives backend-run previews is open (2026-10-20).
 - [x] Collaborator sandbox schema drift: gone with the overlay. The sandbox runs on a session copy of the data, so the testing branch migrates its own copy.
 - [x] Overlay or copy: copy. One SQLite file, the vault and the media directory into a session directory, deleted when the session ends, swept at startup if a crash left one behind.
-- [x] What belongs in the warm feed? Recent chats, notes I touched or that changed in the app, upcoming events (warming within a day of starting), pending approvals, finished transcripts, and merged work (shown once the agent layer produces it; PM entries likewise). Scratch arrivals stay out: Scratch is its own stream. A note's "changed" is the app's record of an edit, never file times. (2026-10-13)
+- [x] What belongs in the warm feed? Recent chats, notes I touched or that changed in the app, upcoming events (warming within a day of starting), pending approvals, finished transcripts, and merged work (shown once the agent layer produces it). From agent channels, only open questions and messages the backend flags as needing me (2026-10-20). Scratch arrivals stay out: Scratch is its own stream. A note's "changed" is the app's record of an edit, never file times. (2026-10-13)
 - [x] How does a note get made from a chat: do I ask for it, is there a control, or does Collaborator offer?
 - [x] Seeds vs conversations: same object, one state flag. Promotion is derived from a deliberate act (naming, tagging, branching, synthesizing), not pressed by hand. Conversations is the list of promoted chats inside the Chats area, reached from a top-bar control beside the hamburger.
 - [x] Chat tags: on the root turn. Tags exist today only per turn, for recall; chat-level tags are new.
 - [x] Recurring events: one note with a rule and an exceptions list, exceptions kept forever; an occurrence that needs its own body becomes a linked one-off note.
-- [x] Where a push lands: a `@pm`-tagged commit on main of the project's repository, through a repo-scoped Gitea token, behind the push button as the human gate.
+- [x] Where a sent note lands: superseded 2026-10-20. Collaborator never commits; the note goes over the seam and the backend commits it. The bot token, the `@pm` commit and the push gate are gone.
 - [x] Wallet: LNbits on my LND node, pay and receive, copied from the broker; NWC kept dormant; sandbox gets its own wallet. Built 2026-10-14 as `wallet.py`: one `wallet` tool (balance, pay, top-up invoice) in place of `nwc_pay`, with `tools.wallet.provider` choosing lnbits or nwc. The two can sit on different nodes, so each keeps its own daily cap, and an attempt parked by one is never checked or repaid through the other.
 - [ ] Which box Collaborator runs on once it needs Tor or a VPN to reach the broker. The DITTA tool doesn't care, but the move is real work.
 - [x] DITTA search tool, built 2026-10-14 as `ditta_search` (ditta.py), replacing `lethe_search`: quote, per-query cap, signed-challenge check against the pinned broker pubkey, payment through the wallet, byte-identical replay. A retained credential is parked so the same ask replays free; an unconfirmed payment is resumed through the wallet rather than re-asked. Onion brokers need `tools.ditta.proxy`.
@@ -384,9 +349,11 @@ Tapping an item opens it or takes me to its destination. For anything the feed d
 - [x] Scratch stream, built 2026-10-17: newest at the bottom by the composer, "Load older" at the top. Pins sit in a strip above the stream (as many as I like, most recently pinned first), collapsible, remembered per device. The quiet filter (links, photos and videos, documents, text, voice) is derived from each item's kind and narrows pins too. A transcription item shows its job's live state (transcribing, failed) and leaves Scratch once the transcript is done, unless it's pinned; a failed one stays.
 - [x] Scratch items render as what they are, built 2026-10-18: a link shows its page title, site and favicon; a YouTube link its thumbnail, title and channel; a document its filename, type and size; a video plays in place. Previews are fetched once per URL in the background by the server (never a model), through fetch_url's exit and guards (with a webtool configured, no icons or thumbnails, since those would go out direct), and the images are served by the app so the phone never contacts the linked site. `scratch.link_previews: false` turns it off.
 - [x] Inference switch, built 2026-10-18. The gate it drives lives in `gate/`, self-contained (its own deps, tests, launchd install and docs) so it can be pulled onto the Mac alone; Collaborator's side is `backend/gate_client.py` + `/api/gate` + the top-bar pill. Labels "Collab only" (red, knob right) and "All requests" (knob left), state written opposite the knob; the knob shows how many agent requests are held. Hidden when no gate is configured, "Gate offline" when it can't be reached; chat never waits on it. Flips are recorded (`gate_client.flipped_within`) so the agent-stops notification, once it has a producer, can stay quiet about stops I caused.
-- [x] Unified search, built 2026-10-18 (`backend/unified_search.py`, `GET /api/find`): one search over chats, notes, Scratch, transcripts and attachments, grouped by pile with "show all", from a search button in the top bar on every screen. Chats got a search bar (the same search, scoped to chats); the Notes, Scratch and Transcripts bars keep filtering their own lists and offer "Search everywhere for …". A hit opens where it lives (a chat at its matching turn, Scratch with the query in its bar, an attachment in its sheet). It includes Scratch, so it is never a model tool; a test checks no tool can reach Scratch through it. Keyword only for now; the PM channel joins when it exists.
+- [x] Unified search, built 2026-10-18 (`backend/unified_search.py`, `GET /api/find`): one search over chats, notes, Scratch, transcripts and attachments, grouped by pile with "show all", from a search button in the top bar on every screen. Chats got a search bar (the same search, scoped to chats); the Notes, Scratch and Transcripts bars keep filtering their own lists and offer "Search everywhere for …". A hit opens where it lives (a chat at its matching turn, Scratch with the query in its bar, an attachment in its sheet). It includes Scratch, so it is never a model tool; a test checks no tool can reach Scratch through it. Keyword only for now; agent conversations join when they exist.
 - [x] Attachments mid-call, built 2026-10-18: a paperclip on the call screen hands over a photo or file (uploaded at once, as a chat attachment) or text or a link (pasted, prefilled from the clipboard when allowed) without leaving voice. What's handed over waits in a strip ("Goes with what you say next", each removable) and goes with the next spoken turn: files as attachments (an image reaches the model as an image), text and links appended to the words, so a link is fetched as in a typed message. The turn in the call transcript shows what went with it. Files lined up in the composer come along when a call starts (hold send, 2026-10-19): with the draft when there is one, else they go to the model as they are, with no words added, and the call opens on the reply. The strip's "Send now" does the same mid-call: whatever is handed over goes without waiting for me to speak.
 - [x] Readable reasoning in calls, built 2026-10-19: the thinking streams into the conversation itself, inside the reply it leads to, at reading size (not the old few-line strip in the header). While it thinks it has the whole conversation area and the view follows it; scrolling up to reread stops the follow, and scrolling back down near the end resumes it. Once the reply starts, the view follows the spoken paragraph as before and the thinking (now labelled "Thought") stays above it. Never spoken, never saved; it's gone when the mic reopens. Typed chats show it the same way (2026-10-19): inline in the reply at full height, followed while it streams, then the reply is followed until its first line would leave the screen; it stays under the finished reply until the next send. The rule for every follow-scroll, calls and chats alike: it never fights the reader. Nothing moves while a finger is on the list or just after a flick, a scroll up by hand stops the follow until I come back to the end or tap "Jump to latest", and a new turn starts it afresh.
 - [ ] Scratch files and chats: for when Scratch itself is the focus. Scratch media and chat attachments are separate stores on purpose: the chat model's `list_attachments` / `read_attachment` reach every chat attachment and nothing in Scratch. Hold-send reads a Scratch file (same reader as attachments), keeps that text on the Scratch item only, and runs the one-shot action, which has no chat to answer into. So bringing a Scratch file into a conversation today means attaching it again from the composer. Open: should a Scratch item get a deliberate "Send to chat" that copies the file into the attachment store, as the one sanctioned way across the line, or is re-attaching the right amount of friction? (2026-10-17)
 - [x] The Events destination is called **Calendar** (the `event` tag keeps its name). Built 2026-10-13: week grid (tap a slot for an hour, drag or hold-and-drag to size, only the title typed), agenda and month, "this one or all of them" from a tapped occurrence, .ics import as proposals. Conversations folded into Chats (a control in its header) so the bar is Feed, Chats, Scratch, Calendar, Mind until Mind's contents move to the menu and Projects takes its place.
 - [x] How notifications reach the phone: a self-hosted ntfy server (on the web server, not the Collaborator box), dormant until configured; every notification is also stored in the app. Transcripts notify when a background job finishes or fails; short in-turn ones don't, since I'm already looking at the reply. (2026-10-13)
+- [x] Agent layer, settled 2026-10-20 against the companion doc *Collaborator Agent UX and Backend Seam*, which wins where the two disagree: channels with labels and flags, no role names in the UI, sent notes instead of pushes, events for status, questions for merges, previews as backend-sent tailnet links, channel content out of recall and model tools, one explicit agent-output tool, endpoints paired per user over the tailnet. Branch timeline dropped; engineer Q&A, restart controls, reading against a spec and cost are out or deferred.
+- [ ] Collaborator as its own project: with previews run by the backend, does Collaborator's testing build still run next to my data on a session copy, with the sandbox dispatch policy? (2026-10-20)
