@@ -33,7 +33,7 @@ Tags are how things get organized, and they're the one mechanism the whole app s
 The bottom bar holds five destinations, left to right: Feed, Chats, Scratch, Events, Projects. They must be reachable most of the time (call/voice mode is one exception), and that persistence is what the bar is for. Scratch sits in the center and looks different from the other four, because it's the one I reach for fastest.
 
 - Mind stops being a place. The hamburger menu stays and ends up holding the archives I consult rarely and on purpose (Notes, People, Transcripts) alongside what's already there: Web Search, Settings and Sign out. References moves into settings, next to Profile, since it's about what the model is being shown rather than something I browse.
-- An entry's type is derived from its tags. Some tags, like event, social-graph (people) or user-profile, mean "this one gets different frontmatter": they set its type, which decides its fields and what its own page looks like. Every other tag decides where it lives and what it's associated with. The kind tags inside projects, like bug and feature, don't set a type; they're covered under Projects.
+- An entry's type is derived from its tags. Some tags, like event, social-graph (people) or user-profile, mean "this one gets different frontmatter": they set its type, which decides its fields and what its own page looks like. Every other tag decides where it lives and what it's associated with. Tags like bug and feature don't set a type either; they're ordinary tags, and the project view doesn't filter by them.
 - A destination is earned by how often I reach for it, nothing else. Events, Projects and Scratch are on the bar because I open them constantly, not because of their shape (Projects lands on a list, and that's fine). People are a directory I consult rather than land in, so it sits in the hamburger menu. Goals, questions, decisions and memories are plain tags with no type and no destination; they surface through chats, search and association.
 - Notes, in the hamburger menu, goes straight to the whole pile: the list of notes and the graph itself, with a selector to sort by date or other means.
 - Mind's lenses are accounted for individually rather than as a place. People goes to the hamburger menu, Notes and the graph with it, Projects and Events to the bottom bar, and the drafts inbox into the Feed. Profile moves into settings: it's mine, edited rarely, not browsed. Goals, decisions, questions and memories keep no lens at all.
@@ -91,11 +91,21 @@ What beats Google is not the gesture, which only reaches parity. It's that an ev
 
 ### Projects
 
-A project is a dashboard: a window into something in motion. Not every project is software. A project is whatever a name tag gathers, and every one gets the same base view: its notes, chats, docs, events and people, with shelves for each. That is the whole of a project like the economics game or a piece of writing, and it has to stand on its own.
+A project is a window into something in motion. Not every project is software. A project is whatever a name tag gathers, and every project opens on the same plain view, agents or not. That is the whole of a project like the economics game or a piece of writing, and it has to stand on its own. Everything tagged with the project name belongs here.
 
-When the project's tag matches a project an agent backend serves, the project also gets that backend's channels (see When a project has agents, below). Opening such a project lands on its conversation, not on a dashboard. How the conversation, the other channels and these shelves share the screen is deferred: the project view is being worked out separately, and none of its layout is built until then.
+#### The project view
 
-Everything tagged with the project name belongs here.
+One vertical page, no sideways scrolling, top to bottom (2026-10-20, replacing the shelves and the conversation-first landing):
+
+1. **Agents row.** Shown only when a backend serves the project. It just says "Agents", with a badge when something is waiting on me (a flagged message or an open question). No dots, no status. Tapping it opens the agent area: the conversation, the channel tabs and everything else under When a project has agents.
+2. **Chats and conversations**, most recent first.
+3. **Notes**, most recent first. Each row shows the note's name and its last-edited date. Events, people and docs tagged with the project are notes and sit here like any other.
+4. **Transcripts**, most recent first, at the bottom because I use them least.
+
+Each section shows its five most recent items and a "show all" link.
+
+- No horizontal carousels for notes or chats.
+- No tag chips (feature, bug, decision, issue). A project holds too little for them to filter anything useful, and search is already in the header.
 
 #### How a project forms
 
@@ -103,20 +113,20 @@ A project exists once a note is tagged `project` plus one other tag, taken as it
 
 - `project` marks a note or chat as belonging to a project.
 - The name tag says which project. The rule is single membership: a note belongs to exactly one project. So among the tags on project notes, the name is the one that never appears beside another name, while `bug` turns up beside many different names. The exclusivity check in the code is just how that rule is detected, not a way of discovering projects; the `project` tag already declares that. If an unrelated tag happens to behave like a name, the fix is an override in the app (pin this tag as a name, or ignore it), never retagging the notes, and the overrides sit in a small visible list in settings so they're not hidden state.
-- Kind tags like `bug` and `feature` decide where inside the project view a note or chat shows. A bug tagged with another project's name never appears in this project's view.
+- Tags like `bug` and `feature` are ordinary tags: they don't place anything inside the project view. A bug tagged with another project's name never appears in this project's view.
 - The manual state field goes, here and everywhere else it appears. It was set by hand, so it went unused, and it stopped making sense once a project became a collection of notes: a comment, an idea, a feature and a spec share no universal status. Where a status survives, it is derived from something happening to the note and belongs to that happening, not to the note. The software case is one example: a sent note has a lifecycle (sent, building, ready for review, merged) that the agent backend reports as events. Other kinds of project will have their own, or none.
 - There is no repo field on a project note, and no repository in note frontmatter. In the case of a software project, pi-session-manager already knows which repo belongs to a project name, so storing it here would duplicate a fact that lives elsewhere, and duplicated facts drift. Collaborator's own `git_read` and `git_issue` tools (reading code, filing an issue when I ask) take the repo they're given; they aren't part of the agent seam, and nothing about a repo is carried on a note.
 
 #### When a project has agents
 
-Everything below is the agent layer. It appears only when the project's tag exactly matches a project tag that an agent endpoint serves. No project type is set by hand; the match is the switch. The contract itself lives in the companion doc, *Collaborator Agent UX and Backend Seam* (2026-10-19), which wins wherever the two disagree; this section records what it means for the rest of Collaborator. pi-session-manager is one backend among possible others, and a single coding-agent session has to fit the same shape.
+Everything below is the agent area, reached from the Agents row at the top of the project view. It exists only when the project's tag exactly matches a project tag that an agent endpoint serves. No project type is set by hand; the match is the switch. The contract itself lives in the companion doc, *Collaborator Agent UX and Backend Seam* (2026-10-19), which wins wherever the two disagree; this section records what it means for the rest of Collaborator. pi-session-manager is one backend among possible others, and a single coding-agent session has to fit the same shape.
 
 #### Channels and the conversation
 
 Chats are me thinking with Collaborator (extended cognition); agent channels are me delegating. They look different.
 
 - A backend exposes channels. Each declares a label, whether it accepts input, whether it has a firehose, a one-line status, and whether it's busy. Collaborator shows the label as it arrives and never names a role: no "PM", "engineer" or "auditor" anywhere in the UI, and no generic name for the default channel either.
-- The default channel is the one that accepts input, and its conversation is where opening the project lands. If several accept input, I choose the default and Collaborator remembers it. If none does, the project is watch-only.
+- The default channel is the one that accepts input, and its conversation is where opening the agent area lands, with the channel strip and tabs around it. If several accept input, I choose the default and Collaborator remembers it. If none does, the project is watch-only.
 - Channels that don't accept input are read-only: a status line and a firehose to watch. Talking to one of them directly (the old engineer Q&A) is out for now. With pi-session-manager only the PM's channel accepts input; that is the backend's policy, expressed through its flags, not a Collaborator rule.
 - When the other side is mid-turn, the input shows that my message is queued, so I never resend.
 - Channel conversations live in their own table, never in Chats: the messages in input-accepting channels, questions and their answers, kept for catch-up and history. The firehose is never stored beyond a short in-memory live buffer; the backend owns that record.
@@ -312,7 +322,7 @@ Tapping an item opens it or takes me to its destination. For anything the feed d
 
 ## Open questions
 
-- [ ] How exactly are the project lanes laid out on mobile? Deferred (2026-10-20) into the project-view work, which also decides how channels sit beside the shelves and where sends are approved.
+- [x] How is a project laid out on mobile? Settled 2026-10-20: one vertical page for every project. An Agents row (only with a backend, a badge when something waits on me) opens the agent area; then chats, notes and transcripts, each the five most recent with "show all". No carousels, no tag chips. Where staged sends are approved is still open.
 - [x] Does anything get pinned in the warm feed, or is it purely ordered by warmth?
 - [ ] What does each object shape actually look like?
 - [x] Where does merge land me? Revised 2026-10-20: merge is a question the endpoint asks, with buttons, after I've tried the preview link; afterwards I go see what was built.
@@ -342,8 +352,8 @@ Tapping an item opens it or takes me to its destination. For anything the feed d
 - [ ] Which box Collaborator runs on once it needs Tor or a VPN to reach the broker. The DITTA tool doesn't care, but the move is real work.
 - [x] DITTA search tool, built 2026-10-14 as `ditta_search` (ditta.py), replacing `lethe_search`: quote, per-query cap, signed-challenge check against the pinned broker pubkey, payment through the wallet, byte-identical replay. A retained credential is parked so the same ask replays free; an unconfirmed payment is resumed through the wallet rather than re-asked. Onion brokers need `tools.ditta.proxy`.
 - [x] Whether chat tags feed recall the way turn tags do. Not yet (2026-10-12): chat tags organize only. They're stored apart from turn tags, so recall can scope by them later (most likely by project, once project views exist) without a data migration.
-- [x] Projects base view, built 2026-10-13: Projects is on the bar (Feed, Chats, Scratch, Calendar, Projects); a project's notes and chats sit on shelves filtered by kind tags; name overrides (hold a project: not a name; hold a kind tag: treat as a name) are listed in Settings. Mind is gone: Notes (with the graph and Profile) and People are in the menu, the drafts inbox is reached from the Feed. Events in projects stay possible but get nothing bespoke (no events shelf). Transcripts carry tags since 2026-10-14, edited on the transcript's own page with the same completion and near-miss check as chats, and a tagged one sits on its project's Transcripts shelf; the model's `list_transcripts` filters by tag too. References and Profile moved into Settings (2026-10-14), as rows at the top of the sheet that open their own pages; Notes now opens straight on the whole pile, with no lens picker.
-- [x] What is a doc? Just a note, distinguished by a tag that identifies it (`spec`, for instance) or simply by looking at it. No separate object, type or shelf: in a project, the kind-tag chips filter to it. (2026-10-14)
+- [x] Projects base view, built 2026-10-13 (its shelves and kind-tag chips are replaced by the 2026-10-20 project view; the rest stands): Projects is on the bar (Feed, Chats, Scratch, Calendar, Projects); a project's notes and chats sit on shelves filtered by kind tags; name overrides (hold a project: not a name; hold a kind tag: treat as a name) are listed in Settings. Mind is gone: Notes (with the graph and Profile) and People are in the menu, the drafts inbox is reached from the Feed. Events in projects stay possible but get nothing bespoke (no events shelf). Transcripts carry tags since 2026-10-14, edited on the transcript's own page with the same completion and near-miss check as chats, and a tagged one sits on its project's Transcripts shelf; the model's `list_transcripts` filters by tag too. References and Profile moved into Settings (2026-10-14), as rows at the top of the sheet that open their own pages; Notes now opens straight on the whole pile, with no lens picker.
+- [x] What is a doc? Just a note, distinguished by a tag that identifies it (`spec`, for instance) or simply by looking at it. No separate object, type or shelf: in a project, the kind-tag chips filter to it. (2026-10-14) Revised 2026-10-20: the chips are gone, so a doc is simply one of the project's notes.
 - [ ] Note editing experience: to be overhauled over time. I have ideas for it; on the back burner for now. (2026-10-14)
 - [x] "No tag" filters on Chats and Notes, built 2026-10-17: one quiet filter icon in each header opens the derived filters (just "No tag" for now); the active one shows as a chip with a count under the header until cleared. Untagged notes are marked "untagged" in their rows, like chats.
 - [x] Scratch stream, built 2026-10-17: newest at the bottom by the composer, "Load older" at the top. Pins sit in a strip above the stream (as many as I like, most recently pinned first), collapsible, remembered per device. The quiet filter (links, photos and videos, documents, text, voice) is derived from each item's kind and narrows pins too. A transcription item shows its job's live state (transcribing, failed) and leaves Scratch once the transcript is done, unless it's pinned; a failed one stays.
