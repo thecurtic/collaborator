@@ -80,6 +80,14 @@ for the frontend dev loop, PWA testing and the Android shell.
 See [CONTRIBUTING.md](CONTRIBUTING.md). Agents working in this repo follow
 [AGENTS.md](AGENTS.md).
 
+## AI-assisted code
+
+Much of the code in this repository was written with AI coding tools,
+including Claude Code, working to the author's designs and direction and
+tested by the author on real use. Treat it as you would any code you didn't
+write: read it before you trust it, especially the authentication, payment
+and network-facing parts.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
