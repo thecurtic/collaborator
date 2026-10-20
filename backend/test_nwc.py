@@ -78,13 +78,14 @@ def test_bolt11_amounts():
 
 
 def test_bolt11_payment_hash():
-    # A real invoice (10 sats) paid during live testing; hash value pinned.
-    inv = ("lnbc100n1p4g3t0epp5kkzr2ywh75my8cv65h06530qqcgdeu072s3f0reux0h76"
-           "zfv2tkqdqqcqzzsxqrrsssp5fyp5l96z0vk8tw2dttmg5m8zu78h8w4tx678nu2j"
-           "xwf0cfn3wmns9qxpqysgqksnym6lwxd9yn6myqearjkhrgh30xkcdpek2q0fwe33"
-           "f4jc3cxg4l8qyrkf8c5rjw32l6qwygh8e6yle5hzxrf76slxlw2lfs3r3ccqqrmr78k")
+    # A well-formed 10-sat invoice signed with the BOLT11 spec's test key;
+    # hash value pinned.
+    inv = ("lnbc100n1p4fwecqpp50y8aqv3kke2x072ca4y0zanxaugmwqz3u2v85y2gcn7cce"
+           "g87xlssp509gs2l8hqxgst6uk5963mzalpguf95wtsrzxpjvpqzfsglj37qmsdq8"
+           "w3jhxaqw77vkau8lw4r26j076cyqg0umk96ucemymfvmz9psll3qvvnycvpewke0"
+           "qrc34rcxxr6vu0ygcz7c2e0lcealjx7h86mm5c4l45nq0qppxduvw")
     assert nwc.bolt11_payment_hash(inv) == \
-        "b5843511d7f53643e19aa5dfaa45e00610dcf1fe5422978f3c33efed092c52ec"
+        "790fd03236b65467f958ed48f17666ef11b70051e2987a1148c4fd8c6507f1bf"
     assert nwc.bolt11_amount_msat(inv) == 10_000        # 10 sats, NOT 10k
     assert nwc.bolt11_payment_hash("lnbc1u1p...") is None
     assert nwc.bolt11_payment_hash("garbage") is None

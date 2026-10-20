@@ -112,7 +112,8 @@ def test_end_to_end():
         load_dotenv()
         
         # Load DB path
-        db_path = os.environ.get("DB_PATH", "/home/chat/collaborator/backend/data/conversations.db")
+        db_path = os.environ.get("DB_PATH", os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data", "conversations.db"))
         
         # Ensure directory exists
         os.makedirs(os.path.dirname(db_path), exist_ok=True)

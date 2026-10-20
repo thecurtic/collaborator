@@ -1314,8 +1314,8 @@ All errors return JSON with appropriate HTTP status code:
 # Enable passkey authentication
 authentication:
   enabled: false
-  passkeys_db_path: "/home/chat/collaborator/backend/data/authentication/passkeys.db"
-  users_dir: "/home/chat/collaborator/backend/data/users"
+  passkeys_db_path: "/path/to/collaborator/backend/data/authentication/passkeys.db"
+  users_dir: "/path/to/collaborator/backend/data/users"
 
 inference:
   endpoint_url: "http://localhost:1234/v1"
@@ -1327,7 +1327,7 @@ inference:
 
 memory:
   default_context_window: 5
-  db_path: "/home/chat/collaborator/backend/data/conversations.db"
+  db_path: "/path/to/collaborator/backend/data/conversations.db"
 
 server:
   backend_host: "0.0.0.0"
@@ -1482,8 +1482,8 @@ python -m backend.data.passkey generate
 ```yaml
 authentication:
   enabled: true
-  passkeys_db_path: "/home/chat/collaborator/backend/data/authentication/passkeys.db"
-  users_dir: "/home/chat/collaborator/backend/data/users"
+  passkeys_db_path: "/path/to/collaborator/backend/data/authentication/passkeys.db"
+  users_dir: "/path/to/collaborator/backend/data/users"
 ```
 
 3. Restart backend and test with passkey header
