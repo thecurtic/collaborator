@@ -5,20 +5,14 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Dependencies (optional - comment out if you want to track them)
-# node_modules/
-# dist/
-
 # Environment variables
 .env
 .env.local
 .env.*.local
 # The ACTUAL config is machine-local and never committed (copy from
-# config.yaml.example). App-written settings (model dropdown etc.) live in
-# backend/data/app_settings.json. .config.yaml is deprecated but still ignored.
+# config.yaml.example). .config.yaml is deprecated but still ignored.
 config.yaml
 .config.yaml
-backend/data/app_settings.json
 
 # OS files
 .DS_Store
@@ -40,58 +34,37 @@ out/
 coverage/
 .nyc_output/
 
-# Lock files
-pnpm-lock.yaml
-package-lock.json
-yarn.lock
-
-# Python/Backend (only ignore cache files, not the directory itself)
+# Python caches and virtualenvs. Python's packaging template (lib/, parts/,
+# var/, eggs/ ...) is left out: those rules aren't anchored, so they matched
+# directories like frontend/src/lib. package-lock.json is tracked (deploy.sh
+# runs npm ci).
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-env/
+.pytest_cache/
 venv/
 .venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
 
-# SQLite
+# SQLite, with its journal and write-ahead-log sidecars
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 
-# User databases (per-machine)
-backend/data/users/*/conversations.db
-!backend/data/users/.gitkeep
+# Runtime data. Everything under backend/data is per-machine and personal
+# (databases, notes vaults, attachments, scratch media, app settings, TTS
+# voices, the NWC scheme cache), except the scripts that manage it.
+/backend/data/*
+!/backend/data/*.py
+!/backend/data/users/
+/backend/data/users/*
+!/backend/data/users/.gitkeep
 
-# Authentication database (per-machine)
-backend/data/authentication/passkeys.db
-
-# Notes vaults (personal content, never committed)
-backend/data/notes/
-backend/data/users/*/notes/
+# Left behind by running the backend before paths resolved from the repo root
+/data/
 
 # Worktrees (keep hidden)
 .worktrees/
-
-# TTS voice models (downloaded per-machine)
-backend/data/tts-voices/
