@@ -1,11 +1,11 @@
 import { request } from '@/api/http';
 
 /** The piles unified search reaches (GET /api/find). */
-export type FindScope = 'chats' | 'notes' | 'scratch' | 'transcripts' | 'attachments';
+export type FindScope = 'chats' | 'notes' | 'scratch' | 'transcripts' | 'attachments' | 'agents';
 
 export interface FindHit {
-  type: 'chat' | 'note' | 'scratch' | 'transcript' | 'attachment';
-  /** chat: root id · note: title · scratch/transcript/attachment: id. */
+  type: 'chat' | 'note' | 'scratch' | 'transcript' | 'attachment' | 'agent';
+  /** chat: root id · note: title · scratch/transcript/attachment/agent: id. */
   id: number | string;
   title: string;
   snippet: string;
@@ -18,6 +18,10 @@ export interface FindHit {
   mime?: string | null;
   size?: number | null;
   channel?: string | null;
+  /** agent: where the stored message lives (title is the channel's label). */
+  project?: string;
+  endpoint_id?: string;
+  channel_id?: string;
 }
 
 export interface FindGroup {

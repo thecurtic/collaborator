@@ -53,6 +53,7 @@ class Session:
         self.ws = None
         self.player = None       # the script keeps playing across reconnects
         self.ids = itertools.count(1)
+        self.run = secrets.token_hex(3)   # ids stay unique across restarts
 
     async def send(self, frame):
         if self.ws is not None:
@@ -64,7 +65,7 @@ class Session:
     async def say(self, channel, text, needs_reply=False, question=None):
         n = self.seq[channel] = self.seq.get(channel, 0) + 1
         frame = {"type": "message", "project": self.project, "channel": channel,
-                 "id": f"{channel}-{n}", "seq": n, "ts": now(), "text": text}
+                 "id": f"{channel}-{self.run}-{n}", "seq": n, "ts": now(), "text": text}
         if needs_reply:
             frame["needs_reply"] = True
         if question:
@@ -114,7 +115,12 @@ async def declare(s: Session):
 
 
 async def catch_up(s: Session, acked):
-    """Resend every message Collaborator hasn't stored (welcome.acked)."""
+    """Resend every message Collaborator hasn't stored (welcome.acked), and
+    keep numbering after what it has (a restarted fake starts from empty)."""
+    for key, seq in acked.items():
+        project, _, channel = key.partition("/")
+        if project == s.project:
+            s.seq[channel] = max(s.seq.get(channel, 0), seq)
     for channel, frames in s.log.items():
         last = acked.get(f"{s.project}/{channel}", 0)
         for f in frames:

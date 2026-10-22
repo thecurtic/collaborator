@@ -145,7 +145,7 @@ def _agents(conn, q: str, limit: int) -> Dict:
     labels = {(e, p, c): l for e, p, c, l in conn.execute(
         "SELECT endpoint_id, project, channel, label FROM agent_channels")}
     items = [{"type": "agent", "id": m["id"], "project": m["project"],
-              "endpoint_id": m["endpoint_id"], "channel": m["channel"],
+              "endpoint_id": m["endpoint_id"], "channel_id": m["channel"],
               "title": labels.get((m["endpoint_id"], m["project"], m["channel"]), m["channel"]),
               "from": m["from"], "snippet": _snippet(m["text"], terms),
               "when": m["created_at"]} for m in found]

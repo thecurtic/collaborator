@@ -42,7 +42,7 @@ import { ChatView } from '@/features/chat/ChatView';
 import { CalendarView } from '@/features/calendar/CalendarView';
 import { ChatCardSheet } from '@/features/chat/ChatCardSheet';
 import { FeedView } from '@/features/feed/FeedView';
-import { ProjectsView } from '@/features/projects/ProjectsView';
+import { ProjectsView, type ProjectRequest } from '@/features/projects/ProjectsView';
 import { RootList } from '@/features/chat/RootList';
 import { ActiveFilter, ListFilterButton } from '@/components/ListFilter';
 import { InferenceSwitch } from '@/features/gate/InferenceSwitch';
@@ -136,6 +136,9 @@ function AppShell() {
     title: string;
     nonce: number;
   } | null>(null);
+  // Open a project (and maybe its agent area) from elsewhere: Feed, search,
+  // a notification.
+  const [projectRequest, setProjectRequest] = useState<ProjectRequest | null>(null);
   // Tree map, pushed within the Conversations tab (mirrors Mind's graph).
   const [mapOpen, setMapOpen] = useState(false);
   const [chatsFilter, setChatsFilter] = useState<'all' | 'conversations'>('all');
@@ -246,6 +249,12 @@ function AppShell() {
   useEffect(() => {
     if (gate !== 'open') return;
     const sp = new URLSearchParams(window.location.search);
+    const agents = /^agents:(.{1,200})$/.exec(sp.get('open') ?? '');
+    if (agents) {
+      window.history.replaceState(null, '', window.location.pathname);
+      openAgents(agents[1], null);
+      return;
+    }
     const m = /^transcript:(\d+)$/.exec(sp.get('open') ?? '');
     if (!m) return;
     window.history.replaceState(null, '', window.location.pathname);
@@ -272,6 +281,23 @@ function AppShell() {
     openNotes();
     setInboxRequest((prev) => ({ runId, nonce: (prev?.nonce ?? 0) + 1 }));
   }, [openNotes]);
+
+  /** Open a project, straight into its agent area when `agents` is set. */
+  const openProject = useCallback((project: string, agents: boolean,
+                                   channel: ProjectRequest['channel'] = null) => {
+    setFind(null);
+    setChatOpen(false);
+    setSettingsPage(null);
+    setSearchOpen(false);
+    setTranscriptsOpen(false);
+    setNotesOpen(false);
+    setTab('projects');
+    setProjectRequest((prev) => ({ project, agents, channel, nonce: (prev?.nonce ?? 0) + 1 }));
+  }, []);
+  const clearProjectRequest = useCallback(() => setProjectRequest(null), []);
+  const openAgents = useCallback(
+    (project: string, channel: ProjectRequest['channel']) => openProject(project, true, channel),
+    [openProject]);
 
   /** Open one vault note by title. */
   const openNoteByTitle = useCallback((title: string) => {
@@ -405,6 +431,9 @@ function AppShell() {
       setSettingsPage(null);
       setTab('scratch');
       setScratchSearch((prev) => ({ q, nonce: (prev?.nonce ?? 0) + 1 }));
+    } else if (hit.type === 'agent' && hit.project) {
+      openAgents(hit.project, hit.endpoint_id && hit.channel_id
+        ? { endpointId: hit.endpoint_id, channel: hit.channel_id } : null);
     }
   };
 
@@ -423,8 +452,14 @@ function AppShell() {
       setTranscriptFocus(r.transcriptId);
       setTranscriptsOpen(true);
       void api.touchFeedItem(item.key);
+    } else if ((item.type === 'agent_question' || item.type === 'agent_message') && r.project) {
+      openAgents(r.project, r.endpointId && r.channel
+        ? { endpointId: r.endpointId, channel: r.channel } : null);
+    } else if (item.type === 'merged' && r.project) {
+      // Merged work: go see (and try) what was built, in its project.
+      void api.touchFeedItem(item.key);
+      openProject(r.project, true);
     }
-    // merged: its home is the project view (step 7); nothing to open yet.
   };
   const openNewChat = () => {
     convo.startNewChat();
@@ -873,6 +908,8 @@ function AppShell() {
         ) : tab === 'projects' ? (
           <ProjectsView
             roots={convo.tree.roots}
+            request={projectRequest}
+            onRequestDone={clearProjectRequest}
             onOpenNote={openNoteByTitle}
             onOpenChat={openRoot}
             onOpenTranscript={(id) => {

@@ -10,6 +10,8 @@
  *     optional so recall results can populate the same Turn type later.
  */
 
+import type { AgentQuestion } from '@/api/agents';
+
 export type Role = 'user' | 'assistant';
 
 export interface Turn {
@@ -409,6 +411,8 @@ export interface NoteMeta {
   filename: string;
   title: string;
   created: string | null;
+  /** Last changed in the app (list only); null = never, use `created`. */
+  edited: string | null;
   tags: string[];
   sourceTurns: number[];
   /** Outgoing [[wikilink]] targets parsed from the body. */
@@ -562,7 +566,11 @@ export type FeedItemType =
   | 'event'
   | 'approval'
   | 'transcript'
-  | 'merged';
+  | 'merged'
+  /** An open question from an agent channel (heavy: it blocks on me). */
+  | 'agent_question'
+  /** A message an agent backend flagged as needing me, not yet seen. */
+  | 'agent_message';
 
 export interface FeedItem {
   /** Stable id, e.g. chat:12 — used for touch and pin. */
@@ -584,6 +592,11 @@ export interface FeedItem {
     runId?: string | null;
     transcriptId?: number;
     project?: string | null;
+    /** Agent items: the stored message, its channel, and its question. */
+    messageId?: number;
+    endpointId?: string;
+    channel?: string;
+    question?: AgentQuestion | null;
   };
 }
 

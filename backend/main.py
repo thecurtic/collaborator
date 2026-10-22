@@ -2983,6 +2983,14 @@ async def list_vault_notes(
         conn = sqlite3.connect(_resolve_db_path(passkey))
         try:
             notes = notes_index.list_notes(conn, tag=tag)
+            # Last edited = the app's record of a change (never file mtimes,
+            # which migrations rewrite); null when it was never changed here.
+            feed.ensure_schema(conn)
+            changed = dict(conn.execute(
+                "SELECT key, changed_at FROM feed_activity WHERE key LIKE 'note:%' "
+                "AND changed_at IS NOT NULL").fetchall())
+            for n in notes:
+                n["edited_at"] = changed.get(feed.note_key(n["title"]))
         finally:
             conn.close()
         return {"notes": notes, "count": len(notes)}

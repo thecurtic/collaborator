@@ -14,7 +14,7 @@ function ev(title: string, start: string, end: string | null = null,
             allDay = false, occurrence: string | null = null): NoteMeta {
   return {
     filename: `${title}.md`, title, created: null, tags: ['event'], sourceTurns: [],
-    links: [], score: null, occurrence, recurring: occurrence != null, moved: false,
+    links: [], score: null, occurrence, recurring: occurrence != null, moved: false, edited: null,
     fields: {
       start, end, allDay, location: null, people: [], repeat: null, exceptions: [],
       aliases: [], kind: null, relation: null, birthday: null, area: null,

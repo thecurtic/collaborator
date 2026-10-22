@@ -18,7 +18,8 @@ export interface NameOverrides {
 /**
  * Project-name inference over everything tagged `project` (notes and chats). Model (greenfield, agreed
  * 2026-08-17): every member note is tagged `project`; the project's NAME is
- * one of its other tags — inferred, never declared. Facets are the rest.
+ * one of its other tags — inferred, never declared. The rest are ordinary
+ * tags (bug, feature); the project view doesn't filter by them.
  *
  * The discriminator is EXCLUSIVITY, not frequency: project names partition
  * the universe (a note never carries two names), while shared facets (bug,
@@ -148,24 +149,4 @@ export function inferProjects<T extends ProjectItem>(
       .sort((a, b) => b.items.length - a.items.length),
     unassigned,
   };
-}
-
-/**
- * Facet tags within a note set: co-occurring tags minus `project` and the
- * excluded ones (project name + already-drilled), by frequency.
- */
-export function facetsOf(
-  items: ProjectItem[],
-  exclude: string[],
-): { tag: string; count: number }[] {
-  const skip = new Set(['project', ...exclude]);
-  const counts = new Map<string, number>();
-  for (const n of items) {
-    for (const t of n.tags) {
-      if (!skip.has(t)) counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
-  }
-  return [...counts.entries()]
-    .map(([tag, count]) => ({ tag, count }))
-    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 }

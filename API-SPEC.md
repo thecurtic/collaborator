@@ -751,8 +751,11 @@ POST /api/notes/reindex
 ```
 GET /api/notes?tag=decision
 -> 200 { "notes": [ { "filename", "title", "created", "tags", "source_turns",
-                      "links", "content_hash", "mtime" } ], "count": N }
+                      "links", "content_hash", "mtime", "edited_at" } ], "count": N }
 ```
+`edited_at` is the app's record of the note's last change (an approval, an
+edit, a rename, an Obsidian edit seen by reindex), `null` if it never changed
+in the app; file `mtime` isn't trustworthy across migrations.
 
 **Get one** (case-insensitive title; body + backlinks):
 ```
@@ -1252,8 +1255,8 @@ and chat tags match too). A note's `id` is its title. Scratch matches every
 word against the text, what was read from it, the file name and a link's page
 title (the Scratch list's own `?q=` works the same way). Attachments carry
 `kind`, `mime` and `size`. An agent result (`type: "agent"`) is one stored
-message: `id`, `project`, `endpoint_id`, `channel`, `title` (the channel's
-label), `from` (`agent` | `you`). Firehose lines are never stored, so never found.
+message: `id`, `project`, `endpoint_id`, `channel_id`, `title` (the
+channel's label), `from` (`agent` | `you`). Firehose lines are never stored, so never found.
 
 ### 26. Agents (the agent seam)
 

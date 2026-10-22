@@ -322,6 +322,8 @@ export interface ApiNoteMeta {
   filename: string;
   title: string;
   created?: string;
+  /** The app's record of the last change (GET /api/notes only). */
+  edited_at?: string | null;
   tags?: string[];
   source_turns?: number[];
   links?: string[];
@@ -510,7 +512,8 @@ export interface ApiNotificationSettings {
 /** GET /api/feed — one warm-feed item. */
 export interface ApiFeedItem {
   key: string;
-  type: 'chat' | 'note' | 'event' | 'approval' | 'transcript' | 'merged';
+  type: 'chat' | 'note' | 'event' | 'approval' | 'transcript' | 'merged'
+    | 'agent_question' | 'agent_message';
   title: string;
   subtitle?: string | null;
   warmth: string | null;

@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { ActiveFilter, ListFilterButton } from '@/components/ListFilter';
 import { SearchEverywhere } from '@/features/find/ScopedSearch';
+import { NoteSendPanel } from '@/features/agents/NoteSendPanel';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Note, NoteFieldsPatch, NoteMeta } from '@/domain/models';
@@ -330,6 +331,7 @@ function NoteScreen({
                   ))}
                 </div>
               )}
+              <NoteSendPanel title={note.title} />
               <FieldsSummary
                 category={categoryOf(note.tags)?.tag ?? null}
                 fields={note.fields}

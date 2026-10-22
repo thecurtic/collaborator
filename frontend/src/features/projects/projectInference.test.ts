@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { facetsOf, inferProjects, type ProjectItem } from './projectInference';
+import { inferProjects, type ProjectItem } from './projectInference';
 
 let seq = 0;
 function note(tags: string[]): ProjectItem {
@@ -63,11 +63,6 @@ describe('inferProjects', () => {
     expect(clusters[0].items).toHaveLength(7);
     expect(clusters[1].items).toHaveLength(4);
     expect(unassigned).toHaveLength(0);
-    // Inside the project, `event` is a facet to drill by.
-    expect(facetsOf(clusters[0].items, ['garden']).map((f) => f.tag)).toEqual([
-      'event',
-      'social-graph',
-    ]);
   });
 
   it('an event with no name tag is unassigned, not a project called event', () => {
@@ -84,24 +79,6 @@ describe('inferProjects', () => {
     ];
     const { unassigned } = inferProjects(universe);
     expect(unassigned).toHaveLength(1);
-  });
-});
-
-describe('facetsOf', () => {
-  it('orders co-occurring tags by frequency, excluding name + drilled', () => {
-    const notes = [
-      note(['collaborator', 'bug', 'voice']),
-      note(['collaborator', 'bug']),
-      note(['collaborator', 'feature']),
-    ];
-    expect(facetsOf(notes, ['collaborator']).map((f) => f.tag)).toEqual([
-      'bug',
-      'feature',
-      'voice',
-    ]);
-    expect(facetsOf(notes, ['collaborator', 'bug']).map((f) => f.tag)).toEqual(
-      ['feature', 'voice'],
-    );
   });
 });
 

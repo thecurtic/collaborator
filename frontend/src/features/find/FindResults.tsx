@@ -1,4 +1,5 @@
 import {
+  Bot,
   FileText,
   Film,
   NotebookText,
@@ -17,6 +18,7 @@ export const SCOPE_LABEL: Record<FindScope, string> = {
   scratch: 'Scratch',
   transcripts: 'Transcripts',
   attachments: 'Attachments',
+  agents: 'Agents',
 };
 
 const ICON: Record<FindHit['type'], LucideIcon> = {
@@ -25,6 +27,7 @@ const ICON: Record<FindHit['type'], LucideIcon> = {
   scratch: StickyNote,
   transcript: Film,
   attachment: Paperclip,
+  agent: Bot,
 };
 
 /** The query's words in bold, case-insensitively. */
@@ -63,6 +66,7 @@ function Hit({ hit, q, onOpen }: { hit: FindHit; q: string; onOpen: (h: FindHit)
     when(hit.when),
     hit.type === 'chat' && hit.matches && hit.matches > 1 ? `${hit.matches} matching turns` : null,
     hit.channel ?? null,
+    hit.type === 'agent' ? hit.project ?? null : null,
   ].filter(Boolean);
   return (
     <button

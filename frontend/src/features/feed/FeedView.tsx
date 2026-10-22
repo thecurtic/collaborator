@@ -1,5 +1,7 @@
 import {
+  Bot,
   CalendarDays,
+  CircleHelp,
   FileText,
   FileVideo,
   GitMerge,
@@ -18,6 +20,7 @@ import type { Feed, FeedItem, FeedItemType } from '@/domain/models';
 import { useLongPress } from '@/lib/useLongPress';
 import { cn } from '@/lib/utils';
 import { formatEventRange } from '@/features/notes/eventFields';
+import { QuestionCard } from '@/features/agents/QuestionCard';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
@@ -30,6 +33,8 @@ const ICONS: Record<FeedItemType, ComponentType<{ className?: string }>> = {
   approval: Inbox,
   transcript: FileVideo,
   merged: GitMerge,
+  agent_question: CircleHelp,
+  agent_message: Bot,
 };
 
 /** "5m", "3h", "2d", or a date — how long ago an item warmed. */
@@ -57,6 +62,44 @@ function detail(item: FeedItem): string | null {
   return item.subtitle;
 }
 
+/** An agent's question: heavy, since it blocks on me. It can be answered
+ * right here (merge included); it's the same question as in its channel. */
+function QuestionRow({
+  item,
+  onOpen,
+  onMenu,
+  onAnswered,
+}: {
+  item: FeedItem;
+  onOpen: () => void;
+  onMenu: () => void;
+  onAnswered: () => void;
+}) {
+  const press = useLongPress(onMenu, { onClick: onOpen });
+  const q = item.ref.question;
+  return (
+    <div className="border-l-2 border-l-primary bg-primary/5 px-4 py-3">
+      <button type="button" {...press} title="Hold to pin"
+              className="flex w-full select-none items-center gap-2 text-left [-webkit-touch-callout:none]">
+        <CircleHelp className="h-4 w-4 shrink-0 text-primary" />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
+          {item.subtitle}
+        </span>
+        {item.pinned && <Pin className="h-3 w-3 shrink-0 text-muted-foreground" />}
+        <span className="shrink-0 text-[11px] text-muted-foreground">{ago(item.warmth)}</span>
+      </button>
+      {q && item.ref.messageId != null ? (
+        <div className="mt-2">
+          <QuestionCard compact messageId={item.ref.messageId} question={q} state="open"
+                        outcome={null} onAnswered={onAnswered} />
+        </div>
+      ) : (
+        <p className="mt-1 text-sm text-foreground">{item.title}</p>
+      )}
+    </div>
+  );
+}
+
 function Row({
   item,
   onOpen,
@@ -80,7 +123,8 @@ function Row({
       <Icon
         className={cn(
           'mt-0.5 h-4 w-4 shrink-0',
-          item.type === 'approval' ? 'text-amber-600' : 'text-primary/70',
+          item.type === 'approval' || item.type === 'agent_message'
+            ? 'text-amber-600' : 'text-primary/70',
         )}
       />
       <span className="min-w-0 flex-1">
@@ -196,11 +240,20 @@ export function FeedView({
                     'border-b-2 border-b-border',
                 )}
               >
-                <Row
-                  item={item}
-                  onOpen={() => onOpen(item)}
-                  onMenu={() => setMenuItem(item)}
-                />
+                {item.type === 'agent_question' ? (
+                  <QuestionRow
+                    item={item}
+                    onOpen={() => onOpen(item)}
+                    onMenu={() => setMenuItem(item)}
+                    onAnswered={() => void load()}
+                  />
+                ) : (
+                  <Row
+                    item={item}
+                    onOpen={() => onOpen(item)}
+                    onMenu={() => setMenuItem(item)}
+                  />
+                )}
               </li>
             ))}
           </ul>

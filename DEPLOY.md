@@ -77,6 +77,19 @@ Everything machine-specific lives in the gitignored `config.yaml`:
 - `authentication.enabled`, `authentication.passkeys_db_path`
 - `tools.*`: web search provider and key, fetch proxy, transcription limits,
   wallet keys. Every secret the app holds is in this file.
+- `agents.listen`: where agent endpoints connect (see below).
+
+## Agent endpoints
+
+Agent backends (API-SPEC.md §26) connect to their own listener, not the
+app's port. Set `agents.listen` to this box's tailnet address, for example
+`<tailnet-ip>:8765`, and configure each endpoint with
+`ws://<tailnet-ip>:8765`. Don't add it to any reverse-proxy block: endpoints
+reach it over the tailnet only. A new endpoint shows its fingerprint and waits
+in Settings → Agents until you approve it, once. To try the UI without real
+agents, run the fake endpoint from the dev box:
+`backend/.venv/bin/python backend/dev/fake_endpoint.py ws://<tailnet-ip>:8765 --scenario team`
+(scenarios: team, solo, drop, silent, multi, unmatched).
 
 User data lives under `backend/data/users/<identity-hash>/`: the SQLite
 database and the notes vault. Back that directory up, plus `config.yaml` and

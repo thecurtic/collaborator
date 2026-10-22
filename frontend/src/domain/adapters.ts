@@ -1,3 +1,4 @@
+import type { AgentQuestion } from '@/api/agents';
 import type {
   ApiAttachment,
   ApiChatCard,
@@ -427,6 +428,7 @@ export function toNoteMeta(api: ApiNoteMeta): NoteMeta {
     filename: api.filename,
     title: api.title,
     created: api.created ?? null,
+    edited: api.edited_at ?? null,
     tags: api.tags ?? [],
     sourceTurns: api.source_turns ?? [],
     links: api.links ?? [],
@@ -503,6 +505,7 @@ export function toNotificationSettings(
 
 const FEED_TYPES = new Set([
   'chat', 'note', 'event', 'approval', 'transcript', 'merged',
+  'agent_question', 'agent_message',
 ]);
 
 function num(v: unknown): number | undefined {
@@ -528,6 +531,11 @@ export function toFeedItem(api: ApiFeedItem): FeedItem {
       runId: typeof r.run_id === 'string' ? r.run_id : null,
       transcriptId: num(r.transcript_id),
       project: typeof r.project === 'string' ? r.project : null,
+      messageId: num(r.message_id),
+      endpointId: typeof r.endpoint_id === 'string' ? r.endpoint_id : undefined,
+      channel: typeof r.channel === 'string' ? r.channel : undefined,
+      question: r.question && typeof r.question === 'object'
+        ? (r.question as AgentQuestion) : null,
     },
   };
 }

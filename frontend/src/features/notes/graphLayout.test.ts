@@ -14,6 +14,7 @@ const meta = (title: string, links: string[] = []): NoteMeta => ({
   occurrence: null,
   recurring: false,
   moved: false,
+  edited: null,
 });
 
 describe('buildEdges', () => {

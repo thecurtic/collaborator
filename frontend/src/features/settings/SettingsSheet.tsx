@@ -16,6 +16,7 @@ import { SPEECH_RATE } from '@/features/voice/speechUtils';
 import { ApiRequestError, request } from '@/api/http';
 import { Button } from '@/components/ui/button';
 import { useModalA11y } from '@/lib/useModalA11y';
+import { AgentEndpointsSection } from './AgentEndpointsSection';
 import { NotificationsSection } from './NotificationsSection';
 import { ProjectOverridesSection } from './ProjectOverridesSection';
 import { useCapabilities } from '@/lib/capabilities';
@@ -856,6 +857,9 @@ export function SettingsSheet({
 
         {/* Server-backed, per user: which kinds notify (all optional). */}
         <NotificationsSection open={open} />
+
+        {/* Agent endpoints: approve new ones, forget old ones (when any). */}
+        <AgentEndpointsSection open={open} />
 
         {/* Project-name overrides, shown only when there are any. */}
         <ProjectOverridesSection open={open} />
