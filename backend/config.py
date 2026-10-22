@@ -301,6 +301,16 @@ def load_config() -> dict:
             "model": None,
             "prompt_file": "title-prompt.md",  # editable/auditable, like other layers
         },
+        "agents": {
+            # Agent endpoints (agents.py; the agent seam). Endpoints dial in
+            # on their OWN listener, never the app's port, so the public
+            # reverse proxy can't reach it: bind it to the tailnet address,
+            # e.g. "<tailnet-ip>:8765". None = off (no agent endpoints).
+            "listen": None,
+            "buffer_items": 500,         # live firehose lines kept per channel (memory only)
+            "max_frame_bytes": 1048576,  # largest frame an endpoint may send
+            "unreachable_after": 30,     # seconds without a connection before the badge says so
+        },
         "notifications": {
             # Kinds and their on/off live in the app (settings list, per
             # user); this block is only DELIVERY. Every notification is stored

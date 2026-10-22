@@ -965,7 +965,8 @@ dropped in Collaborator, never sent.
 
 The front door: one list ordered by **warmth**, the later of "last touched"
 and "last changed". Nothing is scored; shape weight only breaks ties
-(approval > event > merged > chat > transcript > note). Pinned items sit on
+(agent question > approval = agent message > event > merged > chat >
+transcript > note). Pinned items sit on
 top regardless of warmth.
 
 **`GET /api/feed?limit=50`** →
@@ -985,7 +986,9 @@ Types, what "changed" means, and `ref`:
 | `event` | an event note starting within 14 days; within 24 h of starting it counts as warm *now* on every load, so close events stay near the top | `title`, `start`, `all_day` |
 | `approval` | a pending draft's creation | `draft_id`, `run_id` |
 | `transcript` | a finished or failed transcription | `transcript_id`, `status` |
-| `merged` | merged agent work (no producer until the agent layer exists) | `merged_id`, `project` |
+| `merged` | merged agent work: an endpoint's `merged` event (quiet, never a notification) | `merged_id`, `project` |
+| `agent_question` | an open question from an agent channel; leaves once answered or closed | `message_id`, `project`, `endpoint_id`, `channel`, `question` |
+| `agent_message` | a message the backend flagged as needing the user, not yet seen; leaves once its channel is read. Plain unreads never appear | `message_id`, `project`, `endpoint_id`, `channel` |
 
 A note never touched or changed in the app doesn't appear. `warmth` is null
 for an upcoming event not yet within a day; such items sort last. Pinned items
@@ -994,7 +997,7 @@ don't count against `limit`.
 **`POST /api/feed/touch`** `{ "key": "chat:12" }` → record that the user opened
 it (chats, transcripts, …; notes are touched server-side when read). `422` for
 a malformed key (`chat:<id>`, `note:<title>`, `transcript:<id>`,
-`approval:<id>`, `merged:<id>`).
+`approval:<id>`, `merged:<id>`, `agent:<id>`).
 
 **`POST /api/feed/pin`** `{ "key": "note:raised beds", "pinned": true }` → pin or
 unpin.
@@ -1232,14 +1235,14 @@ token. Never an error status: a gate failure must not block anything.
 ### 25. Unified search
 
 One search over the user's own world: chats, notes (events included),
-Scratch, transcripts and attachments, grouped by pile. In-screen search bars
+Scratch, transcripts, attachments and agent conversations, grouped by pile. In-screen search bars
 use the same search scoped to their pile. **The user's search, not the
 model's:** it includes Scratch, so it is never offered as a tool or used for
 recall. Keyword matching, no model involved.
 
 **`GET /api/find?q=<words>&scope=<piles>&limit=5`** → `{ q, groups: [{ scope,
 total, items }] }`, piles in the order chats, notes, scratch, transcripts,
-attachments, empty ones left out. `scope` (comma-separated) narrows it;
+attachments, agents, empty ones left out. `scope` (comma-separated) narrows it;
 `limit` (1–100) is per pile; `422` for an unknown pile.
 
 An item: `{ type: "chat"|"note"|"scratch"|"transcript"|"attachment", id, title,
@@ -1248,7 +1251,158 @@ snippet, when, tags? }`. A chat is one result per conversation (`id` the root,
 and chat tags match too). A note's `id` is its title. Scratch matches every
 word against the text, what was read from it, the file name and a link's page
 title (the Scratch list's own `?q=` works the same way). Attachments carry
-`kind`, `mime` and `size`.
+`kind`, `mime` and `size`. An agent result (`type: "agent"`) is one stored
+message: `id`, `project`, `endpoint_id`, `channel`, `title` (the channel's
+label), `from` (`agent` | `you`). Firehose lines are never stored, so never found.
+
+### 26. Agents (the agent seam)
+
+Collaborator knows nothing about any agent backend. A backend is one or more
+**endpoints**; each declares **channels** per project tag, and Collaborator
+renders what a channel declares and nothing more. The design lives in the
+agent doc (*Collaborator Agent UX and Backend Seam*) and the UX doc's "When a
+project has agents".
+
+#### The endpoint wire protocol
+
+Endpoints dial in over one WebSocket each to **`agents.listen`**, a listener
+of its own, never the app's port, so the public reverse proxy can't route to
+it (bind it to the tailnet address). Frames are JSON text with a `type`.
+Everything except `hello`, `discovery` and `health` names a `project` (the
+tag, matched exactly against Collaborator's tags) and usually a `channel`
+(the endpoint's stable channel id, separate from its label). Unknown types and
+fields are ignored, so either side can grow.
+
+**Pairing.** The first frame is
+`{"type":"hello","key":"<random secret, 32+ chars, generated once by the endpoint>","name":"pm-box","protocol":1}`.
+An unknown key gets `{"type":"pairing","status":"pending","endpoint_id","fingerprint"}`
+and the connection stays open while the user compares the fingerprint
+(`a1b2-c3d4-e5f6-0718`, 16 hex of the key's SHA-256) in Settings → Agents and
+approves it, once. The endpoint is paired to the user who approves it; only
+the key's hash is stored. A known key, or the approval, gets
+`{"type":"welcome","protocol":1,"endpoint_id","fingerprint","acked":{"<project>/<channel>":<seq>}}`.
+A rebuilt box with a new key simply asks again. Frames from an endpoint that
+isn't paired are ignored.
+
+**Endpoint → Collaborator**
+
+| type | fields | what Collaborator does |
+|---|---|---|
+| `discovery` | `projects: [{tag, state: "active"\|"idle"}]` (or bare tags) | replaces the endpoint's project list; a project view gets channels when its tag matches |
+| `channel` | `project, channel, label, accepts_input, firehose, status, busy` (omitted = unchanged) | upserts the declaration. Labels are shown as-is, never read as roles |
+| `channel_removed` | `project, channel` | drops it |
+| `message` | `project, channel, id, seq, ts?, text, needs_reply?, question?` | stores it (deduped by `id`), acks `seq`. `needs_reply` or a question notifies once |
+| `question_closed` | `project, question_id, outcome: {option_ids?, text?, reason?}` | the question shows its outcome instead of live controls; its notification clears |
+| `firehose` | `project, channel, kind?, text, seq?, ts?, replay?` | the live buffer (memory only, `agents.buffer_items` per channel); never stored |
+| `event` | `project, channel?, event, text?, work_item?, commit?, url?` | the channel's status line becomes `text`; a marker drops into its firehose. `event: "merged"` lands quietly in the Feed. An http(s) `url` is the channel's preview link. Never chat, never a notification |
+| `health` | `state: "ok"\|"degraded", detail?, since?` | one quiet badge per project when any endpoint serving it is degraded; never a notification |
+| `ack` | `id` | an outbound message was received; it won't be resent |
+
+`seq` is per channel, assigned by the endpoint, and only on conversation
+messages. `welcome.acked` says the highest one Collaborator stored for each
+channel; the endpoint resends anything after it. Both sides dedupe by `id`.
+
+**A question** passes through whatever the harness asked:
+`{id, prompt, header?, options: [{id, label, description?}] | ["Allow","Block"], multiple?, freeform?, placeholder?, prefill?}`.
+No options means free text. `multiple` needs two or more options. A shape
+Collaborator can't use falls back to plain text. Mapping known harnesses:
+pi's `select` → options from its strings, `confirm` → two options, `input`
+/`editor` → free text (with `placeholder` / `prefill`); Claude Code's
+AskUserQuestion → `header`, options with descriptions, `multiple`, and
+`freeform: true` for its "Other". A request with several questions is sent as
+several question messages. A harness timeout resolving the question is the
+endpoint's `question_closed`.
+
+**Collaborator → endpoint**
+
+| type | fields |
+|---|---|
+| `message` | `project, channel, id, ts, text, note?, answer?`, queued and resent on every welcome until acked |
+| `ack` | `project, channel, seq, id`, for each stored message |
+| `history_request` | `project, channel, from_seq`: resend the channel's firehose from that sequence number (replay); the lines come back as `firehose` frames with `replay: true` |
+
+`text` is always the human-readable message, so a backend that reads only
+text loses nothing. A sent note adds `note: {id, title, body, tags}`: `id` is
+stable for that note across sends and renames, so a resend is an update the
+backend versions. An answer adds `answer: {question_id, option_ids, text}`.
+
+**Unreachable.** A dead endpoint can't report its own health: when a paired
+endpoint has no connection for `agents.unreachable_after` seconds, its
+projects' badge says unreachable (with since-when). Badge only, never a
+notification. When the user has paused the team with the inference switch,
+the badge says `paused` instead.
+
+#### The app's API
+
+**`GET /api/agents/endpoints`** → `{paired: [{id, name, fingerprint,
+approved_at, last_seen, connected, health}], pending: [{id, name, fingerprint,
+connected_at}]}`. **`POST /api/agents/endpoints/{id}/approve`** pairs a pending
+one to the signed-in user (`404` if it's not waiting). **`DELETE
+/api/agents/endpoints/{id}`** forgets one (or refuses a pending one); its stored
+conversation stays.
+
+**`GET /api/agents/projects`** → `{projects: [{tag, state, waiting, health}]}`:
+the tags this user's endpoints serve. `waiting` = open questions + flagged
+messages not yet seen: the Agents row's badge, and the Projects list's.
+`health` = `{state: "ok"|"degraded"|"paused", detail?, endpoints: [{id, name,
+health: {state: "ok"|"degraded"|"unreachable", detail?, since?}}]}`.
+
+**`GET /api/agents/projects/{tag}`** → `{tag, channels: [{endpoint_id,
+endpoint_name, channel, label, accepts_input, firehose, status, busy,
+preview_url, preview_text, unread, waiting, connected}], default: {endpoint_id,
+channel} | null, health}`. `default` is the channel that accepts input (the
+user's choice when several do); `null` = watch-only. `404` when no agents
+serve it.
+
+**`GET /api/agents/projects/{tag}/messages?endpoint_id&channel&before&limit`** →
+`{messages: [...]}`, oldest first. A message: `{id, endpoint_id, project,
+channel, msg_id, direction: "in"|"out", from: "agent"|"you", text, needs_reply,
+question, question_state: "open"|"answered"|"closed"|null, outcome, note,
+answer, created_at, delivered_at, read_at}`.
+
+**`POST /api/agents/projects/{tag}/messages`** `{text, endpoint_id?, channel?}` →
+`{message}`. Default: the project's default channel. `409` when the channel
+doesn't accept input (or the project is watch-only).
+
+**`POST /api/agents/projects/{tag}/read`** `{endpoint_id, channel}`: the user
+opened the channel. Its messages are read; flagged ones stop waiting and their
+notifications clear. Open questions keep waiting.
+
+**`PUT /api/agents/projects/{tag}/default`** `{endpoint_id, channel}` → keep the
+user's default (`409` for a channel that doesn't accept input).
+
+**`GET /api/agents/projects/{tag}/firehose?endpoint_id&channel`** → `{items:
+[{ts, kind, text, seq?, replay?} | {kind: "event", event, text, url?, ...}]}`,
+the live buffer. **`POST /api/agents/projects/{tag}/history`** `{endpoint_id,
+channel, from_seq}` → `{requested}` asks the endpoint to replay.
+
+**`POST /api/agents/questions/{message_id}/answer`** `{option_ids, text}` →
+`{answer, question}`. Same question wherever it shows (its channel or its Feed
+card); merge is one of these. `409` when it's no longer open, for text on an
+options-only question, or for an empty answer. Unknown option ids are dropped;
+a single-choice question keeps the first.
+
+**`GET /api/agents/notes/{title}`** → `{title, can_send, target: {project,
+endpoint_id, channel, label} | null, staged: {id, project, comment,
+created_at} | null, last_sent: {message_id, project, sent_at, delivered_at} |
+null}`. A note can be sent when it carries `project` plus a tag an endpoint
+serves whose project has a channel that accepts input; it goes to the default
+channel, no picker. **`POST /api/agents/notes/{title}/send`** `{comment?}` sends
+it (and settles a staged send; a staged comment rides along unless one is
+given). **`DELETE /api/agents/notes/{title}/staged`** discards what the model
+staged.
+
+**`WS /api/agents/live?ticket=<ws ticket>`**: server → client JSON, the
+signed-in user's updates: `message`, `channel`, `channel_removed`,
+`firehose`, `event`, `health`, `discovery`, `endpoint` (connected or not). The
+app reloads what it shows from the HTTP endpoints when it reconnects.
+
+**The model's side.** Two tools, offered only once agents serve a project:
+`stage_note_send` stages a note (nothing is sent until the user presses send
+in the note view) and `read_agent_messages` reads stored conversation
+messages, marked as untrusted agent output, used only when the user asks.
+Channel content otherwise stays out of recall and every other tool; the
+firehose never reaches the model.
 
 ## Data Models
 

@@ -20,6 +20,9 @@ KNOWN_API_VERSION = 1
 # be told apart from real ones (UX doc, Notifications: stops I caused don't
 # notify).
 _last_flip: Optional[float] = None
+# The switch's last known position (from status or a flip): agent health
+# shows "paused by you" instead of degraded while it's paused.
+_paused: bool = False
 
 
 def _cfg() -> Dict:
@@ -62,19 +65,24 @@ def _call(method: str, action: str) -> Dict:
 
 def status() -> Dict:
     """For the switch: {configured, online, paused, queued, in_flight, ...}."""
+    global _paused
     if not configured():
         return {"configured": False}
-    return {"configured": True, **_call("GET", "status")}
+    out = _call("GET", "status")
+    if out.get("online"):
+        _paused = bool(out.get("paused"))
+    return {"configured": True, **out}
 
 
 def set_paused(paused: bool) -> Dict:
     """Pause (Collaborator only) or resume (all requests)."""
-    global _last_flip
+    global _last_flip, _paused
     if not configured():
         return {"configured": False}
     out = _call("POST", "pause" if paused else "resume")
     if out.get("online"):
         _last_flip = time.monotonic()
+        _paused = bool(out.get("paused", paused))
     return {"configured": True, **out}
 
 
@@ -83,3 +91,8 @@ def flipped_within(seconds: float) -> bool:
     the agents report around then was caused by the user, and doesn't
     notify (the agent_stops producer, once the agent team exists)."""
     return _last_flip is not None and time.monotonic() - _last_flip <= seconds
+
+
+def paused_by_user() -> bool:
+    """The user's switch is holding the agents' requests (Collaborator only)."""
+    return configured() and _paused

@@ -68,3 +68,4 @@ venv/
 
 # Worktrees (keep hidden)
 .worktrees/
+.fake-endpoint-*.key

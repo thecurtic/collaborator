@@ -1,5 +1,5 @@
 """Unified search: one search over my own world (UX doc, Search) — chats,
-notes, Scratch, transcripts and attachments at once, grouped by pile. A
+notes, Scratch, transcripts, attachments and agent conversations at once, grouped by pile. A
 search bar inside a screen is the same search, scoped to that pile.
 
 THIS IS THE USER'S SEARCH, NOT THE MODEL'S. It includes Scratch, which the
@@ -12,11 +12,12 @@ import re
 import sqlite3
 from typing import Dict, List, Optional
 
+import agents
 import attachments
 import notes_index
 from db import _parse_tags, get_root_id, list_scratch, search_keyword_turns, search_transcripts
 
-SCOPES = ("chats", "notes", "scratch", "transcripts", "attachments")
+SCOPES = ("chats", "notes", "scratch", "transcripts", "attachments", "agents")
 
 
 def _terms(q: str) -> List[str]:
@@ -134,8 +135,25 @@ def _attachments(conn, q: str, limit: int) -> Dict:
     return {"total": len(items), "items": items[:limit]}
 
 
+def _agents(conn, q: str, limit: int) -> Dict:
+    """Stored agent conversations (the user's search only: channel content
+    stays out of recall and the model's tools; the firehose is never stored)."""
+    terms = _terms(q)
+    if not terms:
+        return {"total": 0, "items": []}
+    found = agents.search_messages(conn, terms, limit=200)
+    labels = {(e, p, c): l for e, p, c, l in conn.execute(
+        "SELECT endpoint_id, project, channel, label FROM agent_channels")}
+    items = [{"type": "agent", "id": m["id"], "project": m["project"],
+              "endpoint_id": m["endpoint_id"], "channel": m["channel"],
+              "title": labels.get((m["endpoint_id"], m["project"], m["channel"]), m["channel"]),
+              "from": m["from"], "snippet": _snippet(m["text"], terms),
+              "when": m["created_at"]} for m in found]
+    return {"total": len(items), "items": items[:limit]}
+
+
 _PILES = {"chats": _chats, "notes": _notes, "scratch": _scratch,
-          "transcripts": _transcripts, "attachments": _attachments}
+          "transcripts": _transcripts, "attachments": _attachments, "agents": _agents}
 
 
 def search(db_path: str, q: str, scopes: Optional[List[str]] = None,

@@ -22,10 +22,11 @@ from config import get_config
 
 # The settings list, in display order. Adding a kind = one entry here.
 KINDS: List[Dict] = [
-    {"kind": "agent_stops", "label": "Agent team stops",
-     "description": "An agent stops because it needs you (a question, work to "
-                    "review) or because something broke. Stops you caused, like "
-                    "the inference switch, never notify.",
+    {"kind": "agent_stops", "label": "Agents need you",
+     "description": "A question from an agent, or a message its backend flags "
+                    "as needing you. It notifies once and clears when the "
+                    "question closes. Trouble with an endpoint never notifies; "
+                    "it shows as a badge on the project.",
      "default": True},
     {"kind": "transcript_ready", "label": "Transcript ready",
      "description": "A long video finished transcribing in the background, or "
@@ -52,6 +53,12 @@ def ensure_schema(conn) -> None:
             delivered TEXT
         )
     """)
+    cols = {r[1] for r in cur.execute("PRAGMA table_info(notifications)")}
+    if "sequence_id" not in cols:
+        # ntfy's sequence id: a later clear() dismisses it on the phone.
+        cur.execute("ALTER TABLE notifications ADD COLUMN sequence_id TEXT")
+    if "cleared_at" not in cols:
+        cur.execute("ALTER TABLE notifications ADD COLUMN cleared_at TEXT")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS notification_settings (
             kind TEXT PRIMARY KEY,
@@ -135,7 +142,7 @@ def _click_url(link: Optional[str]) -> Optional[str]:
 
 
 def send_ntfy(user_key: str, title: str, body: str,
-               link: Optional[str]) -> str:
+               link: Optional[str], sequence_id: Optional[str] = None) -> str:
     """POST to the user's ntfy topic. Returns a short delivery status."""
     ncfg = _cfg().get("ntfy") or {}
     url = (ncfg.get("url") or "").strip().rstrip("/")
@@ -144,6 +151,8 @@ def send_ntfy(user_key: str, title: str, body: str,
         return "not configured"
     # JSON publishing (POST to the server root): UTF-8 safe, unlike headers.
     payload = {"topic": topic, "title": title, "message": body or title}
+    if sequence_id:
+        payload["sequence_id"] = sequence_id
     click = _click_url(link)
     if click:
         payload["click"] = click
@@ -163,13 +172,15 @@ def send_ntfy(user_key: str, title: str, body: str,
 
 def notify(db_path: str, kind: str, title: str, body: str = "",
            link: Optional[str] = None, user_caused: bool = False,
-           background: bool = True) -> Optional[Dict]:
+           background: bool = True,
+           sequence_id: Optional[str] = None) -> Optional[Dict]:
     """Record a notification and deliver it. Returns the stored row, or None
     when it was suppressed (kind off, or a stop the user caused).
 
     `link` is an in-app path like "?open=transcript:12"; with
     notifications.app_url set, tapping the phone notification opens it.
     Delivery runs on a daemon thread unless background=False (tests).
+    `sequence_id` names it for ntfy, so clear() can dismiss it later.
     """
     if kind not in _KIND_IDS:
         raise ValueError(f"unknown notification kind: {kind}")
@@ -181,8 +192,8 @@ def notify(db_path: str, kind: str, title: str, body: str = "",
         if not enabled.get(kind):
             return None
         cur = conn.execute(
-            "INSERT INTO notifications (kind, title, body, link) VALUES (?, ?, ?, ?)",
-            (kind, title, body, link))
+            "INSERT INTO notifications (kind, title, body, link, sequence_id) "
+            "VALUES (?, ?, ?, ?, ?)", (kind, title, body, link, sequence_id))
         conn.commit()
         nid = cur.lastrowid
     finally:
@@ -191,7 +202,7 @@ def notify(db_path: str, kind: str, title: str, body: str = "",
     user_key = user_key_for_db(db_path)
 
     def _deliver():
-        status = send_ntfy(user_key, title, body, link)
+        status = send_ntfy(user_key, title, body, link, sequence_id)
         c = sqlite3.connect(db_path)
         try:
             c.execute("UPDATE notifications SET delivered = ? WHERE id = ?",
@@ -219,3 +230,41 @@ def get_notification(db_path: str, nid: int) -> Optional[Dict]:
         conn.close()
     cols = ["id", "kind", "title", "body", "link", "created_at", "delivered"]
     return dict(zip(cols, row)) if row else None
+
+
+def clear(db_path: str, sequence_id: str, background: bool = True) -> None:
+    """The thing a notification was about stopped waiting (a question closed
+    or was answered): mark it cleared here and dismiss it on the phone
+    (ntfy: PUT /<topic>/<sequence_id>/clear)."""
+    conn = sqlite3.connect(db_path)
+    try:
+        ensure_schema(conn)
+        cur = conn.execute(
+            "UPDATE notifications SET cleared_at = datetime('now') "
+            "WHERE sequence_id = ? AND cleared_at IS NULL", (sequence_id,))
+        conn.commit()
+        if not cur.rowcount:
+            return
+    finally:
+        conn.close()
+    user_key = user_key_for_db(db_path)
+
+    def _clear():
+        ncfg = _cfg().get("ntfy") or {}
+        url = (ncfg.get("url") or "").strip().rstrip("/")
+        topic = ntfy_topic_for(user_key)
+        if not url or not topic:
+            return
+        headers = {}
+        if ncfg.get("token"):
+            headers["Authorization"] = f"Bearer {ncfg['token']}"
+        try:
+            requests.put(f"{url}/{topic}/{sequence_id}/clear", headers=headers,
+                         timeout=ncfg.get("timeout", 10)).raise_for_status()
+        except Exception as e:
+            print(f"Warning: ntfy clear failed: {e}")
+
+    if background:
+        threading.Thread(target=_clear, daemon=True, name=f"notify-clear").start()
+    else:
+        _clear()

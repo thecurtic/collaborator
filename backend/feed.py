@@ -14,8 +14,12 @@ Item types and what "changed" means for each:
               events stay near the top
   approval    a pending draft (its creation)
   transcript  a finished or failed transcription (its finish)
-  merged      merged agent work — a supported type with no producer until the
-              agent layer exists; producers call record_merged()
+  merged      merged agent work: the agent seam records it when an endpoint
+              sends a `merged` event (agents.py); quiet, never a notification
+  agent_question / agent_message
+              an open question from an agent channel, or a message its
+              backend flagged as needing me and I haven't seen; it leaves
+              once answered, closed or read. Plain unreads never appear
 
 Activity (touched/changed) and pins live in the per-user DB; nothing here is
 stored in the vault, so the notes-index invariant is untouched.
@@ -26,8 +30,8 @@ import sqlite3
 from typing import Dict, List, Optional
 
 # Tie-break order (higher wins at equal warmth): what needs me first.
-SHAPE_WEIGHT = {"approval": 6, "event": 5, "merged": 4, "chat": 3,
-                "transcript": 2, "note": 1}
+SHAPE_WEIGHT = {"agent_question": 8, "approval": 6, "agent_message": 6, "event": 5,
+                "merged": 4, "chat": 3, "transcript": 2, "note": 1}
 EVENT_WINDOW_DAYS = 14
 EVENT_WARMS_HOURS = 24
 FEED_LIMIT = 50
@@ -273,6 +277,14 @@ def _merged_items(conn, activity) -> List[Dict]:
     return out
 
 
+def _agent_items(conn) -> List[Dict]:
+    import agents   # lazy: agents imports feed
+    items = agents.feed_items(conn)
+    for item in items:
+        item["warmth"] = _parse(item["warmth"])
+    return items
+
+
 def build_feed(conn, limit: int = FEED_LIMIT) -> Dict:
     """{pinned: [...], items: [...]}, each item {key, type, title, subtitle,
     warmth (ISO UTC), tags, ref, pinned}. Pinned items are pulled out on top
@@ -282,7 +294,7 @@ def build_feed(conn, limit: int = FEED_LIMIT) -> Dict:
     activity = _activity(conn)
     items = (_chat_items(conn, activity) + _note_and_event_items(conn, activity, now)
              + _approval_items(conn) + _transcript_items(conn, activity)
-             + _merged_items(conn, activity))
+             + _merged_items(conn, activity) + _agent_items(conn))
     pins = dict(conn.execute("SELECT key, pinned_at FROM feed_pins").fetchall())
     epoch = _dt.datetime.min.replace(tzinfo=_dt.timezone.utc)
     items.sort(key=lambda i: (i["warmth"] or epoch, SHAPE_WEIGHT.get(i["type"], 0)),
