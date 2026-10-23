@@ -5,7 +5,8 @@ while it moves) and the UX doc's "When a project has agents". Collaborator
 knows nothing about any agent backend. A backend is one or more ENDPOINTS;
 each dials in over one WebSocket and declares channels per project tag.
 Collaborator renders what a channel declares and nothing more: a label, whether
-it accepts input, whether it has a firehose, a status line, busy.
+it accepts input, whether it has a firehose, a status line, busy, and what a
+message sent while busy does (midturn_input: steers or queues).
 
 The wire format is in API-SPEC.md ("Agent endpoints"). In short, JSON frames
 with a `type`; endpoint -> Collaborator: hello, discovery, channel,
@@ -148,11 +149,16 @@ def ensure_schema(conn) -> None:
             firehose INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT '',
             busy INTEGER NOT NULL DEFAULT 0,
+            midturn_input TEXT NOT NULL DEFAULT 'queues',
             preview_url TEXT,
             preview_text TEXT,
             updated_at TEXT NOT NULL,
             PRIMARY KEY (endpoint_id, project, channel)
         )""")
+    chan_cols = {row[1] for row in conn.execute("PRAGMA table_info(agent_channels)").fetchall()}
+    if "midturn_input" not in chan_cols:
+        conn.execute("ALTER TABLE agent_channels ADD COLUMN midturn_input TEXT NOT NULL "
+                     "DEFAULT 'queues'")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS agent_projects (
             endpoint_id TEXT NOT NULL,
@@ -317,7 +323,7 @@ def rename_note(conn, old_title: str, new_title: str) -> None:
 # --- Channels, projects, defaults (per user) --------------------------------------
 
 _CHAN_COLS = ["endpoint_id", "project", "channel", "label", "accepts_input",
-              "firehose", "status", "busy", "preview_url", "preview_text", "updated_at"]
+              "firehose", "status", "busy", "midturn_input", "preview_url", "preview_text", "updated_at"]
 
 
 def _chan_row(row) -> Dict:
@@ -814,15 +820,19 @@ class Hub:
                 "firehose": bool(f["firehose"]) if "firehose" in f else cur.get("firehose", False),
                 "status": _clip(f["status"], 300) if "status" in f else cur.get("status", ""),
                 "busy": bool(f["busy"]) if "busy" in f else cur.get("busy", False),
+                # What a message sent while busy does; the endpoint decides, we only say it.
+                "midturn_input": ("steers" if f["midturn_input"] == "steers" else "queues")
+                if "midturn_input" in f else cur.get("midturn_input", "queues"),
             }
             conn.execute(
                 "INSERT INTO agent_channels (endpoint_id, project, channel, label, accepts_input, "
-                "firehose, status, busy, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "firehose, status, busy, midturn_input, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(endpoint_id, project, channel) DO UPDATE SET label = excluded.label, "
                 "accepts_input = excluded.accepts_input, firehose = excluded.firehose, "
-                "status = excluded.status, busy = excluded.busy, updated_at = excluded.updated_at",
+                "status = excluded.status, busy = excluded.busy, "
+                "midturn_input = excluded.midturn_input, updated_at = excluded.updated_at",
                 (ep.id, project, channel, label, int(row["accepts_input"]), int(row["firehose"]),
-                 row["status"], int(row["busy"]), _now_iso()))
+                 row["status"], int(row["busy"]), row["midturn_input"], _now_iso()))
             conn.commit()
             c = get_channel(conn, project, ep.id, channel)
         finally:

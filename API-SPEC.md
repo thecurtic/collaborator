@@ -1292,7 +1292,7 @@ isn't paired are ignored.
 | type | fields | what Collaborator does |
 |---|---|---|
 | `discovery` | `projects: [{tag, state: "active"\|"idle"}]` (or bare tags) | replaces the endpoint's project list; a project view gets channels when its tag matches |
-| `channel` | `project, channel, label, accepts_input, firehose, status, busy` (omitted = unchanged) | upserts the declaration. Labels are shown as-is, never read as roles |
+| `channel` | `project, channel, label, accepts_input, firehose, status, busy, midturn_input?` (omitted = unchanged) | upserts the declaration. Labels are shown as-is, never read as roles. `midturn_input` (`"steers"`\|`"queues"`, default and anything else = `"queues"`) says what a message sent while `busy` does; it only changes the composer hint, the endpoint decides |
 | `channel_removed` | `project, channel` | drops it |
 | `message` | `project, channel, id, seq, ts?, text, needs_reply?, question?` | stores it (deduped by `id`), acks `seq`. `needs_reply` or a question notifies once |
 | `question_closed` | `project, question_id, outcome: {option_ids?, text?, reason?}` | the question shows its outcome instead of live controls; its notification clears |
@@ -1352,7 +1352,7 @@ health: {state: "ok"|"degraded"|"unreachable", detail?, since?}}]}`.
 
 **`GET /api/agents/projects/{tag}`** → `{tag, channels: [{endpoint_id,
 endpoint_name, channel, label, accepts_input, firehose, status, busy,
-preview_url, preview_text, unread, waiting, connected}], default: {endpoint_id,
+midturn_input, preview_url, preview_text, unread, waiting, connected}], default: {endpoint_id,
 channel} | null, health}`. `default` is the channel that accepts input (the
 user's choice when several do); `null` = watch-only. `404` when no agents
 serve it.

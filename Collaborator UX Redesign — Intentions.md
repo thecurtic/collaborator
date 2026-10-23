@@ -125,10 +125,10 @@ Everything below is the agent area, reached from the Agents row at the top of th
 
 Chats are me thinking with Collaborator (extended cognition); agent channels are me delegating. They look different.
 
-- A backend exposes channels. Each declares a label, whether it accepts input, whether it has a firehose, a one-line status, and whether it's busy. Collaborator shows the label as it arrives and never names a role: no "PM", "engineer" or "auditor" anywhere in the UI, and no generic name for the default channel either.
+- A backend exposes channels. Each declares a label, whether it accepts input, whether it has a firehose, a one-line status, whether it's busy, and what a message sent while it's busy does (steers into the current turn, or queues after it). Collaborator shows the label as it arrives and never names a role: no "PM", "engineer" or "auditor" anywhere in the UI, and no generic name for the default channel either.
 - The default channel is the one that accepts input, and its conversation is where opening the agent area lands, with the channel strip and tabs around it. If several accept input, I choose the default and Collaborator remembers it. If none does, the project is watch-only.
 - Channels that don't accept input are read-only: a status line and a firehose to watch. Talking to one of them directly (the old engineer Q&A) is out for now. With pi-session-manager only the PM's channel accepts input; that is the backend's policy, expressed through its flags, not a Collaborator rule.
-- When the other side is mid-turn, the input shows that my message is queued, so I never resend.
+- When the other side is mid-turn, the input says what my message will do, as the channel declared it: delivered into its current turn, or answered after it. Either way I never resend.
 - Channel conversations live in their own table, never in Chats: the messages in input-accepting channels, questions and their answers, kept for catch-up and history. The firehose is never stored beyond a short in-memory live buffer; the backend owns that record.
 - The conversation moves over from Telegram once this UX is settled.
 

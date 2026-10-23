@@ -113,6 +113,23 @@ def test_channels_default_and_watch_only():
     print("✓ default = the channel that accepts input; none = watch-only")
 
 
+def test_midturn_input_defaults_to_queues_and_survives_omission():
+    c, path, hub = _fresh()
+    ws, ep = _paired(c, hub)
+    _team(hub, ep)
+    mode = lambda: {ch["channel"]: ch["midturn_input"]
+                    for ch in c.get("/api/agents/projects/blockswap").json()["channels"]}
+    assert mode() == {"pm/blockswap": "queues", "eng/blockswap": "queues"}
+    run(hub._frame(ep, {"type": "channel", "project": "blockswap", "channel": "pm/blockswap",
+                        "midturn_input": "steers"}))
+    run(hub._frame(ep, {"type": "channel", "project": "blockswap", "channel": "pm/blockswap",
+                        "busy": True}))
+    run(hub._frame(ep, {"type": "channel", "project": "blockswap", "channel": "eng/blockswap",
+                        "midturn_input": "bogus"}))
+    assert mode() == {"pm/blockswap": "steers", "eng/blockswap": "queues"}
+    print("✓ midturn_input: missing = queues, omitted = unchanged, unknown = queues")
+
+
 def test_conversation_catch_up_both_ways_and_dedupe():
     c, path, hub = _fresh()
     ws, ep = _paired(c, hub)

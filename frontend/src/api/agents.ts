@@ -4,7 +4,7 @@ import { request } from '@/api/http';
 /**
  * The agent seam, the app's side (API-SPEC.md §26). Collaborator knows
  * nothing about any agent backend: it renders what each channel declares
- * (label, accepts input, firehose, status, busy) and nothing more.
+ * (label, accepts input, firehose, status, busy, midturn input) and nothing more.
  */
 
 /** A question passed through from whatever harness asked it. */
@@ -50,6 +50,8 @@ export interface AgentChannel {
   firehose: boolean;
   status: string;
   busy: boolean;
+  /** What a message sent while busy does: delivered into the turn, or after it. */
+  midturnInput: 'steers' | 'queues';
   previewUrl: string | null;
   previewText: string | null;
   unread: number;
@@ -115,7 +117,8 @@ export function toChannel(c: Raw): AgentChannel {
   return {
     endpointId: c.endpoint_id, endpointName: c.endpoint_name ?? '', channel: c.channel,
     label: c.label, acceptsInput: !!c.accepts_input, firehose: !!c.firehose,
-    status: c.status ?? '', busy: !!c.busy, previewUrl: c.preview_url ?? null,
+    status: c.status ?? '', busy: !!c.busy,
+    midturnInput: c.midturn_input === 'steers' ? 'steers' : 'queues', previewUrl: c.preview_url ?? null,
     previewText: c.preview_text ?? null, unread: c.unread ?? 0, waiting: c.waiting ?? 0,
     connected: c.connected !== false,
   };

@@ -291,7 +291,9 @@ function Composer({ channel, onSend }: { channel: AgentChannel; onSend: (text: s
     <div className="border-t border-border px-3 py-2">
       {channel.busy && (
         <p className="mb-1.5 text-[11px] text-muted-foreground">
-          {channel.label} is mid-turn: your message is queued and answered after the current turn.
+          {channel.label} is mid-turn: your message is {channel.midturnInput === 'steers'
+            ? 'delivered into its current turn'
+            : 'queued and answered after the current turn'}.
         </p>
       )}
       {!channel.connected && (
