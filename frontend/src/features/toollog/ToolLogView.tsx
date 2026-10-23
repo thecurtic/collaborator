@@ -16,9 +16,11 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { ActionSheet } from '@/components/ActionSheet';
 import { ActiveFilter, ListFilterButton } from '@/components/ListFilter';
 import { Button } from '@/components/ui/button';
+import { useModalA11y } from '@/lib/useModalA11y';
 import { cn } from '@/lib/utils';
 import {
   toolLogApi,
@@ -356,11 +358,114 @@ function CallDetail({
   );
 }
 
-function Tile({ label, value, tone }: { label: string; value: number | string; tone?: string }) {
+/** What each kind of tool can do, in the order the help sheet lists them. */
+const KIND_HELP: { category: ToolCategory; risk: boolean; examples: string }[] = [
+  { category: 'money', risk: true, examples: 'paying or requesting from the wallet, paid search' },
+  { category: 'outbound', risk: true, examples: 'web search, reading or screenshotting a page, downloading a video, filing a git issue' },
+  { category: 'writes', risk: true, examples: 'drafting a note or an edit, staging a note to send to an agent (all wait for your approval)' },
+  { category: 'other', risk: true, examples: 'a tool the log doesn\'t know yet, counted as risky until it\'s sorted' },
+  { category: 'reads', risk: false, examples: 'searching memory and notes, reading notes, transcripts, files, the calendar and logs, checking the balance' },
+  { category: 'compute', risk: false, examples: 'arithmetic, the date, summarizing what it already found' },
+];
+
+/** The "?" explainer: what Risk only screens for and what the badges mean. */
+function RiskHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const panelRef = useModalA11y<HTMLDivElement>(open, onClose);
+  if (!open) return null;
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <button aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/60" />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="About risk"
+        tabIndex={-1}
+        className="pb-safe relative max-h-[85vh] w-full overflow-y-auto rounded-t-2xl border border-border bg-card px-5 py-4 outline-none sm:max-w-md sm:rounded-2xl"
+      >
+        <div className="mb-3 flex items-center gap-2">
+          <h2 className="flex-1 text-base font-semibold">What counts as risky</h2>
+          <Button variant="ghost" size="icon" aria-label="Close" onClick={onClose} className="h-8 w-8">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Every tool call is sorted by what the tool <em>can</em> do, not by whether this call went
+          wrong. <strong className="text-foreground">Risk only</strong> shows the kinds worth a
+          glance; <strong className="text-foreground">Riskier calls</strong> counts them in the
+          current range and filters. Risky doesn&rsquo;t mean bad. Check that you asked for it.
+        </p>
+        <ul className="mt-4 space-y-3">
+          {KIND_HELP.map((k) => (
+            <li key={k.category} className="flex gap-3">
+              <CategoryIcon category={k.category} />
+              <div className="min-w-0 flex-1 text-sm">
+                <div className="flex items-center gap-2 font-medium">
+                  {CATEGORY_LABEL[k.category]}
+                  {k.risk && (
+                    <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                      risk only
+                    </span>
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground">{k.examples}</div>
+              </div>
+            </li>
+          ))}
+        </ul>
+        <h3 className="mt-5 text-sm font-semibold">The badges</h3>
+        <dl className="mt-2 space-y-1.5 text-sm">
+          {(
+            [
+              ['ok', 'ran and returned something'],
+              ['nothing found', 'ran and came back empty'],
+              ['failed', 'errored, was blocked by a guard (fetch budget, wallet cap…), or was malformed'],
+              ['recovered', 'the model wrote the call as text instead of calling it properly; it was run anyway'],
+            ] as const
+          ).map(([term, meaning]) => (
+            <div key={term} className="flex gap-2">
+              <dt className="w-28 shrink-0 font-medium">{term}</dt>
+              <dd className="text-muted-foreground">{meaning}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-4 text-xs text-muted-foreground">
+          Arguments are kept in full; results only as their size and their start. Only the model
+          inside Collaborator is logged, never connected agents.
+        </p>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function Tile({
+  label,
+  value,
+  tone,
+  onHelp,
+}: {
+  label: string;
+  value: number | string;
+  tone?: string;
+  onHelp?: () => void;
+}) {
   return (
     <div className="rounded-lg border border-border px-3 py-2">
       <div className={cn('text-lg font-semibold tabular-nums', tone)}>{value}</div>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+        {label}
+        {onHelp && (
+          <button
+            type="button"
+            aria-label={`What “${label}” means`}
+            onClick={onHelp}
+            className="rounded-full text-muted-foreground/70 hover:text-foreground"
+          >
+            <CircleHelp className="h-3 w-3" />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -381,10 +486,12 @@ function StatsPanel({
   stats,
   sort,
   onPickTool,
+  onHelp,
 }: {
   stats: ToolStats;
   sort: StatSort;
   onPickTool: (tool: string) => void;
+  onHelp: () => void;
 }) {
   const t = stats.totals;
   const max = Math.max(1, ...stats.daily.map((d) => d.count));
@@ -393,7 +500,12 @@ function StatsPanel({
     <div className="space-y-4 px-4 py-4">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Tile label="Calls" value={t.calls} />
-        <Tile label="Riskier calls" value={t.risk} tone={t.risk ? 'text-amber-600' : undefined} />
+        <Tile
+          label="Riskier calls"
+          value={t.risk}
+          tone={t.risk ? 'text-amber-600' : undefined}
+          onHelp={onHelp}
+        />
         <Tile label="Failed or blocked" value={t.errors} tone={t.errors ? 'text-destructive' : undefined} />
         <Tile label="Recovered from text" value={t.recovered} />
       </div>
@@ -474,6 +586,7 @@ export function ToolLogView({ onOpenTurn }: { onOpenTurn?: (turnId: number) => v
   const [sortIdx, setSortIdx] = useState(0);
   const [statSort, setStatSort] = useState<StatSort>('count');
   const [sortOpen, setSortOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const [calls, setCalls] = useState<ToolCall[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -584,6 +697,15 @@ export function ToolLogView({ onOpenTurn }: { onOpenTurn?: (turnId: number) => v
           >
             <ShieldAlert className="h-3.5 w-3.5" /> Risk only
           </button>
+          <button
+            type="button"
+            aria-label="What counts as risky"
+            title="What counts as risky"
+            onClick={() => setHelpOpen(true)}
+            className="-ml-1 rounded-full p-1 text-muted-foreground/70 hover:text-foreground"
+          >
+            <CircleHelp className="h-4 w-4" />
+          </button>
           <span className="flex-1" />
           <Button
             variant="ghost"
@@ -672,6 +794,7 @@ export function ToolLogView({ onOpenTurn }: { onOpenTurn?: (turnId: number) => v
         }
         onClose={() => setSortOpen(false)}
       />
+      <RiskHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
 
       <div className="flex-1 overflow-y-auto overscroll-contain">
         {error && <p className="px-4 py-3 text-sm text-destructive">{error}</p>}
@@ -688,6 +811,7 @@ export function ToolLogView({ onOpenTurn }: { onOpenTurn?: (turnId: number) => v
                 setTool(t);
                 setTab('calls');
               }}
+              onHelp={() => setHelpOpen(true)}
             />
           )
         ) : calls === null ? (
