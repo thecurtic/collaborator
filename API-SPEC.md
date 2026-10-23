@@ -1407,6 +1407,63 @@ messages, marked as untrusted agent output, used only when the user asks.
 Channel content otherwise stays out of recall and every other tool; the
 firehose never reaches the model.
 
+### 27. Tool log (every tool call the model made)
+
+The audit trail of Collaborator's own model: one row per tool call from chat,
+voice calls (`source: "call"`) and Scratch actions, written by the code as the
+call finishes (`backend/tool_log.py`; design in `INTENTS.md`). Agent backends
+never appear. Arguments are kept in full; results as `result_chars` plus a
+preview of `tools.log.preview_chars` characters. Times are UTC
+`YYYY-MM-DD HH:MM:SS`.
+
+`category` is what the call can do: `money` | `outbound` | `writes` | `reads`
+| `compute` | `other`. `risk` is true for money, outbound, writes and other.
+`outcome` is `ok` | `empty` (ran, found nothing) | `error` (failed, blocked or
+malformed) | `unknown` (backfilled without one).
+
+Shared filters (all optional, on both list and stats): `tool`, `category`,
+`risk=true`, `outcome`, `source` (`chat` | `call` | `scratch`), `model`,
+`since`, `until` (UTC, ISO or SQLite form), `q` (every word must appear in
+the arguments, tool name or trigger). An unknown `category` is `422`.
+
+**`GET /api/tool-calls`** `?sort=time|tool|category|duration|outcome|uses`
+`&order=desc|asc&limit=100&offset=0` + filters →
+```json
+{ "total": 212,
+  "calls": [{ "id": 9, "ts": "2026-10-23 01:12:04", "source": "chat",
+              "root_id": 40, "turn_id": 52, "round": 0,
+              "tool": "fetch_url", "category": "outbound", "risk": true,
+              "args": { "url": "https://example.org" },
+              "label": "Reading https://example.org",
+              "outcome": "ok", "error": null, "result_chars": 18342,
+              "duration_ms": 640, "model": "<model-id>",
+              "recovered": false, "backfilled": false,
+              "trigger": "what does this page say?", "uses": 31 }] }
+```
+`uses` is how often that tool appears in the filtered set (what `sort=uses`
+orders by). `recovered` = the model wrote the call as text and it was
+recovered. `turn_id`/`root_id` are the reply and its conversation (null for
+Scratch actions). Unknown `sort` is `422`; `limit` is capped at 500.
+
+**`GET /api/tool-calls/stats`** + filters →
+```json
+{ "tools": [{ "tool": "fetch_url", "category": "outbound", "risk": true,
+              "count": 31, "errors": 2, "empty": 0, "recovered": 0,
+              "error_rate": 0.065, "avg_ms": 710, "p95_ms": 1900,
+              "avg_result_chars": 15020,
+              "first_used": "...", "last_used": "..." }],
+  "totals": { "calls": 212, "errors": 9, "empty": 14, "risk": 58,
+              "recovered": 3, "by_category": { "reads": 120 },
+              "by_source": { "chat": 200 }, "by_model": { "<model-id>": 212 } },
+  "daily": [{ "day": "2026-10-23", "count": 17 }] }
+```
+`tools` is most-used first.
+
+**`GET /api/tool-calls/{id}`** → one call as in the list, plus
+`result_preview`, `run_id`, `turn_exists` (the reply may since have been
+deleted) and `siblings` (`[{id, tool, outcome}]`, every call of the same
+reply in order). `404` if unknown.
+
 ## Data Models
 
 ### Turn

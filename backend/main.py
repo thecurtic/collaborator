@@ -52,6 +52,7 @@ import attachments
 import vision
 import wallet
 import scratch
+import tool_log
 import link_preview
 import gate_client
 import unified_search
@@ -2266,6 +2267,9 @@ def _stream_turn_response(
                     emit_results=tcfg.get("show_step_results", False),
                     extra_system=dynamic_context,
                     images=images,
+                    on_tool_call=tool_log.recorder(
+                        db_path, "call" if mode == "voice" else "chat",
+                        tool_state["chat_run_id"], trigger=message),
                 ):
                     if ev.get("type") == "token":
                         full_response += ev["content"]
@@ -2390,6 +2394,11 @@ def _stream_turn_response(
                                 conn, assistant_turn["id"], tool_activity)
                         except Exception:
                             pass
+                    try:
+                        tool_log.attach_turn(conn, tool_state["chat_run_id"],
+                                             assistant_turn["id"], root_id)
+                    except Exception as e:
+                        print(f"Warning: tool log turn link failed: {e}")
             finally:
                 conn.close()
         except Exception as e:
@@ -4081,6 +4090,83 @@ def delete_attachment(
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return {"deleted": attachment_id}
+
+
+def _tool_log_filters(tool, category, risk, outcome, source, model, since,
+                      until, q) -> dict:
+    """Shared query filters for the tool log. Times are UTC, ISO or SQLite
+    form; the log stores 'YYYY-MM-DD HH:MM:SS'."""
+    def _ts(v):
+        return v.replace("T", " ").rstrip("Z")[:19] if v else None
+    if category and category not in tool_log.CATEGORIES:
+        raise HTTPException(status_code=422, detail="unknown category")
+    return {"tool": tool, "category": category, "risk": bool(risk),
+            "outcome": outcome, "source": source, "model": model,
+            "since": _ts(since), "until": _ts(until), "q": (q or "").strip() or None}
+
+
+@app.get("/api/tool-calls")
+async def list_tool_calls(
+    sort: str = "time", order: str = "desc", limit: int = 100, offset: int = 0,
+    tool: Optional[str] = None, category: Optional[str] = None,
+    risk: bool = False, outcome: Optional[str] = None,
+    source: Optional[str] = None, model: Optional[str] = None,
+    since: Optional[str] = None, until: Optional[str] = None,
+    q: Optional[str] = None,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """The tool-call log: every call Collaborator's own model made (tool_log.py).
+    Sorted server-side (time, tool, category, duration, outcome, uses)."""
+    _require_auth(passkey)
+    filters = _tool_log_filters(tool, category, risk, outcome, source, model,
+                                since, until, q)
+    conn = sqlite3.connect(_resolve_db_path(passkey))
+    try:
+        return tool_log.list_calls(conn, sort=sort, order=order,
+                                   limit=max(1, min(limit, 500)),
+                                   offset=max(0, offset), **filters)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        conn.close()
+
+
+@app.get("/api/tool-calls/stats")
+async def tool_call_stats(
+    tool: Optional[str] = None, category: Optional[str] = None,
+    risk: bool = False, outcome: Optional[str] = None,
+    source: Optional[str] = None, model: Optional[str] = None,
+    since: Optional[str] = None, until: Optional[str] = None,
+    q: Optional[str] = None,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Usage per tool and overall over the same filters as the list."""
+    _require_auth(passkey)
+    filters = _tool_log_filters(tool, category, risk, outcome, source, model,
+                                since, until, q)
+    conn = sqlite3.connect(_resolve_db_path(passkey))
+    try:
+        return tool_log.stats(conn, **filters)
+    finally:
+        conn.close()
+
+
+@app.get("/api/tool-calls/{call_id}")
+async def get_tool_call(
+    call_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """One call in full: arguments, result preview, the message that
+    triggered it, and the other calls of the same run."""
+    _require_auth(passkey)
+    conn = sqlite3.connect(_resolve_db_path(passkey))
+    try:
+        call = tool_log.get_call(conn, call_id)
+    finally:
+        conn.close()
+    if not call:
+        raise HTTPException(status_code=404, detail="tool call not found")
+    return call
 
 
 @app.get("/api/transcripts")

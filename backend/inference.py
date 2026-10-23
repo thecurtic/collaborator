@@ -2155,13 +2155,15 @@ def generate_with_tools(
     emit_results: bool = False,
     extra_system: Optional[str] = None,
     images: Optional[List[tuple]] = None,
+    on_tool_call=None,
 ):
     """Run the tool-calling loop and yield event dicts.
 
     Yields {"type": "token"|"status"|"tool_result"|"error", ...}. The model may
     call tools (executed via execute_tool(name, args) -> str, fed back, repeat);
     the final answer streams as token events. Capped at max_rounds, after which a
-    tools-off round forces an answer.
+    tools-off round forces an answer. on_tool_call(record), when given, sees every
+    call once it finishes, malformed and recovered ones included (tool_log.py).
     """
     import json
     messages = _build_messages(message, context_turns, mode=mode,
@@ -2386,6 +2388,7 @@ def generate_with_tools(
                 yield {"type": "status", "tool": s["name"],
                        "label": _tool_status_label(s["name"], args),
                        **_tool_status_fields(s["name"], args)}
+            started = time.monotonic()
             try:
                 if args_error:
                     result = json.dumps({"error": args_error +
@@ -2397,6 +2400,12 @@ def generate_with_tools(
                 result = json.dumps({"error": str(e)})
             if not isinstance(result, str):
                 result = json.dumps(result)
+            if on_tool_call:
+                on_tool_call({
+                    "tool": s["name"], "args": args, "raw_args": s["args"],
+                    "args_error": args_error, "result": result,
+                    "round": round_index, "recovered": not tool_calls,
+                    "duration_ms": round((time.monotonic() - started) * 1000)})
             if emit_results:
                 yield {"type": "tool_result", "tool": s["name"], "result": result}
             if emit_status:

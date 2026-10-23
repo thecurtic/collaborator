@@ -22,6 +22,7 @@ import re
 from typing import Optional, Tuple
 
 from config import get_config
+import tool_log
 
 MEDIA_KINDS = {"image", "audio", "video", "file"}
 
@@ -188,7 +189,9 @@ def run_text_action(db_path: str, text: str, build_tools, generate) -> dict:
             f"{prompt}\n\nThe captured item:\n{text}", [], None,
             tool_schemas=schemas, execute_tool=execute,
             max_rounds=cfg.get("max_rounds", 4),
-            emit_status=False, emit_results=False):
+            emit_status=False, emit_results=False,
+            on_tool_call=tool_log.recorder(
+                db_path, "scratch", state["chat_run_id"], trigger=text)):
         if ev.get("type") == "token":
             final_text += ev["content"]
         elif ev.get("type") == "error":

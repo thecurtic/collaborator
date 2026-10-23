@@ -4,6 +4,7 @@ import {
   Globe,
   LogOut,
   Menu,
+  ScrollText,
   Settings as SettingsIcon,
   Users,
 } from 'lucide-react';
@@ -43,6 +44,7 @@ export function AppMenu({
   onOpenTranscripts,
   onOpenNotes,
   onOpenPeople,
+  onOpenToolLog,
   onSignOut,
 }: {
   onOpenSettings: () => void;
@@ -50,6 +52,7 @@ export function AppMenu({
   onOpenTranscripts: () => void;
   onOpenNotes: () => void;
   onOpenPeople: () => void;
+  onOpenToolLog: () => void;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -101,6 +104,9 @@ export function AppMenu({
             <div className="my-1 border-t border-border" />
             <MenuItem icon={Globe} onClick={() => pick(onOpenWebSearch)}>
               Web Search
+            </MenuItem>
+            <MenuItem icon={ScrollText} onClick={() => pick(onOpenToolLog)}>
+              Tool log
             </MenuItem>
             <MenuItem icon={SettingsIcon} onClick={() => pick(onOpenSettings)}>
               Settings

@@ -35,6 +35,7 @@ import { ProfileView } from '@/features/notes/ProfileView';
 import { WalletView } from '@/features/wallet/WalletView';
 import { WebSearchView } from '@/features/search/WebSearchView';
 import { TranscriptsView } from '@/features/transcripts/TranscriptsView';
+import { ToolLogView } from '@/features/toollog/ToolLogView';
 import { useLongPress } from '@/lib/useLongPress';
 import { cleanUrlsInText } from '@/lib/urlClean';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
@@ -157,6 +158,7 @@ function AppShell() {
   const [notesLens, setNotesLens] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [transcriptsOpen, setTranscriptsOpen] = useState(false);
+  const [toolLogOpen, setToolLogOpen] = useState(false);
   // A transcript to open straight away (from a notification's deep link).
   const [transcriptFocus, setTranscriptFocus] = useState<number | null>(null);
   // Unified search (UX doc, Search): a pushed screen over whatever's open;
@@ -554,7 +556,7 @@ function AppShell() {
     <div className="flex h-full flex-col">
       <header className="pt-safe px-safe border-b border-border">
         <div className="flex items-center gap-2 px-2 py-3">
-          {find !== null || settingsPage !== null || searchOpen || transcriptsOpen || notesOpen ? (
+          {find !== null || settingsPage !== null || searchOpen || transcriptsOpen || notesOpen || toolLogOpen ? (
             <>
               <Button
                 variant="ghost"
@@ -569,7 +571,9 @@ function AppShell() {
                       ? setTranscriptsOpen(false)
                       : notesOpen
                         ? setNotesOpen(false)
-                        : setSettingsPage(null)
+                        : toolLogOpen && settingsPage === null
+                          ? setToolLogOpen(false)
+                          : setSettingsPage(null)
                 }
                 className="h-8 w-8 shrink-0"
               >
@@ -584,7 +588,9 @@ function AppShell() {
                     ? 'Transcripts'
                     : notesOpen
                       ? notesLens === 'social-graph' ? 'People' : 'Notes'
-                      : settingsPage === 'profile' ? 'Profile'
+                      : toolLogOpen && settingsPage === null
+                        ? 'Tool log'
+                        : settingsPage === 'profile' ? 'Profile'
                         : settingsPage === 'wallet' ? 'Wallet' : 'References'}
               </span>
             </>
@@ -668,10 +674,19 @@ function AppShell() {
               }}
               onOpenNotes={() => openNotes(null)}
               onOpenPeople={() => openNotes('social-graph')}
+              onOpenToolLog={() => {
+                setFind(null);
+                setSettingsPage(null);
+                setSearchOpen(false);
+                setNotesOpen(false);
+                setTranscriptsOpen(false);
+                setToolLogOpen(true);
+              }}
               onSignOut={() => {
                 setSettingsPage(null);
                 setSearchOpen(false);
                 setTranscriptsOpen(false);
+                setToolLogOpen(false);
                 setChatOpen(false);
                 signOut();
               }}
@@ -863,6 +878,14 @@ function AppShell() {
             onBack={() => {
               setTranscriptsOpen(false);
               setTranscriptFocus(null);
+            }}
+          />
+        ) : toolLogOpen ? (
+          <ToolLogView
+            onOpenTurn={(turnId) => {
+              setToolLogOpen(false);
+              convo.selectPathTo(turnId);
+              setChatOpen(true);
             }}
           />
         ) : chatOpen ? (
@@ -1067,7 +1090,7 @@ function AppShell() {
       </main>
 
       {/* Errors on tab screens (the chat screen shows its own strip). */}
-      {!chatOpen && settingsPage === null && !searchOpen && !transcriptsOpen && !notesOpen && gate === 'open' && convo.error && (
+      {!chatOpen && settingsPage === null && !searchOpen && !transcriptsOpen && !notesOpen && !toolLogOpen && gate === 'open' && convo.error && (
         <div className="flex items-start gap-2 border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           <p className="max-h-24 min-w-0 flex-1 overflow-y-auto break-words">
             {convo.error}
@@ -1091,7 +1114,7 @@ function AppShell() {
       )}
 
       {/* Bottom tabs — hidden while a pushed screen (chat/references/search) is open. */}
-      {find === null && !chatOpen && settingsPage === null && !searchOpen && !transcriptsOpen && !notesOpen && gate === 'open' && (
+      {find === null && !chatOpen && settingsPage === null && !searchOpen && !transcriptsOpen && !notesOpen && !toolLogOpen && gate === 'open' && (
         <nav className="pb-safe px-safe border-t border-border" aria-label="Main">
           <div className="mx-auto flex max-w-3xl">
             <TabButton

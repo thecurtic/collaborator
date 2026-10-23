@@ -278,6 +278,11 @@ def ensure_conversation_schema(conn) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_turns_parent ON turns(parent_turn_id)")
     conn.commit()
 
+    # The tool-call log (tool_log.py); its one-time backfill reads
+    # turns.tool_activity, so it runs after the turns migrations.
+    import tool_log
+    tool_log.ensure_schema(conn)
+
 
 def _migrate_turns_branching(conn) -> None:
     """Add branching/recall columns to an existing turns table; backfill a chain."""

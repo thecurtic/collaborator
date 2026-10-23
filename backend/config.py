@@ -356,6 +356,9 @@ def load_config() -> dict:
             "guidance_file": "tools-guidance.md",  # editable "when to use tools" instruction
             "spec_file": "tools-spec.md",          # editable per-tool descriptions the model sees
             "auto_recall_fallback": False,  # reserved: auto-run recall if model calls nothing
+            # The tool-call log (tool_log.py): every call the model makes,
+            # arguments in full, results as size + this many characters.
+            "log": {"enabled": True, "preview_chars": 400},
             "available": {
                 "recall_semantic": True,
                 "recall_keyword": True,

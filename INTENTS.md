@@ -661,6 +661,34 @@ frontend for human solving) was also considered and rejected as poor ROI: modern
 CAPTCHAs are origin-bound JS widgets requiring full remote-browser streaming, and
 on a burned IP the solves would be constant and block mid-turn UX.
 
+## Decision: The Tool Log Is an Audit Trail First
+
+Decided 2026-10-23. Every tool call Collaborator's own model makes (chat,
+voice calls, Scratch actions) is logged in the user's database
+(`tool_calls`, `backend/tool_log.py`) and shown under menu → Tool log. The
+purpose is the user's peace of mind: being able to tell whether a call was
+innocent. Usage stats are a second view over the same rows.
+
+- **Arguments in full, results as size + preview.** The arguments are the
+  audit (the query, the URL, the invoice, the note it wanted to write).
+  Results are kept only as their length and the first
+  `tools.log.preview_chars` characters: the vault and transcripts stay the
+  one copy of personal content.
+- **Written by code, unreachable by the model.** No tool reads or alters the
+  log (`read_logs` reads the ring buffer, not this table). Malformed and
+  blocked calls are logged too, since an attempt matters as much as a success.
+- **Each call is grouped by what it can do:** money, outbound, writes, reads,
+  compute. Money, outbound, writes and anything unrecognized form the "Risk
+  only" scope. An unknown tool counts as risk until it is categorized.
+- **Every row carries its trigger** (the start of the user's message) and
+  links to the reply, so "did I ask for this?" is answerable at a glance,
+  even after the conversation was deleted.
+- **Kept forever.** Rows are small without results, and an audit trail that
+  expires defeats its purpose.
+- **Agent backends are out of scope:** they never pass through the model's
+  tool loop. Rows from before the log existed were backfilled once from the
+  per-reply Sources (`turns.tool_activity`), with no timing or preview.
+
 ## Future Considerations (User-Defined)
 
 - [ ] Priority levels for recall
