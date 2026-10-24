@@ -535,7 +535,7 @@ export function toFeedItem(api: ApiFeedItem): FeedItem {
       endpointId: typeof r.endpoint_id === 'string' ? r.endpoint_id : undefined,
       channel: typeof r.channel === 'string' ? r.channel : undefined,
       question: r.question && typeof r.question === 'object'
-        ? (r.question as AgentQuestion) : null,
+        ? toQuestion(r.question as Record<string, unknown>) : null,
     },
   };
 }
@@ -568,5 +568,16 @@ export function fromRepeatRule(rule: RepeatRule): ApiRepeatRule {
     ...(rule.byMonthDay ? { by_month_day: rule.byMonthDay } : {}),
     ...(rule.until ? { until: rule.until } : {}),
     ...(rule.count ? { count: rule.count } : {}),
+  };
+}
+
+/** An agent question as the API sends it (snake_case proposal) → the app's shape. */
+export function toQuestion(q: Record<string, any> | null | undefined): AgentQuestion | null {
+  if (!q) return null;
+  const { proposal, ...rest } = q;
+  return {
+    ...(rest as AgentQuestion),
+    ...(proposal ? { proposal: { approveOption: proposal.approve_option, body: proposal.body ?? {},
+                                 summary: proposal.summary, commits: proposal.commits } } : {}),
   };
 }

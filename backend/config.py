@@ -310,6 +310,10 @@ def load_config() -> dict:
             "buffer_items": 500,         # live firehose lines kept per channel (memory only)
             "max_frame_bytes": 1048576,  # largest frame an endpoint may send
             "unreachable_after": 30,     # seconds without a connection before the badge says so
+            # The Ed25519 private key that signs team requests (New project,
+            # Merge, Withdraw). Made in Settings → Agents; a file of its own,
+            # mode 0600, outside everything the model can read.
+            "request_signing_key_file": "backend/data/keys/request-signing.key",
         },
         "notifications": {
             # Kinds and their on/off live in the app (settings list, per

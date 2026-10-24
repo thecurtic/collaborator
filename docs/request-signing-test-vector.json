@@ -1,0 +1,114 @@
+{
+  "about": "Shared test vector for Collaborator's signed team requests (create_project, merge, withdraw). Committed to both repos; each side must reproduce the public key, fingerprint, canonical bytes and signatures exactly. Ed25519 signatures are deterministic. The key is RFC 8032's first test key: never use it for real.",
+  "formats": {
+    "canonical": "json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')",
+    "sig": "standard base64 (padded) of the 64-byte Ed25519 signature over the canonical bytes",
+    "public_key": "'ed25519:' + standard base64 (padded) of the raw 32-byte public key",
+    "fingerprint": "SHA-256 over the raw 32-byte public key: first 16 hex characters, in groups of four",
+    "id": "'r-' + a ULID (26 Crockford base32 characters)",
+    "issued_at": "UTC to the second, YYYY-MM-DDTHH:MM:SSZ",
+    "key_id": "'collab-YYYY-MM', then '-2', '-3'… for a replacement in the same month"
+  },
+  "key": {
+    "key_id": "collab-test",
+    "private_seed_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+    "public_key_raw_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "public_key": "ed25519:11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+    "fingerprint": "21fe-31df-a154-a261"
+  },
+  "cases": [
+    {
+      "kind": "create_project",
+      "body": {
+        "v": 1,
+        "kind": "create_project",
+        "id": "r-01JB7Q4Z3K8M2V6P0T5W9X1Y3Z",
+        "issued_at": "2026-10-24T17:05:00Z",
+        "name": "tidepool",
+        "description": "A viewer for the city's tide gauges",
+        "roles": [
+          "pm",
+          "backend",
+          "auditor"
+        ],
+        "intents_md": "# Tidepool\n\nWhat it is for: the café — and \"quoted\" words, a tab\there, ✓ done.\n",
+        "kickoff": "Start with the data model."
+      },
+      "canonical": "{\"description\":\"A viewer for the city's tide gauges\",\"id\":\"r-01JB7Q4Z3K8M2V6P0T5W9X1Y3Z\",\"intents_md\":\"# Tidepool\\n\\nWhat it is for: the café — and \\\"quoted\\\" words, a tab\\there, ✓ done.\\n\",\"issued_at\":\"2026-10-24T17:05:00Z\",\"kickoff\":\"Start with the data model.\",\"kind\":\"create_project\",\"name\":\"tidepool\",\"roles\":[\"pm\",\"backend\",\"auditor\"],\"v\":1}",
+      "canonical_base64": "eyJkZXNjcmlwdGlvbiI6IkEgdmlld2VyIGZvciB0aGUgY2l0eSdzIHRpZGUgZ2F1Z2VzIiwiaWQiOiJyLTAxSkI3UTRaM0s4TTJWNlAwVDVXOVgxWTNaIiwiaW50ZW50c19tZCI6IiMgVGlkZXBvb2xcblxuV2hhdCBpdCBpcyBmb3I6IHRoZSBjYWbDqSDigJQgYW5kIFwicXVvdGVkXCIgd29yZHMsIGEgdGFiXHRoZXJlLCDinJMgZG9uZS5cbiIsImlzc3VlZF9hdCI6IjIwMjYtMTAtMjRUMTc6MDU6MDBaIiwia2lja29mZiI6IlN0YXJ0IHdpdGggdGhlIGRhdGEgbW9kZWwuIiwia2luZCI6ImNyZWF0ZV9wcm9qZWN0IiwibmFtZSI6InRpZGVwb29sIiwicm9sZXMiOlsicG0iLCJiYWNrZW5kIiwiYXVkaXRvciJdLCJ2IjoxfQ==",
+      "envelope": {
+        "body": {
+          "v": 1,
+          "kind": "create_project",
+          "id": "r-01JB7Q4Z3K8M2V6P0T5W9X1Y3Z",
+          "issued_at": "2026-10-24T17:05:00Z",
+          "name": "tidepool",
+          "description": "A viewer for the city's tide gauges",
+          "roles": [
+            "pm",
+            "backend",
+            "auditor"
+          ],
+          "intents_md": "# Tidepool\n\nWhat it is for: the café — and \"quoted\" words, a tab\there, ✓ done.\n",
+          "kickoff": "Start with the data model."
+        },
+        "key_id": "collab-test",
+        "sig": "1O/sXKmwtlu1CVkJ1gLufi7BnkQGJDykV6Ga6zTfu/JzInFIS5OIBB+HrZCCyiYS1ZbK1Psbs2sJpQhZqHh9CA=="
+      }
+    },
+    {
+      "kind": "merge",
+      "body": {
+        "v": 1,
+        "kind": "merge",
+        "id": "r-01JB8M2V6P4T5W9X1Y3Z7Q4Z3K",
+        "issued_at": "2026-10-24T17:05:00Z",
+        "project": "tidepool",
+        "from": "integration",
+        "to": "main",
+        "from_sha": "8e41c0d2a9b7f3e15c6d4a8b0e2f1c3d5a7b9e0f",
+        "to_sha": "2b7f9aa1c3e5d7f9b1a3c5e7d9f1b3a5c7e9d1f3"
+      },
+      "canonical": "{\"from\":\"integration\",\"from_sha\":\"8e41c0d2a9b7f3e15c6d4a8b0e2f1c3d5a7b9e0f\",\"id\":\"r-01JB8M2V6P4T5W9X1Y3Z7Q4Z3K\",\"issued_at\":\"2026-10-24T17:05:00Z\",\"kind\":\"merge\",\"project\":\"tidepool\",\"to\":\"main\",\"to_sha\":\"2b7f9aa1c3e5d7f9b1a3c5e7d9f1b3a5c7e9d1f3\",\"v\":1}",
+      "canonical_base64": "eyJmcm9tIjoiaW50ZWdyYXRpb24iLCJmcm9tX3NoYSI6IjhlNDFjMGQyYTliN2YzZTE1YzZkNGE4YjBlMmYxYzNkNWE3YjllMGYiLCJpZCI6InItMDFKQjhNMlY2UDRUNVc5WDFZM1o3UTRaM0siLCJpc3N1ZWRfYXQiOiIyMDI2LTEwLTI0VDE3OjA1OjAwWiIsImtpbmQiOiJtZXJnZSIsInByb2plY3QiOiJ0aWRlcG9vbCIsInRvIjoibWFpbiIsInRvX3NoYSI6IjJiN2Y5YWExYzNlNWQ3ZjliMWEzYzVlN2Q5ZjFiM2E1YzdlOWQxZjMiLCJ2IjoxfQ==",
+      "envelope": {
+        "body": {
+          "v": 1,
+          "kind": "merge",
+          "id": "r-01JB8M2V6P4T5W9X1Y3Z7Q4Z3K",
+          "issued_at": "2026-10-24T17:05:00Z",
+          "project": "tidepool",
+          "from": "integration",
+          "to": "main",
+          "from_sha": "8e41c0d2a9b7f3e15c6d4a8b0e2f1c3d5a7b9e0f",
+          "to_sha": "2b7f9aa1c3e5d7f9b1a3c5e7d9f1b3a5c7e9d1f3"
+        },
+        "key_id": "collab-test",
+        "sig": "yxdmYH7zyoxcNTGH9I5mRlypwHhq98SX+bTPlH7FOuxVU4n3PR45pvyH+0zvcL9lFDjbZKwwmdr1slwKoqWLAA=="
+      }
+    },
+    {
+      "kind": "withdraw",
+      "body": {
+        "v": 1,
+        "kind": "withdraw",
+        "id": "r-01JB9C1Q2W3E4R5T6Y7V8J9K0P",
+        "issued_at": "2026-10-25T09:12:00Z",
+        "target": "r-01JB7Q4Z3K8M2V6P0T5W9X1Y3Z"
+      },
+      "canonical": "{\"id\":\"r-01JB9C1Q2W3E4R5T6Y7V8J9K0P\",\"issued_at\":\"2026-10-25T09:12:00Z\",\"kind\":\"withdraw\",\"target\":\"r-01JB7Q4Z3K8M2V6P0T5W9X1Y3Z\",\"v\":1}",
+      "canonical_base64": "eyJpZCI6InItMDFKQjlDMVEyVzNFNFI1VDZZN1Y4SjlLMFAiLCJpc3N1ZWRfYXQiOiIyMDI2LTEwLTI1VDA5OjEyOjAwWiIsImtpbmQiOiJ3aXRoZHJhdyIsInRhcmdldCI6InItMDFKQjdRNFozSzhNMlY2UDBUNVc5WDFZM1oiLCJ2IjoxfQ==",
+      "envelope": {
+        "body": {
+          "v": 1,
+          "kind": "withdraw",
+          "id": "r-01JB9C1Q2W3E4R5T6Y7V8J9K0P",
+          "issued_at": "2026-10-25T09:12:00Z",
+          "target": "r-01JB7Q4Z3K8M2V6P0T5W9X1Y3Z"
+        },
+        "key_id": "collab-test",
+        "sig": "cmCgt9h/UGvv0qmBCUO6jvHNef6Qcm/TwExFtHiVkH7tR2n+44f5aOXKf0SF+i4b4/G4GtZ7avn+xNjFoo5VBQ=="
+      }
+    }
+  ]
+}

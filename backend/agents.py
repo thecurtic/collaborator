@@ -41,6 +41,7 @@ import time
 import uuid
 from typing import Callable, Dict, List, Optional, Tuple
 
+import agent_requests
 import feed
 import gate_client
 import notifications
@@ -191,6 +192,7 @@ def ensure_schema(conn) -> None:
             sent_message_id INTEGER
         )""")
     conn.commit()
+    agent_requests.ensure_schema(conn)
 
 
 _MSG_COLS = ["id", "endpoint_id", "project", "channel", "msg_id", "seq", "direction",
@@ -236,7 +238,17 @@ def list_messages(conn, project: str, endpoint_id: str, channel: str,
     q += " ORDER BY id DESC LIMIT ?"
     args.append(max(1, min(int(limit or 50), 200)))
     rows = conn.execute(q, args).fetchall()
-    return [_public_message(_msg_row(r)) for r in reversed(rows)]
+    return with_requests(conn, [_public_message(_msg_row(r)) for r in reversed(rows)])
+
+
+def with_requests(conn, msgs: List[Dict]) -> List[Dict]:
+    """A merge question shows its request's state on the card."""
+    ids = [m["id"] for m in msgs if (m.get("question") or {}).get("proposal")]
+    reqs = agent_requests.by_message(conn, ids)
+    for m in msgs:
+        if m["id"] in reqs:
+            m["request"] = reqs[m["id"]]
+    return msgs
 
 
 def normalize_question(q) -> Optional[Dict]:
@@ -735,6 +747,7 @@ class Hub:
             outbound = [_msg_row(r) for r in conn.execute(
                 f"SELECT {', '.join(_MSG_COLS)} FROM agent_messages WHERE endpoint_id = ? "
                 "AND direction = 'out' AND delivered_at IS NULL ORDER BY id", (ep.id,))]
+            requests = agent_requests.unsent(conn, ep.id)
         finally:
             conn.close()
         await self._send(ep, {"type": "welcome", "protocol": PROTOCOL_VERSION,
@@ -742,6 +755,9 @@ class Hub:
                               "acked": acked})
         for m in outbound:
             await self._send(ep, _outbound_frame(m))
+        # Signed requests go again until a request_status names them.
+        for r in requests:
+            await self._send(ep, {"type": "request", "request": r["envelope"]})
         self.publish(ep.user_key, {"type": "endpoint", "endpoint_id": ep.id,
                                    "connected": True})
 
@@ -785,6 +801,8 @@ class Hub:
             self._health(ep, f)
         elif t == "ack":
             self._ack(ep, f)
+        elif t == "request_status":
+            self._request_status(ep, f)
         # Anything else is ignored: newer endpoints may speak more than we do.
 
     def _discovery(self, ep: _Endpoint, f: Dict) -> None:
@@ -801,8 +819,13 @@ class Hub:
             conn.executemany("INSERT OR REPLACE INTO agent_projects (endpoint_id, tag, state) "
                              "VALUES (?, ?, ?)", [(ep.id, t, s) for t, s in projects])
             conn.commit()
+            # Requests are honoured only from the endpoint the user marked as
+            # the PM; any other that declares them is ignored and named once.
+            stray = agent_requests.set_capabilities(conn, ep.id, f.get("capabilities"))
         finally:
             conn.close()
+        if stray:
+            self._warn_not_pm(ep)
         self.publish(ep.user_key, {"type": "discovery", "endpoint_id": ep.id,
                                    "projects": [{"tag": t, "state": s} for t, s in projects]})
 
@@ -860,6 +883,13 @@ class Hub:
         seq = f.get("seq")
         seq = int(seq) if isinstance(seq, int) or (isinstance(seq, str) and seq.isdigit()) else None
         question = normalize_question(f.get("question"))
+        if question and isinstance(f.get("question"), dict) and f["question"].get("proposal"):
+            proposal = agent_requests.normalize_proposal(
+                f["question"]["proposal"], [o["id"] for o in question["options"]])
+            if proposal and self._honours(ep, "merge"):
+                question["proposal"] = proposal
+            elif proposal:
+                self._warn_not_pm(ep)      # shown as an ordinary question, signs nothing
         text = _clip(f.get("text"))
         if f.get("question") and question is None:
             # Unrecognised question shape: plain text, as Telegram does today.
@@ -1007,6 +1037,66 @@ class Hub:
         self.publish(ep.user_key, {"type": "event", "project": project, "endpoint_id": ep.id,
                                    "channel": channel, "item": marker, "channel_state": c})
 
+    def _honours(self, ep: _Endpoint, capability: str) -> bool:
+        """Only the endpoint the user marked as the PM, and only for what it
+        declared in discovery."""
+        conn = self._user_conn(ep.user_key)
+        try:
+            return (agent_requests.pm_endpoint(conn) == ep.id
+                    and capability in agent_requests.capabilities(conn, ep.id))
+        finally:
+            conn.close()
+
+    def _warn_not_pm(self, ep: _Endpoint) -> None:
+        conn = self._user_conn(ep.user_key)
+        try:
+            fresh = agent_requests.mark_warned(conn, ep.id)
+        finally:
+            conn.close()
+        if not fresh:
+            return
+        try:
+            notifications.notify(
+                self.db_for_user(ep.user_key), "agent_stops",
+                f"{ep.name} offers project and merge requests",
+                f"Ignored: {ep.name} isn't marked as your PM. If it is, mark it in "
+                "Settings → Agents; if it isn't, something on that box is "
+                "claiming the PM role.",
+                sequence_id=f"agent-notpm-{ep.id}")
+        except Exception as e:
+            print(f"Warning: agent notification failed: {e}")
+
+    def _request_status(self, ep: _Endpoint, f: Dict) -> None:
+        conn = self._user_conn(ep.user_key)
+        try:
+            if agent_requests.pm_endpoint(conn) != ep.id:
+                stray = True
+                res = None
+            else:
+                stray = False
+                res = agent_requests.apply_status(conn, f, ep.id)
+        finally:
+            conn.close()
+        if stray:
+            self._warn_not_pm(ep)
+            return
+        if res is None:
+            return
+        r = res["request"]
+        if res["notify"]:
+            what = {"create_project": "New project", "merge": "Merge",
+                    "withdraw": "Withdrawal"}.get(r["kind"], "Request")
+            try:
+                notifications.notify(
+                    self.db_for_user(ep.user_key), "agent_stops",
+                    f"{what}{' ' + r['project'] if r['project'] else ''}: {r['state']}",
+                    r["text"] or "", link=f"?open=agents:{r['project']}" if r["project"] else None,
+                    sequence_id=f"request-{r['id']}-{r['state']}")
+            except Exception as e:
+                print(f"Warning: request notification failed: {e}")
+        self.publish(ep.user_key, {"type": "request",
+                                   "request": agent_requests.public(r)})
+
     def _health(self, ep: _Endpoint, f: Dict) -> None:
         state = "degraded" if f.get("state") == "degraded" else "ok"
         prev = ep.health
@@ -1065,8 +1155,15 @@ class Hub:
                                (user_key,)).fetchall()
         finally:
             reg.close()
+        conn = self._user_conn(user_key)
+        try:
+            pm = agent_requests.pm_endpoint(conn)
+            caps = {i: agent_requests.capabilities(conn, i) for i, *_ in rows}
+        finally:
+            conn.close()
         paired = [{"id": i, "fingerprint": fp, "name": n, "approved_at": a, "last_seen": ls,
-                   "connected": self.is_connected(i), "health": self.endpoint_health(i, ls)}
+                   "connected": self.is_connected(i), "health": self.endpoint_health(i, ls),
+                   "pm": i == pm, "capabilities": caps.get(i, [])}
                   for i, fp, n, a, ls in rows]
         pending = [{"id": ep.id, "fingerprint": ep.fingerprint, "name": ep.name,
                     "connected_at": ep.connected_at}
@@ -1114,6 +1211,8 @@ class Hub:
                 conn.execute("DELETE FROM agent_channels WHERE endpoint_id = ?", (eid,))
                 conn.execute("DELETE FROM agent_projects WHERE endpoint_id = ?", (eid,))
                 conn.commit()
+                if agent_requests.pm_endpoint(conn) == eid:
+                    agent_requests.set_pm_endpoint(conn, None)
             finally:
                 conn.close()
             for k in [k for k in self.buffers if k[0] == eid]:
@@ -1249,8 +1348,22 @@ class Hub:
                 raise ValueError("this question takes one of its options, not text")
             if not option_ids and not text:
                 raise ValueError("pick an option or write an answer")
+            proposal = q.get("proposal")
+            approving = bool(proposal) and proposal["approve_option"] in option_ids
+            if approving:
+                if (agent_requests.pm_endpoint(conn) != m["endpoint_id"]
+                        or "merge" not in agent_requests.capabilities(conn, m["endpoint_id"])):
+                    raise ValueError("this merge came from an endpoint that isn't your PM "
+                                     "any more; nothing was signed")
         finally:
             conn.close()
+        if approving:
+            # Sign first: if there's no key, the question stays open.
+            try:
+                envelope = agent_requests.sign(agent_requests.merge_body(proposal["body"]))
+            except agent_requests.SigningError as e:
+                raise ValueError(str(e))
+            await self.submit(user_key, envelope, m["endpoint_id"], message_row_id)
         answer = {"question_id": q["id"], "option_ids": option_ids, "text": text}
         sent = await self.send(user_key, m["project"], m["endpoint_id"], m["channel"],
                                answer_text(q, option_ids, text), answer=answer,
@@ -1262,13 +1375,55 @@ class Hub:
                          (json.dumps({"option_ids": option_ids, "text": text, "reason": "answered"}),
                           _now_iso(), message_row_id))
             conn.commit()
-            updated = get_message(conn, message_row_id)
+            updated = with_requests(conn, [_public_message(get_message(conn, message_row_id))])[0]
         finally:
             conn.close()
         self._clear_notifications(user_key, [m["notify_seq"]])
         self.publish(user_key, {"type": "message", "project": m["project"],
-                                "message": _public_message(updated)})
-        return {"answer": sent, "question": _public_message(updated)}
+                                "message": updated})
+        return {"answer": sent, "question": updated}
+
+    # -- signed requests (agent_requests.py) --
+
+    async def submit(self, user_key: str, envelope: Dict, endpoint_id: str,
+                     message_row_id: Optional[int] = None) -> Dict:
+        """Store a signed request and send it to the PM endpoint; it goes
+        again on every welcome until a request_status names it."""
+        conn = self._user_conn(user_key)
+        try:
+            r = agent_requests.store(conn, envelope, endpoint_id, message_row_id)
+        finally:
+            conn.close()
+        ep = self.endpoints.get(endpoint_id)
+        if ep is not None:
+            await self._send(ep, {"type": "request", "request": envelope})
+        pub = agent_requests.public(r)
+        self.publish(user_key, {"type": "request", "request": pub})
+        return pub
+
+    def pm_for_requests(self, user_key: str, capability: Optional[str] = None) -> str:
+        """The PM endpoint's id, or ValueError saying why requests can't go."""
+        conn = self._user_conn(user_key)
+        try:
+            pm = agent_requests.pm_endpoint(conn)
+            caps = agent_requests.capabilities(conn, pm) if pm else []
+        finally:
+            conn.close()
+        if not pm or pm not in self._owned(user_key):
+            raise ValueError("mark one endpoint as the PM first (Settings → Agents)")
+        if capability and capability not in caps:
+            raise ValueError("the PM endpoint doesn't take this request (it didn't "
+                             f"declare {capability})")
+        return pm
+
+    def set_pm(self, user_key: str, endpoint_id: Optional[str]) -> None:
+        if endpoint_id and endpoint_id not in self._owned(user_key):
+            raise KeyError("no such endpoint")
+        conn = self._user_conn(user_key)
+        try:
+            agent_requests.set_pm_endpoint(conn, endpoint_id)
+        finally:
+            conn.close()
 
     def read(self, user_key: str, project: str, endpoint_id: str, channel: str) -> None:
         conn = self._user_conn(user_key)

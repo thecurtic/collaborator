@@ -1,5 +1,6 @@
 import { api } from '@/api/collaborator';
-import { request } from '@/api/http';
+import { ApiRequestError, request } from '@/api/http';
+import { toQuestion } from '@/domain/adapters';
 
 /**
  * The agent seam, the app's side (API-SPEC.md §26). Collaborator knows
@@ -17,6 +18,51 @@ export interface AgentQuestion {
   freeform: boolean;
   placeholder?: string;
   prefill?: string;
+  /** A merge question from the PM: Merge signs exactly this body. */
+  proposal?: MergeProposal;
+}
+
+export interface MergeProposal {
+  approveOption: string;
+  body: { project: string; from?: string; to?: string; from_sha?: string; to_sha?: string;
+          [k: string]: unknown };
+  summary?: string;
+  commits?: number;
+}
+
+export type TeamRequestKind = 'create_project' | 'merge' | 'withdraw';
+export type TeamRequestState = 'sending' | 'accepted' | 'progress' | 'waiting' | 'done'
+  | 'refused' | 'failed' | 'withdrawn';
+export const FINAL_REQUEST_STATES: TeamRequestState[] = ['done', 'refused', 'failed', 'withdrawn'];
+
+/** A signed request to the team, carried by the PM endpoint (Settings → Agents). */
+export interface TeamRequest {
+  id: string;
+  kind: TeamRequestKind;
+  project: string | null;
+  /** A withdrawal: the request it names. */
+  target: string | null;
+  state: TeamRequestState;
+  step: string | null;
+  text: string | null;
+  messageId: number | null;
+  createdAt: string;
+  updatedAt: string;
+  hidden: boolean;
+}
+
+export interface SigningKey {
+  keyId: string;
+  publicKey: string;
+  fingerprint: string;
+}
+
+export interface NewProjectForm {
+  name: string;
+  description: string;
+  roles?: string[];
+  intentsMd: string;
+  kickoff?: string;
 }
 
 export interface AgentHealth {
@@ -79,6 +125,8 @@ export interface AgentMessage {
   questionState: 'open' | 'answered' | 'closed' | null;
   outcome: { option_ids?: string[]; text?: string; reason?: string } | null;
   note: { id: string; title: string } | null;
+  /** A merge question's signed request, once Merge was pressed. */
+  request: TeamRequest | null;
   createdAt: string;
   deliveredAt: string | null;
   readAt: string | null;
@@ -97,7 +145,11 @@ export interface FirehoseItem {
 
 export interface AgentEndpoints {
   paired: { id: string; name: string; fingerprint: string; connected: boolean;
-            lastSeen: string | null; health: AgentHealth }[];
+            lastSeen: string | null; health: AgentHealth;
+            /** Marked by the user as the PM: where team requests go. */
+            pm: boolean;
+            /** What it declared in discovery (create_project, merge). */
+            capabilities: string[] }[];
   pending: { id: string; name: string; fingerprint: string; connectedAt: string | null }[];
 }
 
@@ -124,13 +176,23 @@ export function toChannel(c: Raw): AgentChannel {
   };
 }
 
+export function toRequest(r: Raw): TeamRequest {
+  return {
+    id: r.id, kind: r.kind, project: r.project ?? null, target: r.target ?? null,
+    state: r.state, step: r.step ?? null, text: r.text ?? null,
+    messageId: r.message_id ?? null, createdAt: r.created_at, updatedAt: r.updated_at,
+    hidden: !!r.hidden,
+  };
+}
+
 export function toMessage(m: Raw): AgentMessage {
   return {
     id: m.id, endpointId: m.endpoint_id, project: m.project, channel: m.channel,
     from: m.from === 'you' ? 'you' : 'agent', text: m.text ?? '', needsReply: !!m.needs_reply,
-    question: m.question ?? null, questionState: m.question_state ?? null,
+    question: toQuestion(m.question), questionState: m.question_state ?? null,
     outcome: m.outcome ?? null,
     note: m.note ? { id: m.note.id, title: m.note.title } : null,
+    request: m.request ? toRequest(m.request) : null,
     createdAt: m.created_at, deliveredAt: m.delivered_at ?? null, readAt: m.read_at ?? null,
   };
 }
@@ -210,10 +272,47 @@ export const agentsApi = {
     return {
       paired: (r.paired ?? []).map((e: Raw) => ({
         id: e.id, name: e.name, fingerprint: e.fingerprint, connected: !!e.connected,
-        lastSeen: e.last_seen ?? null, health: e.health })),
+        lastSeen: e.last_seen ?? null, health: e.health, pm: !!e.pm,
+        capabilities: e.capabilities ?? [] })),
       pending: (r.pending ?? []).map((e: Raw) => ({
         id: e.id, name: e.name, fingerprint: e.fingerprint, connectedAt: e.connected_at ?? null })),
     };
+  },
+  async setPm(id: string | null): Promise<void> {
+    await request('/api/agents/pm', { method: 'PUT', body: JSON.stringify({ endpoint_id: id }) });
+  },
+  /** The request signing key's public half, or null before one exists. */
+  async signingKey(): Promise<SigningKey | null> {
+    try {
+      const k = await request<Raw>('/api/agents/signing-key');
+      return { keyId: k.key_id, publicKey: k.public_key, fingerprint: k.fingerprint };
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.status === 404) return null;
+      throw err;
+    }
+  },
+  async createSigningKey(replace = false): Promise<SigningKey> {
+    const k = await request<Raw>('/api/agents/signing-key', json({ replace }));
+    return { keyId: k.key_id, publicKey: k.public_key, fingerprint: k.fingerprint };
+  },
+  async requests(): Promise<TeamRequest[]> {
+    return ((await request<{ requests: Raw[] }>('/api/agents/requests')).requests ?? [])
+      .map(toRequest);
+  },
+  async createProject(f: NewProjectForm): Promise<TeamRequest> {
+    const res = await request<{ request: Raw }>('/api/agents/requests', json({
+      kind: 'create_project', name: f.name, description: f.description,
+      roles: f.roles?.length ? f.roles : undefined, intents_md: f.intentsMd,
+      kickoff: f.kickoff?.trim() ? f.kickoff : undefined }));
+    return toRequest(res.request);
+  },
+  async withdraw(target: string): Promise<TeamRequest> {
+    return toRequest((await request<{ request: Raw }>('/api/agents/requests',
+      json({ kind: 'withdraw', target }))).request);
+  },
+  async hideRequest(id: string): Promise<TeamRequest> {
+    return toRequest((await request<{ request: Raw }>(
+      `/api/agents/requests/${enc(id)}/hide`, { method: 'POST' })).request);
   },
   async approve(id: string): Promise<void> {
     await request(`/api/agents/endpoints/${enc(id)}/approve`, { method: 'POST' });

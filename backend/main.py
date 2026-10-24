@@ -57,6 +57,7 @@ import link_preview
 import gate_client
 import unified_search
 import agents
+import agent_requests
 import notifications
 import db
 import voice
@@ -5482,6 +5483,150 @@ async def post_agent_answer(message_id: int, request: AgentAnswerRequest,
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+
+# --- Signed requests to the team (agent_requests.py) ---------------------------
+# New project, Merge and Withdraw: the only three places Collaborator signs,
+# each a button behind a signed-in session. Never a model tool.
+
+class AgentPmRequest(BaseModel):
+    endpoint_id: Optional[str] = None     # None = no endpoint is the PM
+
+
+class AgentSigningKeyRequest(BaseModel):
+    replace: bool = False
+
+
+class AgentTeamRequest(BaseModel):
+    kind: str                             # create_project | withdraw
+    name: Optional[str] = None
+    description: Optional[str] = None
+    roles: Optional[List[str]] = None
+    intents_md: Optional[str] = None
+    kickoff: Optional[str] = None
+    target: Optional[str] = None
+
+
+@app.put("/api/agents/pm")
+async def put_agent_pm(request: AgentPmRequest,
+                       passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Mark one paired endpoint as the PM (or none). Labels are never read as
+    roles: this mark is how Collaborator knows where requests go."""
+    user_key, _ = _agents_user(passkey)
+    try:
+        agents.hub().set_pm(user_key, request.endpoint_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such endpoint")
+    return agents.hub().list_endpoints(user_key)
+
+
+@app.get("/api/agents/signing-key")
+async def get_agent_signing_key(passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """{key_id, public_key, fingerprint}; 404 before one is made. Never the
+    private half."""
+    _agents_user(passkey)
+    try:
+        key = agent_requests.signing_key()
+    except agent_requests.SigningError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    if key is None:
+        raise HTTPException(status_code=404, detail="No request signing key yet")
+    return key
+
+
+@app.post("/api/agents/signing-key")
+async def post_agent_signing_key(request: AgentSigningKeyRequest,
+                                 passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Make the key pair (409 if one exists, unless {replace: true})."""
+    _agents_user(passkey)
+    try:
+        return agent_requests.create_key(replace=request.replace)
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except agent_requests.SigningError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/api/agents/requests")
+async def get_agent_requests(passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Every request, open ones first. `state` is sending until the first
+    request_status arrives."""
+    _, db_path = _agents_user(passkey)
+    conn = sqlite3.connect(db_path)
+    try:
+        return {"requests": agent_requests.list_all(conn)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/agents/requests")
+async def post_agent_request(request: AgentTeamRequest,
+                             passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Sign, store and send a create_project or withdraw request to the PM
+    endpoint. 409 with no PM marked, or before the signing key exists."""
+    user_key, db_path = _agents_user(passkey)
+    hub = agents.hub()
+    if request.kind not in ("create_project", "withdraw"):
+        raise HTTPException(status_code=422, detail="kind is create_project or withdraw")
+    try:
+        pm = hub.pm_for_requests(user_key, "create_project" if request.kind == "create_project"
+                                 else None)
+        if agent_requests.signing_key() is None:
+            raise ValueError("create the request signing key first")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except agent_requests.SigningError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    conn = sqlite3.connect(db_path)
+    try:
+        if request.kind == "create_project":
+            body = agent_requests.create_body(request.name or "", request.description or "",
+                                              request.intents_md or "", request.roles,
+                                              request.kickoff)
+        else:
+            agent_requests.withdrawable(conn, (request.target or "").strip())
+            body = agent_requests.withdraw_body(request.target.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such request")
+    finally:
+        conn.close()
+    try:
+        envelope = agent_requests.sign(body)
+    except agent_requests.SigningError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    req = await hub.submit(user_key, envelope, pm)
+    if request.kind == "create_project":
+        # Pin the name as a project tag, so the project view appears as soon
+        # as an endpoint's discovery names it.
+        tag = _normalize_tag(body["name"])
+        conn = sqlite3.connect(db_path)
+        try:
+            _project_overrides(conn)
+            conn.execute("INSERT INTO project_overrides (tag, mode) VALUES (?, 'pinned') "
+                         "ON CONFLICT(tag) DO UPDATE SET mode = 'pinned'", (tag,))
+            conn.commit()
+        finally:
+            conn.close()
+    return {"request": req}
+
+
+@app.post("/api/agents/requests/{request_id}/hide")
+async def hide_agent_request(request_id: str,
+                             passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Hide a finished request from the list (Collaborator only; nothing in
+    git changes)."""
+    _, db_path = _agents_user(passkey)
+    conn = sqlite3.connect(db_path)
+    try:
+        return {"request": agent_requests.hide(conn, request_id)}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such request")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    finally:
+        conn.close()
 
 
 def _note_send_state(conn, user_key: str, title: str) -> dict:

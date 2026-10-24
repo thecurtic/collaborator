@@ -15,6 +15,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import {
   agentsApi,
   connectAgentsLive,
+  toRequest,
   isWebUrl,
   toChannel,
   toMessage,
@@ -168,7 +169,7 @@ function MessageRow({ m, onAnswered }: { m: AgentMessage; onAnswered: (m: AgentM
       <div className="max-w-[92%]">
         {m.text && <p className="mb-1.5 whitespace-pre-wrap text-sm"><Linked text={m.text} /></p>}
         <QuestionCard messageId={m.id} question={m.question} state={m.questionState}
-                      outcome={m.outcome} onAnswered={onAnswered} />
+                      outcome={m.outcome} request={m.request} onAnswered={onAnswered} />
       </div>
     );
   }
@@ -403,6 +404,14 @@ export function AgentArea({
       if (e.type === 'health' || e.type === 'endpoint' || e.type === 'discovery' ||
           e.type === 'channel_removed') {
         void loadDetail();
+        return;
+      }
+      if (e.type === 'request' && e.request) {
+        // A merge request's progress shows on its question card.
+        const r = toRequest(e.request);
+        if (r.messageId == null) return;
+        setMessages((prev) => Object.fromEntries(Object.entries(prev).map(([k, list]) =>
+          [k, list.map((x) => (x.id === r.messageId ? { ...x, request: r } : x))])));
         return;
       }
       if (e.project !== tag) return;

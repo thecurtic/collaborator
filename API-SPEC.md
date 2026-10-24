@@ -1291,7 +1291,7 @@ isn't paired are ignored.
 
 | type | fields | what Collaborator does |
 |---|---|---|
-| `discovery` | `projects: [{tag, state: "active"\|"idle"}]` (or bare tags) | replaces the endpoint's project list; a project view gets channels when its tag matches |
+| `discovery` | `projects: [{tag, state: "active"\|"idle"}]` (or bare tags), `capabilities?: ["create_project", "merge"]` | replaces the endpoint's project list; a project view gets channels when its tag matches. Capabilities count only for the endpoint the user marked as the PM; from any other, they are ignored and one needs-attention notice names that endpoint |
 | `channel` | `project, channel, label, accepts_input, firehose, status, busy, midturn_input?` (omitted = unchanged) | upserts the declaration. Labels are shown as-is, never read as roles. `midturn_input` (`"steers"`\|`"queues"`, default and anything else = `"queues"`) says what a message sent while `busy` does; it only changes the composer hint, the endpoint decides |
 | `channel_removed` | `project, channel` | drops it |
 | `message` | `project, channel, id, seq, ts?, text, needs_reply?, question?` | stores it (deduped by `id`), acks `seq`. `needs_reply` or a question notifies once |
@@ -1300,6 +1300,7 @@ isn't paired are ignored.
 | `event` | `project, channel?, event, text?, work_item?, commit?, url?` | the channel's status line becomes `text`; a marker drops into its firehose. `event: "merged"` lands quietly in the Feed. An http(s) `url` is the channel's preview link. Never chat, never a notification |
 | `health` | `state: "ok"\|"degraded", detail?, since?` | one quiet badge per project when any endpoint serving it is degraded; never a notification |
 | `ack` | `id` | an outbound message was received; it won't be resent |
+| `request_status` | `id, kind, project, state, step?, text, updated_at` | PM endpoint only. Upserts the request's row (an unknown id is a new row) and stops resending it. `refused`, `failed` and a creation's `done` notify once; the rest land quietly |
 
 `seq` is per channel, assigned by the endpoint, and only on conversation
 messages. `welcome.acked` says the highest one Collaborator stored for each
@@ -1316,6 +1317,15 @@ AskUserQuestion → `header`, options with descriptions, `multiple`, and
 several question messages. A harness timeout resolving the question is the
 endpoint's `question_closed`.
 
+**A merge question** adds `proposal: {approve_option, body, summary?,
+commits?}` to the question: `body` is an unsigned merge body (`{v: 1, kind:
+"merge", project, from, to, from_sha, to_sha}`, only strings, integers and
+lists of strings). Honoured only from the PM endpoint that declared `merge`;
+otherwise it shows as an ordinary question and signs nothing. Picking
+`approve_option` signs `body` plus Collaborator's own `id` and `issued_at`
+(nothing else added or removed), sends the `request`, then the answer as
+usual. Any other option is an ordinary answer.
+
 **Collaborator → endpoint**
 
 | type | fields |
@@ -1323,11 +1333,36 @@ endpoint's `question_closed`.
 | `message` | `project, channel, id, ts, text, note?, answer?`, queued and resent on every welcome until acked |
 | `ack` | `project, channel, seq, id`, for each stored message |
 | `history_request` | `project, channel, from_seq`: resend the channel's firehose from that sequence number (replay); the lines come back as `firehose` frames with `replay: true` |
+| `request` | `request: {body, key_id, sig}`, the signed envelope. To the PM endpoint only; stored, and resent on every welcome until a `request_status` with its `id` comes back |
 
 `text` is always the human-readable message, so a backend that reads only
 text loses nothing. A sent note adds `note: {id, title, body, tags}`: `id` is
 stable for that note across sends and renames, so a resend is an update the
 backend versions. An answer adds `answer: {question_id, option_ids, text}`.
+
+**Signed requests** (design: the Claude Doc *Projects and merges from
+Collaborator*, approved r6). Three kinds, each signed only from a button:
+`create_project` (New project), `merge` (Merge on a merge question),
+`withdraw` (Withdraw in the Requests list). Bodies:
+`{v: 1, kind: "create_project", id, issued_at, name, description, roles?, intents_md, kickoff?}`,
+the merge body above, and `{v: 1, kind: "withdraw", id, issued_at, target}`.
+An optional field is left out, never `null`. The exact formats, which the
+keeper must match byte for byte (the shared test vector,
+`docs/request-signing-test-vector.json`, reproduces each):
+
+| | format |
+|---|---|
+| signed bytes | `json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")`: RFC 8785 for these bodies (ASCII keys, strings, integers, lists of strings) |
+| `sig` | standard base64, padded, of the 64-byte Ed25519 signature over those bytes |
+| public key | `ed25519:` + standard base64, padded, of the raw 32-byte key (44 characters) |
+| fingerprint | SHA-256 over the raw 32 bytes: the first 16 hex characters in groups of four (`21fe-31df-a154-a261`) |
+| `id` | `r-` + a ULID (26 Crockford base32 characters); spent once the keeper processes it |
+| `issued_at` | UTC to the second: `2026-10-24T17:05:00Z` |
+| `key_id` | `collab-YYYY-MM`; a replacement in the same month is `collab-YYYY-MM-2`, `-3`… |
+
+`state` in a `request_status` is `accepted`, `progress`, `waiting`, `done`,
+`refused`, `failed` or `withdrawn`; Collaborator shows `sending` until the
+first one arrives.
 
 **Unreachable.** A dead endpoint can't report its own health: when a paired
 endpoint has no connection for `agents.unreachable_after` seconds, its
@@ -1338,8 +1373,11 @@ the badge says `paused` instead.
 #### The app's API
 
 **`GET /api/agents/endpoints`** → `{paired: [{id, name, fingerprint,
-approved_at, last_seen, connected, health}], pending: [{id, name, fingerprint,
-connected_at}]}`. **`POST /api/agents/endpoints/{id}/approve`** pairs a pending
+approved_at, last_seen, connected, health, pm, capabilities}], pending: [{id,
+name, fingerprint, connected_at}]}`. **`PUT /api/agents/pm`** `{endpoint_id |
+null}` marks one paired endpoint as the PM (exactly one holds the mark;
+forgetting it clears the mark) and returns the endpoint list; `404` for an
+endpoint that isn't yours. **`POST /api/agents/endpoints/{id}/approve`** pairs a pending
 one to the signed-in user (`404` if it's not waiting). **`DELETE
 /api/agents/endpoints/{id}`** forgets one (or refuses a pending one); its stored
 conversation stays.
@@ -1384,6 +1422,27 @@ channel, from_seq}` → `{requested}` asks the endpoint to replay.
 card); merge is one of these. `409` when it's no longer open, for text on an
 options-only question, or for an empty answer. Unknown option ids are dropped;
 a single-choice question keeps the first.
+
+**Signed requests.** **`GET /api/agents/signing-key`** → `{key_id,
+public_key, fingerprint}` (`404` before one exists; never the private half).
+**`POST /api/agents/signing-key`** `{replace?}` makes the Ed25519 pair (`409`
+if one exists, unless `replace: true`, which makes a new pair with a new
+`key_id` and discards the old private key). The private key is a file of its
+own, mode 0600, at `agents.request_signing_key_file`, outside everything the
+model can read; signing is never a model tool.
+**`GET /api/agents/requests`** → `{requests: [{id, kind, project, target,
+state, step, text, message_id, created_at, updated_at, hidden}]}`, open ones
+first. **`POST /api/agents/requests`** `{kind: "create_project", name,
+description, roles?, intents_md, kickoff?}` or `{kind: "withdraw", target}`
+signs, stores and sends it, returning `{request}`. `409` when no endpoint is
+marked as the PM, the PM didn't declare `create_project`, or there's no
+signing key; `422` for a bad name or body, or a target that has finished or
+is itself a withdrawal; `404` for an unknown target. A creation also pins its
+name as a project tag. **`POST /api/agents/requests/{id}/hide`** hides a
+finished request (`409` while open). A merge question's message carries its
+request as `request`; the answer endpoint returns `409` (and signs nothing)
+when the PM mark moved or there's no key. Live: `request` on
+`WS /api/agents/live` with `{request}`.
 
 **`GET /api/agents/notes/{title}`** → `{title, can_send, target: {project,
 endpoint_id, channel, label} | null, staged: {id, project, comment,

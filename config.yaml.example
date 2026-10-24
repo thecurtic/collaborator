@@ -210,6 +210,9 @@ agents:
   buffer_items: 500            # live firehose lines kept per channel, in memory only
   max_frame_bytes: 1048576
   unreachable_after: 30        # seconds without a connection before the badge says so
+  # Signs team requests (New project, Merge, Withdraw) for the endpoint marked
+  # as the PM. Made in Settings → Agents; mode 0600, never readable by the model.
+  request_signing_key_file: "backend/data/keys/request-signing.key"
 
 # Notifications. Which kinds notify is chosen in the app (Settings →
 # Notifications); this block is only delivery. Every notification is stored in

@@ -19,7 +19,9 @@ yt-dlp>=2025.1.1           # transcribe_video tool: fetches the audio track for 
 coincurve>=20.0.0          # secp256k1: verifying the DITTA broker's signed payment
                            # challenges (without it ditta_search refuses to pay),
 cryptography>=42.0.0       # and NWC's NIP-47 events + encryption (the dormant
-                           # wallet provider). Tolerated absent; tools error cleanly.
+                           # wallet provider), and Ed25519 for signed team requests
+                           # (needed once a signing key exists). Tolerated absent;
+                           # tools and signing error cleanly.
 markitdown[docx,pptx,xlsx]==0.1.8  # attachments: text out of DOCX/PPTX/XLSX/HTML/EPUB/CSV/...
                            # (not its [pdf] extra: pdfplumber wants a Pillow fastembed refuses)
 pypdfium2>=4.30.0          # attachments: PDF text layers, and scanned pages rendered for

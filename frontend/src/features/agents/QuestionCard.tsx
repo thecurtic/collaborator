@@ -1,11 +1,47 @@
-import { Check, Loader2 } from 'lucide-react';
+import { Check, GitMerge, Loader2 } from 'lucide-react';
 import { useState } from 'react';
-import { agentsApi, type AgentMessage, type AgentQuestion } from '@/api/agents';
+import { agentsApi, type AgentMessage, type AgentQuestion, type MergeProposal,
+         type TeamRequest } from '@/api/agents';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
+}
+
+const short = (sha: unknown) => (typeof sha === 'string' ? sha.slice(0, 7) : '?');
+
+const STATE_LABEL: Record<TeamRequest['state'], string> = {
+  sending: 'sending', accepted: 'accepted, waiting for the keeper', progress: 'in progress',
+  waiting: 'waiting', done: 'done', refused: 'refused', failed: 'failed', withdrawn: 'withdrawn',
+};
+
+/** What Merge would merge: the project, the two commits, the milestone. */
+function ProposalDetails({ p }: { p: MergeProposal }) {
+  const b = p.body;
+  return (
+    <div className="mt-2 rounded-md border border-border bg-background px-2.5 py-2 text-xs">
+      <p className="flex items-center gap-1.5 font-medium text-foreground">
+        <GitMerge className="h-3.5 w-3.5 text-primary" />
+        {b.project}: {b.from ?? 'integration'} → {b.to ?? 'main'}
+      </p>
+      {p.summary && <p className="mt-0.5 text-foreground">{p.summary}</p>}
+      <p className="mt-0.5 font-mono text-muted-foreground">
+        {short(b.from_sha)} onto {short(b.to_sha)}
+        {p.commits != null && <span className="font-sans"> · {p.commits} commit{p.commits === 1 ? '' : 's'}</span>}
+      </p>
+    </div>
+  );
+}
+
+/** The signed merge request's progress, on the card after Merge. */
+function RequestLine({ r }: { r: TeamRequest }) {
+  const bad = r.state === 'refused' || r.state === 'failed';
+  return (
+    <p className={cn('mt-1 text-xs', bad ? 'text-destructive' : 'text-muted-foreground')}>
+      Merge request {STATE_LABEL[r.state]}{r.text ? `: ${r.text}` : ''}
+    </p>
+  );
 }
 
 /**
@@ -20,12 +56,15 @@ export function QuestionCard({
   state,
   outcome,
   onAnswered,
+  request = null,
   compact = false,
 }: {
   messageId: number;
   question: AgentQuestion;
   state: AgentMessage['questionState'];
   outcome: AgentMessage['outcome'];
+  /** A merge question's signed request, once Merge was pressed. */
+  request?: TeamRequest | null;
   onAnswered?: (m: AgentMessage) => void;
   /** Feed card: no header chip, tighter spacing. */
   compact?: boolean;
@@ -60,6 +99,8 @@ export function QuestionCard({
           {answer || (outcome?.reason ? outcome.reason : 'Closed')}
           {answer && outcome?.reason && outcome.reason !== 'answered' && ` (${outcome.reason})`}
         </p>
+        {question.proposal && <ProposalDetails p={question.proposal} />}
+        {request && <RequestLine r={request} />}
       </div>
     );
   }
@@ -75,6 +116,7 @@ export function QuestionCard({
         </span>
       )}
       <p className="whitespace-pre-wrap text-sm text-foreground">{question.prompt}</p>
+      {question.proposal && <ProposalDetails p={question.proposal} />}
       {question.options.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {question.options.map((o) =>
