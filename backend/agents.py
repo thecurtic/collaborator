@@ -462,6 +462,45 @@ def feed_items(conn) -> List[Dict]:
     return out
 
 
+def open_questions(conn, project: str) -> List[Dict]:
+    """What's waiting on the user in a project: its open questions, merge
+    proposals first, each with its channel's label and any request. A merge
+    card stays while its signed request is still under way, so its progress
+    shows where Merge was pressed."""
+    ensure_schema(conn)
+    labels = {(e, c): l for e, c, l in conn.execute(
+        "SELECT endpoint_id, channel, label FROM agent_channels WHERE project = ?", (project,))}
+    final = tuple(agent_requests.FINAL_STATES)
+    rows = conn.execute(
+        f"SELECT {', '.join(_MSG_COLS)} FROM agent_messages WHERE project = ? AND "
+        "direction = 'in' AND (question_state = 'open' OR id IN (SELECT message_id FROM "
+        f"agent_requests WHERE kind = 'merge' AND message_id IS NOT NULL AND state NOT IN "
+        f"({','.join('?' * len(final))}))) ORDER BY id", (project, *final)).fetchall()
+    msgs = with_requests(conn, [_public_message(_msg_row(r)) for r in rows])
+    for m in msgs:
+        m["label"] = labels.get((m["endpoint_id"], m["channel"]), m["channel"])
+    msgs.sort(key=lambda m: not (m["question"] or {}).get("proposal"))
+    return msgs
+
+
+def last_merge(conn, project: str) -> Optional[Dict]:
+    """The newest merge into the project's main line: a merged event (the
+    Feed's record) or a signed merge request that finished."""
+    ensure_schema(conn)
+    found = []
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'feed_merged'").fetchone():
+        row = conn.execute("SELECT title, merged_at FROM feed_merged WHERE project = ? "
+                           "ORDER BY merged_at DESC LIMIT 1", (project,)).fetchone()
+        if row:
+            found.append({"text": row[0], "at": row[1]})
+    r = conn.execute("SELECT text, updated_at FROM agent_requests WHERE project = ? AND "
+                     "kind = 'merge' AND state = 'done' ORDER BY updated_at DESC LIMIT 1",
+                     (project,)).fetchone()
+    if r:
+        found.append({"text": r[0] or "Merged", "at": r[1]})
+    return max(found, key=lambda x: x["at"] or "") if found else None
+
+
 def search_messages(conn, terms: List[str], limit: int = 50) -> List[Dict]:
     """The user's unified search over stored conversations (never a model
     tool, never the firehose)."""

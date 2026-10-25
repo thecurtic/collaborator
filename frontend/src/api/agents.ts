@@ -49,6 +49,27 @@ export interface TeamRequest {
   createdAt: string;
   updatedAt: string;
   hidden: boolean;
+  /** A creation: the note it started from (Collaborator's own record, never signed). */
+  noteTitle: string | null;
+}
+
+/** Whether agents can be started on a project from here, or why not. */
+export type TeamStart = 'ok' | 'no_endpoints' | 'no_pm' | 'no_capability' | 'no_key';
+
+/** A project's team at a glance: GET /api/agents/projects/{tag}/team. */
+export interface ProjectTeam {
+  project: string;
+  /** An endpoint's discovery names this project: it has agents. */
+  served: boolean;
+  start: TeamStart;
+  /** The latest request to start agents on it, finished or not. */
+  startRequest: TeamRequest | null;
+  /** Open questions, merge (and test) cards first, each with its channel label. */
+  questions: (AgentMessage & { label: string })[];
+  lastMerge: { text: string; at: string } | null;
+  /** Cost and tokens so far across roles; null when none was recorded. */
+  usage: { input: number; output: number; cacheRead: number; calls: number; cost: number;
+           roles: number } | null;
 }
 
 export interface SigningKey {
@@ -63,6 +84,8 @@ export interface NewProjectForm {
   roles?: string[];
   intentsMd: string;
   kickoff?: string;
+  /** The note the intents came from, so the note can show what it started. */
+  noteTitle?: string;
 }
 
 export interface AgentHealth {
@@ -181,7 +204,19 @@ export function toRequest(r: Raw): TeamRequest {
     id: r.id, kind: r.kind, project: r.project ?? null, target: r.target ?? null,
     state: r.state, step: r.step ?? null, text: r.text ?? null,
     messageId: r.message_id ?? null, createdAt: r.created_at, updatedAt: r.updated_at,
-    hidden: !!r.hidden,
+    hidden: !!r.hidden, noteTitle: r.note_title ?? null,
+  };
+}
+
+export function toTeam(t: Raw): ProjectTeam {
+  const u = t.usage;
+  return {
+    project: t.project, served: !!t.served, start: t.start ?? 'no_endpoints',
+    startRequest: t.start_request ? toRequest(t.start_request) : null,
+    questions: (t.questions ?? []).map((m: Raw) => ({ ...toMessage(m), label: m.label ?? m.channel })),
+    lastMerge: t.last_merge ? { text: t.last_merge.text ?? '', at: t.last_merge.at } : null,
+    usage: u ? { input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cache_read ?? 0,
+                 calls: u.calls ?? 0, cost: u.cost ?? 0, roles: u.roles ?? 0 } : null,
   };
 }
 
@@ -303,8 +338,12 @@ export const agentsApi = {
     const res = await request<{ request: Raw }>('/api/agents/requests', json({
       kind: 'create_project', name: f.name, description: f.description,
       roles: f.roles?.length ? f.roles : undefined, intents_md: f.intentsMd,
-      kickoff: f.kickoff?.trim() ? f.kickoff : undefined }));
+      kickoff: f.kickoff?.trim() ? f.kickoff : undefined,
+      note_title: f.noteTitle || undefined }));
     return toRequest(res.request);
+  },
+  async team(tag: string): Promise<ProjectTeam> {
+    return toTeam(await request<Raw>(`/api/agents/projects/${enc(tag)}/team`));
   },
   async withdraw(target: string): Promise<TeamRequest> {
     return toRequest((await request<{ request: Raw }>('/api/agents/requests',

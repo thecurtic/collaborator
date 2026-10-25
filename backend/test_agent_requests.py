@@ -346,3 +346,50 @@ def test_no_model_tool_can_reach_the_signer():
     for store in (vault, config.resolve_path("backend/data/users")):
         assert not path.startswith(os.path.realpath(store) + os.sep)
     print("✓ the signer is out of the model's reach")
+
+
+def test_project_team_summary():
+    c, hub = _fresh(key=False)
+    assert c.get("/api/agents/projects/tidepool/team").json()["start"] == "no_endpoints"
+    ws, ep = _pm(c, hub, mark=False)
+    assert c.get("/api/agents/projects/tidepool/team").json()["start"] == "no_pm"
+    c.put("/api/agents/pm", json={"endpoint_id": ep.id})
+    assert c.get("/api/agents/projects/tidepool/team").json()["start"] == "no_key"
+    c.post("/api/agents/signing-key", json={})
+    t = c.get("/api/agents/projects/reef/team").json()
+    assert t["start"] == "ok" and not t["served"] and t["start_request"] is None
+    req = c.post("/api/agents/requests", json={
+        "kind": "create_project", "name": "reef", "description": "d", "intents_md": "i",
+        "note_title": "Reef survey"}).json()["request"]
+    assert req["note_title"] == "Reef survey"
+    env = ws.of("request")[-1]["request"]
+    assert "note_title" not in env["body"]                 # never signed
+    t = c.get("/api/agents/projects/reef/team").json()
+    assert t["start_request"]["id"] == req["id"] and t["start_request"]["state"] == "sending"
+
+    run(hub._frame(ep, {"type": "message", "project": "tidepool", "channel": "pm", "id": "m-0",
+                        "seq": 9, "text": "Which colour?",
+                        "question": {"id": "q-plain", "prompt": "Blue or green?",
+                                     "options": [{"id": "b", "label": "Blue"}]}}))
+    _merge_question(hub, ep)
+    run(hub._frame(ep, {"type": "event", "project": "tidepool", "channel": "pm",
+                        "event": "merged", "text": "Spec 3: the board"}))
+    run(hub._frame(ep, {"type": "usage", "project": "tidepool", "channel": "pm",
+                        "total": {"input": 10, "output": 2, "calls": 1, "cost": 0.25}}))
+    t = c.get("/api/agents/projects/tidepool/team").json()
+    assert t["served"]
+    assert [q["question"]["id"] for q in t["questions"]] == ["mq-1", "q-plain"]
+    assert t["questions"][0]["label"] == "pm"
+    assert t["last_merge"]["text"] == "Spec 3: the board"
+    assert t["usage"]["cost"] == 0.25 and t["usage"]["roles"] == 1
+    # Merge pressed: the card stays, with its request, until the request finishes.
+    mid = t["questions"][0]["id"]
+    c.post(f"/api/agents/questions/{mid}/answer", json={"option_ids": ["merge"]})
+    q = c.get("/api/agents/projects/tidepool/team").json()["questions"]
+    assert q[0]["id"] == mid and q[0]["question_state"] != "open"
+    assert q[0]["request"]["state"] == "sending"
+    rid = q[0]["request"]["id"]
+    run(hub._frame(ep, {"type": "request_status", "id": rid, "state": "done", "text": "merged"}))
+    q = c.get("/api/agents/projects/tidepool/team").json()["questions"]
+    assert [x["question"]["id"] for x in q] == ["q-plain"]
+    print("✓ team summary: start state, start request + its note, open questions, merge, cost")

@@ -865,6 +865,8 @@ function AppShell() {
             initialLens={notesLens}
             onBadgeRefresh={() => void refreshDrafts()}
             onSearchEverywhere={(q) => openFind(q, null)}
+            roots={convo.tree.roots}
+            onOpenProject={(tag) => openProject(tag, false)}
             onOpenTurn={(turnId) => {
               setNotesOpen(false);
               convo.selectPathTo(turnId);

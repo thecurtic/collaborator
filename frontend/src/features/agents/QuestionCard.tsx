@@ -13,7 +13,7 @@ function errMessage(err: unknown): string {
 const short = (sha: unknown) => (typeof sha === 'string' ? sha.slice(0, 7) : '?');
 
 const STATE_LABEL: Record<TeamRequest['state'], string> = {
-  sending: 'sending', accepted: 'accepted, waiting for the keeper', progress: 'in progress',
+  sending: 'sending', accepted: 'accepted', progress: 'in progress',
   waiting: 'waiting', done: 'done', refused: 'refused', failed: 'failed', withdrawn: 'withdrawn',
 };
 

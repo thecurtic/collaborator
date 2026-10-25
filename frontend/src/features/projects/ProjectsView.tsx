@@ -15,38 +15,14 @@ import { api } from '@/api/collaborator';
 import { request } from '@/api/http';
 import { ActionSheet, type SheetAction } from '@/components/ActionSheet';
 import { Button } from '@/components/ui/button';
-import { rootLabel, type NoteMeta, type Transcript, type TreeNode } from '@/domain/models';
+import type { TreeNode } from '@/domain/models';
 import { AgentArea } from '@/features/agents/AgentArea';
+import { TeamStrip } from '@/features/agents/ProjectTeam';
 import { useLongPress } from '@/lib/useLongPress';
-import { inferProjects, type NameOverrides, type ProjectItem } from './projectInference';
+import { time, useProjectInference, type Member } from './useProjectInference';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
-}
-
-/** A project member (note, chat or transcript) with what its row needs. */
-interface Member extends ProjectItem {
-  kind: 'note' | 'chat' | 'transcript';
-  title: string;
-  /** Sort key, newest first: last edit (notes), newest turn id (chats), date. */
-  order: number;
-  /** Shown under the title (notes: last edited; transcripts: when). */
-  when: string | null;
-  note?: NoteMeta;
-  root?: TreeNode;
-  transcriptId?: number;
-}
-
-/** Newest turn id in a subtree; ids are monotonic, so this sorts by activity. */
-function latestId(node: TreeNode): number {
-  let max = node.id;
-  for (const c of node.children) max = Math.max(max, latestId(c));
-  return max;
-}
-
-function time(iso: string | null): number {
-  const t = iso ? new Date(iso).getTime() : NaN;
-  return Number.isNaN(t) ? 0 : t;
 }
 
 function shortDate(iso: string | null): string | null {
@@ -56,21 +32,6 @@ function shortDate(iso: string | null): string | null {
   const sameYear = d.getFullYear() === new Date().getFullYear();
   return d.toLocaleDateString(undefined, sameYear
     ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-function membersFrom(notes: NoteMeta[], roots: TreeNode[], transcripts: Transcript[]): Member[] {
-  return [
-    ...notes.map((n) => ({
-      key: `note:${n.filename}`, tags: n.tags, kind: 'note' as const, title: n.title,
-      order: time(n.edited ?? n.created), when: n.edited ?? n.created, note: n })),
-    ...roots
-      .filter((r) => r.chatTags.includes('project'))
-      .map((r) => ({ key: `chat:${r.id}`, tags: r.chatTags, kind: 'chat' as const,
-                     title: rootLabel(r), order: latestId(r), when: null, root: r })),
-    ...transcripts.map((t) => ({
-      key: `transcript:${t.id}`, tags: t.tags, kind: 'transcript' as const,
-      title: t.title ?? t.url, order: time(t.createdAt), when: t.createdAt, transcriptId: t.id })),
-  ];
 }
 
 function counts(items: Member[]): string {
@@ -180,32 +141,19 @@ export function ProjectsView({
   onOpenChat: (root: TreeNode) => void;
   onOpenTranscript: (id: number) => void;
 }) {
-  const [notes, setNotes] = useState<NoteMeta[] | null>(null);
-  const [transcripts, setTranscripts] = useState<Transcript[]>([]);
-  const [overrides, setOverrides] = useState<NameOverrides>({ pinned: [], ignored: [] });
+  const { notes, inference, overrides, setOverrides, error, setError,
+          reload: reloadProjects } = useProjectInference(roots);
   const [agentProjects, setAgentProjects] = useState<AgentProject[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [agentsOpen, setAgentsOpen] = useState<{ channel: ProjectRequest['channel'] } | null>(null);
   const [creating, setCreating] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ title: string; actions: SheetAction[] } | null>(null);
 
   const load = useCallback(() => {
-    setError(null);
-    Promise.all([api.listNotes('project'), api.getProjectOverrides(),
-                 api.listTranscripts({ tag: 'project' })])
-      .then(([n, o, t]) => {
-        setNotes(n);
-        setOverrides(o);
-        setTranscripts(t.items);
-      })
-      .catch((err) => {
-        setError(errMessage(err));
-        setNotes((prev) => prev ?? []);
-      });
+    reloadProjects();
     // Agents are optional: no endpoints (or the feature off) is just none.
     agentsApi.projects().then(setAgentProjects).catch(() => setAgentProjects([]));
-  }, []);
+  }, [reloadProjects]);
 
   useEffect(() => load(), [load]);
 
@@ -237,9 +185,6 @@ export function ProjectsView({
     onRequestDone?.();
   }, [req, onRequestDone]);
 
-  const members = useMemo(() => membersFrom(notes ?? [], roots, transcripts),
-    [notes, roots, transcripts]);
-  const inference = useMemo(() => inferProjects(members, overrides), [members, overrides]);
   const agentsByTag = useMemo(() => new Map(agentProjects.map((p) => [p.tag, p])), [agentProjects]);
   const known = useMemo(() => new Set(inference.clusters.map((c) => c.name)), [inference]);
   // A backend tag with no notes here yet: offered as a project to open.
@@ -310,6 +255,8 @@ export function ProjectsView({
           <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">{open}</h2>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <TeamStrip tag={open} onOpenAgents={() => setAgentsOpen({ channel: null })}
+                     noteTitles={items.filter((m) => m.kind === 'note').map((m) => m.title)} />
           {agent && (
             <button type="button" onClick={() => setAgentsOpen({ channel: null })}
                     className="flex w-full items-center gap-3 border-b border-border px-4 py-3.5 text-left hover:bg-muted/60 active:bg-muted">

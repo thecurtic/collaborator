@@ -5515,6 +5515,49 @@ async def get_agent_firehose(tag: str, endpoint_id: str, channel: str,
     return {"items": agents.hub().firehose(endpoint_id, tag, channel)}
 
 
+def _team_start_state(user_key: str, conn) -> str:
+    """Whether agents can be started on a project from here: ok, or why not."""
+    hub = agents.hub()
+    if not hub._owned(user_key):
+        return "no_endpoints"
+    pm = agent_requests.pm_endpoint(conn)
+    if not pm or pm not in hub._owned(user_key):
+        return "no_pm"
+    if "create_project" not in agent_requests.capabilities(conn, pm):
+        return "no_capability"
+    try:
+        if agent_requests.signing_key() is None:
+            return "no_key"
+    except agent_requests.SigningError:
+        return "no_key"
+    return "ok"
+
+
+@app.get("/api/agents/projects/{tag}/team")
+async def get_agent_team(tag: str, passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """A project's team at a glance (the project view's strip and a project
+    note's start button): whether agents serve it or can be started on it,
+    the start request, open questions (merge and test cards first), the
+    last merge, and cost so far."""
+    user_key, db_path = _agents_user(passkey)
+    tag = tag.strip().lower()
+    conn = sqlite3.connect(db_path)
+    try:
+        agents.ensure_schema(conn)
+        served = tag in {p["tag"] for p in agents.hub().projects(user_key)}
+        return {
+            "project": tag,
+            "served": served,
+            "start": _team_start_state(user_key, conn),
+            "start_request": agent_requests.latest_for(conn, tag, "create_project"),
+            "questions": agents.open_questions(conn, tag),
+            "last_merge": agents.last_merge(conn, tag),
+            "usage": agent_runs.usage_totals(conn, tag),
+        }
+    finally:
+        conn.close()
+
+
 @app.get("/api/agents/projects/{tag}/run")
 async def get_agent_run(tag: str, passkey: Optional[str] = Header(None, alias="X-Passkey")):
     """The project's run report (same as the run_report tool): recorded
@@ -5590,6 +5633,8 @@ class AgentTeamRequest(BaseModel):
     intents_md: Optional[str] = None
     kickoff: Optional[str] = None
     target: Optional[str] = None
+    # Collaborator's own bookkeeping, never signed: the note a creation started from.
+    note_title: Optional[str] = None
 
 
 @app.put("/api/agents/pm")
@@ -5682,6 +5727,12 @@ async def post_agent_request(request: AgentTeamRequest,
     except agent_requests.SigningError as e:
         raise HTTPException(status_code=409, detail=str(e))
     req = await hub.submit(user_key, envelope, pm)
+    if request.kind == "create_project" and request.note_title:
+        conn = sqlite3.connect(db_path)
+        try:
+            req = agent_requests.set_note(conn, req["id"], request.note_title) or req
+        finally:
+            conn.close()
     if request.kind == "create_project":
         # Pin the name as a project tag, so the project view appears as soon
         # as an endpoint's discovery names it.

@@ -386,6 +386,22 @@ def _usage_by_channel(conn, project: str) -> Dict[Tuple[str, str], Dict]:
     return out
 
 
+def usage_totals(conn, project: str) -> Optional[Dict]:
+    """The project's cost and tokens so far (every role's running total), or
+    None when no usage was recorded."""
+    ensure_schema(conn)
+    usage = _usage_by_channel(conn, project)
+    if not usage:
+        return None
+    out = {k: 0 for k in USAGE_FIELDS}
+    for u in usage.values():
+        for k in USAGE_FIELDS:
+            out[k] += u["total"][k]
+    out["cost"] = round(out["cost"], 6)
+    out["roles"] = len(usage)
+    return out
+
+
 def _total_at(points: List[Tuple[str, Dict]], when: datetime.datetime) -> Optional[Dict]:
     best = None
     for ts, total in points:

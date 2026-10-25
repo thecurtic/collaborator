@@ -1436,10 +1436,11 @@ if one exists, unless `replace: true`, which makes a new pair with a new
 own, mode 0600, at `agents.request_signing_key_file`, outside everything the
 model can read; signing is never a model tool.
 **`GET /api/agents/requests`** → `{requests: [{id, kind, project, target,
-state, step, text, message_id, created_at, updated_at, hidden}]}`, open ones
-first. **`POST /api/agents/requests`** `{kind: "create_project", name,
-description, roles?, intents_md, kickoff?}` or `{kind: "withdraw", target}`
-signs, stores and sends it, returning `{request}`. `409` when no endpoint is
+state, step, text, message_id, created_at, updated_at, hidden, note_title}]}`,
+open ones first. **`POST /api/agents/requests`** `{kind: "create_project", name,
+description, roles?, intents_md, kickoff?, note_title?}` or `{kind: "withdraw",
+target}` signs, stores and sends it, returning `{request}`. `note_title` is the
+note a creation started from: Collaborator's own record, never signed. `409` when no endpoint is
 marked as the PM, the PM didn't declare `create_project`, or there's no
 signing key; `422` for a bad name or body, or a target that has finished or
 is itself a withdrawal; `404` for an unknown target. A creation also pins its
@@ -1448,6 +1449,17 @@ finished request (`409` while open). A merge question's message carries its
 request as `request`; the answer endpoint returns `409` (and signs nothing)
 when the PM mark moved or there's no key. Live: `request` on
 `WS /api/agents/live` with `{request}`.
+
+**`GET /api/agents/projects/{tag}/team`** → `{project, served, start,
+start_request, questions, last_merge, usage}`: a project's team at a glance,
+for the project view's strip and a project note's panel. `served`: an
+endpoint's discovery names it. `start`: `ok`, or why agents can't be started
+from here (`no_endpoints`, `no_pm`, `no_capability`, `no_key`).
+`start_request`: the latest `create_project` request for the tag (any state).
+`questions`: its open questions as messages plus their channel `label`,
+merge proposals first. `last_merge: {text, at}` from the newest merged event
+or finished merge request. `usage: {input, output, cache_read, cache_write,
+calls, cost, roles}` summed over the run log's totals (§28), or null.
 
 **`GET /api/agents/notes/{title}`** → `{title, can_send, target: {project,
 endpoint_id, channel, label} | null, staged: {id, project, comment,

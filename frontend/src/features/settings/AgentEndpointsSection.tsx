@@ -14,7 +14,7 @@ function errMessage(err: unknown): string {
  * first time waits here with a short fingerprint; compare it with what the
  * endpoint prints and approve it once. It's paired to whoever approves it.
  * One paired endpoint can be marked as the PM: labels are never read as
- * roles, so the mark is how Collaborator knows where New project, Merge and
+ * roles, so the mark is how Collaborator knows where Start agents, Merge and
  * Withdraw requests go (TeamRequestsPanel sits under it).
  * Hidden when there's nothing to show (no endpoints, or agents off).
  */
@@ -99,7 +99,7 @@ export function AgentEndpointsSection({ open }: { open: boolean }) {
                 </button>
               ) : (e.capabilities.length > 0 || !eps.paired.some((x) => x.pm)) && (
                 <button type="button" disabled={busy === e.id} onClick={() => void act(e.id, 'pm')}
-                        title="Mark as the PM: where New project, Merge and Withdraw go"
+                        title="Mark as the PM: where Start agents, Merge and Withdraw go"
                         className={cn('rounded-full border px-2 py-0.5 text-[10px]',
                           e.capabilities.length ? 'border-amber-500/50 text-amber-700'
                             : 'border-border text-muted-foreground')}>

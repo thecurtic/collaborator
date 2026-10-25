@@ -294,8 +294,11 @@ def ensure_schema(conn) -> None:
             updated_at TEXT NOT NULL,
             status_at TEXT,                   -- the first request_status: stop resending
             notified TEXT NOT NULL DEFAULT '',  -- states already notified (once each)
-            hidden INTEGER NOT NULL DEFAULT 0
+            hidden INTEGER NOT NULL DEFAULT 0,
+            note_title TEXT                   -- create: the note it started from (never signed)
         )""")
+    if "note_title" not in {r[1] for r in conn.execute("PRAGMA table_info(agent_requests)")}:
+        conn.execute("ALTER TABLE agent_requests ADD COLUMN note_title TEXT")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS agent_settings (
             key TEXT PRIMARY KEY,
@@ -311,7 +314,8 @@ def ensure_schema(conn) -> None:
 
 
 _COLS = ["id", "endpoint_id", "kind", "project", "target", "envelope", "state", "step",
-         "text", "message_id", "created_at", "updated_at", "status_at", "notified", "hidden"]
+         "text", "message_id", "created_at", "updated_at", "status_at", "notified", "hidden",
+         "note_title"]
 
 
 def _row(r) -> Dict:
@@ -323,7 +327,7 @@ def _row(r) -> Dict:
 
 def public(r: Dict) -> Dict:
     return {k: r[k] for k in ("id", "kind", "project", "target", "state", "step", "text",
-                              "message_id", "created_at", "updated_at", "hidden")}
+                              "message_id", "created_at", "updated_at", "hidden", "note_title")}
 
 
 def get(conn, rid: str) -> Optional[Dict]:
@@ -366,6 +370,23 @@ def store(conn, envelope: Dict, endpoint_id: str, message_id: Optional[int] = No
          json.dumps(envelope), message_id, now, now))
     conn.commit()
     return get(conn, b["id"])
+
+
+def set_note(conn, rid: str, title: Optional[str]) -> Optional[Dict]:
+    """Remember which note a creation started from (Collaborator's own
+    bookkeeping: not part of the signed body)."""
+    conn.execute("UPDATE agent_requests SET note_title = ? WHERE id = ?",
+                 ((title or "").strip()[:300] or None, rid))
+    conn.commit()
+    r = get(conn, rid)
+    return public(r) if r else None
+
+
+def latest_for(conn, project: str, kind: str) -> Optional[Dict]:
+    ensure_schema(conn)
+    r = conn.execute(f"SELECT {', '.join(_COLS)} FROM agent_requests WHERE project = ? AND "
+                     "kind = ? ORDER BY created_at DESC LIMIT 1", (project, kind)).fetchone()
+    return public(_row(r)) if r else None
 
 
 def unsent(conn, endpoint_id: str) -> List[Dict]:

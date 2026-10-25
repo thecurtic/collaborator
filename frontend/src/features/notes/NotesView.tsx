@@ -16,9 +16,10 @@ import { api } from '@/api/collaborator';
 import { ActiveFilter, ListFilterButton } from '@/components/ListFilter';
 import { SearchEverywhere } from '@/features/find/ScopedSearch';
 import { NoteSendPanel } from '@/features/agents/NoteSendPanel';
+import { ProjectNoteTeam } from '@/features/projects/ProjectNoteTeam';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { Note, NoteFieldsPatch, NoteMeta } from '@/domain/models';
+import type { Note, NoteFieldsPatch, NoteMeta, TreeNode } from '@/domain/models';
 import { categoryOf } from './categories';
 import {
   draftToPatch,
@@ -55,7 +56,13 @@ interface NotesViewProps {
   onOpenTurn: (turnId: number) => void;
   /** Hand the query to unified search. */
   onSearchEverywhere?: (q: string) => void;
+  /** Conversation roots: project names are inferred over chats too. */
+  roots?: TreeNode[];
+  /** Open a project's page (a project note's team panel). */
+  onOpenProject?: (tag: string) => void;
 }
+
+const NO_ROOTS: TreeNode[] = [];
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
@@ -68,8 +75,12 @@ function NoteScreen({
   onOpenTurn,
   onRetitle,
   onDeleted,
+  roots,
+  onOpenProject,
 }: {
   title: string;
+  roots: TreeNode[];
+  onOpenProject?: (tag: string) => void;
   onBack: () => void;
   onOpenNote: (title: string) => void;
   onOpenTurn: (turnId: number) => void;
@@ -332,6 +343,9 @@ function NoteScreen({
                 </div>
               )}
               <NoteSendPanel title={note.title} />
+              {onOpenProject && note.tags.includes('project') && (
+                <ProjectNoteTeam note={note} roots={roots} onOpenProject={onOpenProject} />
+              )}
               <FieldsSummary
                 category={categoryOf(note.tags)?.tag ?? null}
                 fields={note.fields}
@@ -389,6 +403,8 @@ export function NotesView({
   onBadgeRefresh,
   onOpenTurn,
   onSearchEverywhere,
+  roots = NO_ROOTS,
+  onOpenProject,
 }: NotesViewProps) {
   const [screen, setScreen] = useState<Screen>({ kind: 'list' });
   const [query, setQuery] = useState('');
@@ -496,6 +512,8 @@ export function NotesView({
         onBack={() => setScreen({ kind: 'list' })}
         onOpenNote={openNote}
         onOpenTurn={onOpenTurn}
+        roots={roots}
+        onOpenProject={onOpenProject}
         onRetitle={(t) => setScreen({ kind: 'note', title: t })}
         onDeleted={(t, unresolvedIn) => {
           setNotes((prev) => prev?.filter((n) => n.title !== t) ?? prev);

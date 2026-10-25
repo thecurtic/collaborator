@@ -150,3 +150,10 @@ export function inferProjects<T extends ProjectItem>(
     unassigned,
   };
 }
+
+/** The project an item belongs to: the cluster inferProjects placed it in
+ * (by key), so a note page and the Projects view always agree. Null when
+ * it isn't in any project. */
+export function nameFor(key: string, inference: ProjectInference): string | null {
+  return inference.clusters.find((c) => c.items.some((i) => i.key === key))?.name ?? null;
+}
