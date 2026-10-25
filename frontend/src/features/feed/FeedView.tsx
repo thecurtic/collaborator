@@ -21,6 +21,7 @@ import { useLongPress } from '@/lib/useLongPress';
 import { cn } from '@/lib/utils';
 import { formatEventRange } from '@/features/notes/eventFields';
 import { QuestionCard } from '@/features/agents/QuestionCard';
+import { Linked } from '@/components/Linked';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
@@ -90,6 +91,11 @@ function QuestionRow({
       </button>
       {q && item.ref.messageId != null ? (
         <div className="mt-2">
+          {item.ref.text && (
+            <p className="mb-1.5 line-clamp-4 whitespace-pre-wrap text-sm text-foreground">
+              <Linked text={item.ref.text} />
+            </p>
+          )}
           <QuestionCard compact messageId={item.ref.messageId} question={q} state="open"
                         outcome={null} onAnswered={onAnswered} />
         </div>

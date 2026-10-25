@@ -597,6 +597,8 @@ export interface FeedItem {
     endpointId?: string;
     channel?: string;
     question?: AgentQuestion | null;
+    /** A question's message text (a test build's link arrives here). */
+    text?: string;
   };
 }
 

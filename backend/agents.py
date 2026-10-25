@@ -455,7 +455,7 @@ def feed_items(conn) -> List[Dict]:
             "tags": [m["project"]],
             "ref": {"message_id": m["id"], "project": m["project"],
                     "endpoint_id": m["endpoint_id"], "channel": m["channel"],
-                    "question": q}})
+                    "question": q, "text": m["text"][:2000] if q else ""}})
     return out
 
 

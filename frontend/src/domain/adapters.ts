@@ -536,6 +536,7 @@ export function toFeedItem(api: ApiFeedItem): FeedItem {
       channel: typeof r.channel === 'string' ? r.channel : undefined,
       question: r.question && typeof r.question === 'object'
         ? toQuestion(r.question as Record<string, unknown>) : null,
+      text: typeof r.text === 'string' && r.text ? r.text : undefined,
     },
   };
 }

@@ -11,7 +11,7 @@ import {
   Send,
   Star,
 } from 'lucide-react';
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   agentsApi,
   connectAgentsLive,
@@ -25,6 +25,7 @@ import {
   type FirehoseItem,
 } from '@/api/agents';
 import { JumpToLatest } from '@/components/JumpToLatest';
+import { Linked } from '@/components/Linked';
 import { Button } from '@/components/ui/button';
 import { useScrollHold } from '@/lib/useScrollHold';
 import { cn } from '@/lib/utils';
@@ -42,23 +43,6 @@ function since(iso?: string): string {
   const t = new Date(iso);
   if (Number.isNaN(t.getTime())) return '';
   return ` since ${t.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
-}
-
-/** Plain text with http(s) links made tappable (system browser). */
-function Linked({ text }: { text: string }) {
-  const parts = text.split(/(https?:\/\/[^\s<>"')\]]+)/g);
-  return (
-    <>
-      {parts.map((p, i) =>
-        isWebUrl(p) ? (
-          <a key={i} href={p} target="_blank" rel="noopener noreferrer"
-             className="break-all text-primary underline underline-offset-2">{p}</a>
-        ) : (
-          <Fragment key={i}>{p}</Fragment>
-        ),
-      )}
-    </>
-  );
 }
 
 function HealthBadge({ detail }: { detail: AgentProjectDetail }) {

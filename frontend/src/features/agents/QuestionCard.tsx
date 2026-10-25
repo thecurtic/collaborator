@@ -2,6 +2,7 @@ import { Check, GitMerge, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { agentsApi, type AgentMessage, type AgentQuestion, type MergeProposal,
          type TeamRequest } from '@/api/agents';
+import { Linked } from '@/components/Linked';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -48,7 +49,9 @@ function RequestLine({ r }: { r: TeamRequest }) {
  * A question from an agent channel, the same wherever it shows up (its
  * channel, its Feed card): options as buttons (checkboxes when several can
  * be picked), free text when the harness allows it. Once answered or
- * closed, it shows the outcome instead of live controls.
+ * closed, it shows the outcome instead of live controls. Every option is
+ * shown in order; only a proposal's approve option signs anything (Test,
+ * Rebuild, Not now are ordinary answers).
  */
 export function QuestionCard({
   messageId,
@@ -93,7 +96,7 @@ export function QuestionCard({
     const answer = [chosen.join(', '), outcome?.text].filter(Boolean).join(' · ');
     return (
       <div className={cn('rounded-lg border border-border bg-muted/40', compact ? 'p-2' : 'p-3')}>
-        <p className="text-sm text-foreground">{question.prompt}</p>
+        <p className="text-sm text-foreground"><Linked text={question.prompt} /></p>
         <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
           <Check className="h-3.5 w-3.5" />
           {answer || (outcome?.reason ? outcome.reason : 'Closed')}
@@ -115,7 +118,7 @@ export function QuestionCard({
           {question.header}
         </span>
       )}
-      <p className="whitespace-pre-wrap text-sm text-foreground">{question.prompt}</p>
+      <p className="whitespace-pre-wrap text-sm text-foreground"><Linked text={question.prompt} /></p>
       {question.proposal && <ProposalDetails p={question.proposal} />}
       {question.options.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">

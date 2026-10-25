@@ -232,6 +232,41 @@ def test_merge_question_signs_exactly_the_proposal():
     print("✓ Merge signs exactly the proposal + id + issued_at; Not now signs nothing")
 
 
+def test_test_build_round_trip_signs_nothing_and_carries_the_link():
+    # PSM r10: Test is an ordinary answer; the manager closes the card and
+    # sends a new question for the same proposal with the link in its text.
+    c, hub = _fresh()
+    ws, ep = _pm(c, hub)
+    proposal = {"approve_option": "merge", "summary": "Milestone: viewer",
+                "body": {"v": 1, "kind": "merge", "project": "tidepool",
+                         "from_sha": "a" * 40, "to_sha": "b" * 40}}
+    opts = [{"id": "merge", "label": "Merge"}, {"id": "test", "label": "Test"},
+            {"id": "not_now", "label": "Not now"}]
+    run(hub._frame(ep, {"type": "message", "project": "tidepool", "channel": "pm",
+                        "id": "m-1", "seq": 1, "text": "Milestone: viewer",
+                        "question": {"id": "mq-1", "prompt": "Merge?", "options": opts,
+                                     "proposal": proposal}}))
+    q = _messages(c)[0]
+    assert [o["id"] for o in q["question"]["options"]] == ["merge", "test", "not_now"]
+    c.post(f"/api/agents/questions/{q['id']}/answer", json={"option_ids": ["test"]})
+    assert ws.of("request") == []
+    run(hub._frame(ep, {"type": "question_closed", "project": "tidepool", "question_id": "mq-1",
+                        "outcome": {"text": "building it now"}}))
+    link = "http://<tailnet-address>:8123/"
+    run(hub._frame(ep, {"type": "message", "project": "tidepool", "channel": "pm",
+                        "id": "m-2", "seq": 2, "text": f"Test build ready: {link}",
+                        "question": {"id": "mq-1-r1", "prompt": "Merge?",
+                                     "options": [opts[0], {"id": "rebuild", "label": "Rebuild"},
+                                                 opts[2]], "proposal": proposal}}))
+    feed = [i for i in c.get("/api/feed").json()["items"] if i["type"] == "agent_question"]
+    assert len(feed) == 1 and link in feed[0]["ref"]["text"]
+    assert feed[0]["ref"]["question"]["proposal"]["approve_option"] == "merge"
+    q2 = next(m for m in _messages(c) if (m["question"] or {}).get("id") == "mq-1-r1")
+    c.post(f"/api/agents/questions/{q2['id']}/answer", json={"option_ids": ["merge"]})
+    assert len(ws.of("request")) == 1
+    print("✓ Test/Rebuild sign nothing; the rebuilt card carries the link to the Feed")
+
+
 def test_proposal_from_another_endpoint_is_an_ordinary_question(monkeypatch):
     c, hub = _fresh()
     notes = []

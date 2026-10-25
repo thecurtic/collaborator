@@ -990,7 +990,7 @@ Types, what "changed" means, and `ref`:
 | `approval` | a pending draft's creation | `draft_id`, `run_id` |
 | `transcript` | a finished or failed transcription | `transcript_id`, `status` |
 | `merged` | merged agent work: an endpoint's `merged` event (quiet, never a notification) | `merged_id`, `project` |
-| `agent_question` | an open question from an agent channel; leaves once answered or closed | `message_id`, `project`, `endpoint_id`, `channel`, `question` |
+| `agent_question` | an open question from an agent channel; leaves once answered or closed | `message_id`, `project`, `endpoint_id`, `channel`, `question`, `text` (the message's text, up to 2000 chars) |
 | `agent_message` | a message the backend flagged as needing the user, not yet seen; leaves once its channel is read. Plain unreads never appear | `message_id`, `project`, `endpoint_id`, `channel` |
 
 A note never touched or changed in the app doesn't appear. `warmth` is null
@@ -1324,7 +1324,11 @@ lists of strings). Honoured only from the PM endpoint that declared `merge`;
 otherwise it shows as an ordinary question and signs nothing. Picking
 `approve_option` signs `body` plus Collaborator's own `id` and `issued_at`
 (nothing else added or removed), sends the `request`, then the answer as
-usual. Any other option is an ordinary answer.
+usual. Any other option (Not now, Test, Rebuild…) is an ordinary answer;
+every option shows, in order. A test build arrives as a new question for
+the same proposal (new question id) with the link in the message text;
+links in a message's text and a question's prompt are clickable, in the
+channel and on the Feed card.
 
 **Collaborator → endpoint**
 
