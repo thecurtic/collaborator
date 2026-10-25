@@ -1296,10 +1296,11 @@ isn't paired are ignored.
 | `channel_removed` | `project, channel` | drops it |
 | `message` | `project, channel, id, seq, ts?, text, needs_reply?, question?` | stores it (deduped by `id`), acks `seq`. `needs_reply` or a question notifies once |
 | `question_closed` | `project, question_id, outcome: {option_ids?, text?, reason?}` | the question shows its outcome instead of live controls; its notification clears |
-| `firehose` | `project, channel, kind?, text, seq?, ts?, replay?` | the live buffer (memory only, `agents.buffer_items` per channel); never stored |
+| `firehose` | `project, channel, kind?, text, seq?, ts?, replay?` | the live buffer (`agents.buffer_items` per channel, memory) and the run log (§28, kept). Lines whose `seq` is already stored are dropped |
 | `event` | `project, channel?, event, text?, work_item?, commit?, url?` | the channel's status line becomes `text`; a marker drops into its firehose. `event: "merged"` lands quietly in the Feed. An http(s) `url` is the channel's preview link. Never chat, never a notification |
 | `health` | `state: "ok"\|"degraded", detail?, since?` | one quiet badge per project when any endpoint serving it is degraded; never a notification |
 | `ack` | `id` | an outbound message was received; it won't be resent |
+| `usage` | `project, channel, ts, model?, turn?: {input, output, cache_read, cache_write, calls, cost}, total: {same}` | stored in the run log (§28); the copy resent at every welcome repeats a stored `total` and is dropped. `cost` is USD, 0 for a local model; `turn` is missing on the welcome copy. Never shown live, never answered |
 | `request_status` | `id, kind, project, state, step?, text, updated_at` | PM endpoint only. Upserts the request's row (an unknown id is a new row) and stops resending it. `refused`, `failed` and a creation's `done` notify once; the rest land quietly |
 
 `seq` is per channel, assigned by the endpoint, and only on conversation
@@ -1336,7 +1337,7 @@ channel and on the Feed card.
 |---|---|
 | `message` | `project, channel, id, ts, text, note?, answer?`, queued and resent on every welcome until acked |
 | `ack` | `project, channel, seq, id`, for each stored message |
-| `history_request` | `project, channel, from_seq`: resend the channel's firehose from that sequence number (replay); the lines come back as `firehose` frames with `replay: true` |
+| `history_request` | `project, channel, from_seq`: resend the channel's firehose from that sequence number (replay); the lines come back as `firehose` frames with `replay: true`. Sent once per connection per channel, when it is declared, from one past the highest seq in the run log, to fill what was sent while Collaborator wasn't connected; an endpoint that can't replay ignores it |
 | `request` | `request: {body, key_id, sig}`, the signed envelope. To the PM endpoint only; stored, and resent on every welcome until a `request_status` with its `id` comes back |
 
 `text` is always the human-readable message, so a backend that reads only
@@ -1463,12 +1464,13 @@ signed-in user's updates: `message`, `channel`, `channel_removed`,
 `firehose`, `event`, `health`, `discovery`, `endpoint` (connected or not). The
 app reloads what it shows from the HTTP endpoints when it reconnects.
 
-**The model's side.** Two tools, offered only once agents serve a project:
-`stage_note_send` stages a note (nothing is sent until the user presses send
-in the note view) and `read_agent_messages` reads stored conversation
-messages, marked as untrusted agent output, used only when the user asks.
-Channel content otherwise stays out of recall and every other tool; the
-firehose never reaches the model.
+**The model's side.** Offered only once agents serve a project (or, for the
+run tools, once a run was recorded): `stage_note_send` stages a note (nothing
+is sent until the user presses send in the note view), `read_agent_messages`
+reads stored conversation messages, and `run_report` / `read_run_log` read
+the run log (§28). Everything they return is marked as untrusted agent
+output, and they are used only when the user asks. Channel content otherwise
+stays out of recall and every other tool.
 
 ### 27. Tool log (every tool call the model made)
 
@@ -1526,6 +1528,44 @@ Scratch actions). Unknown `sort` is `422`; `limit` is capped at 500.
 `result_preview`, `run_id`, `turn_exists` (the reply may since have been
 deleted) and `siblings` (`[{id, tool, outcome}]`, every call of the same
 reply in order). `404` if unknown.
+
+### 28. Run logs (how an agent project unfolded)
+
+What git doesn't hold, recorded as it reaches Collaborator, in the signed-in
+user's own data (`agents.record_runs`, on by default; nothing is pruned):
+
+| What | Where |
+|---|---|
+| Firehose lines | `agent-runs/<project>/<endpoint--channel>/<YYYY-MM-DD>.jsonl` next to the user's `conversations.db`; days before today are gzipped (`.jsonl.gz`). Each line is the frame's item plus `epoch` and `received_at` |
+| Firehose bookkeeping | `agent_firehose_files`: stored seq ranges (so replays are dropped and holes counted), lines, bytes, kinds. A live seq that doesn't move forward starts a new epoch |
+| Usage | `agent_usage`: every distinct `total` per channel, with its `turn` and `model` |
+| Timeline | `agent_run_events`: channel added/removed, busy, idle, status changes, events, request status changes, health changes, project state, sequence restarts. Repeats (statuses resent at a welcome) are kept once |
+| Connections | `agent_run_sessions`: per endpoint, connected at, last frame, disconnected at, clean or not. A session still open at the next connect (Collaborator restarted, the link died unnoticed) is closed at its last frame and marked not clean |
+
+**`GET /api/agents/projects/{tag}/run`** → the run report (the same object
+the `run_report` tool returns): `{project, recorded, recorded_from, totals:
+{input, output, cache_read, cache_write, calls, cost}, roles: [{role,
+channel, endpoint, usage: {…totals, models, frames, first_frame_at,
+last_frame_at, note} | null, firehose: {lines, bytes, kinds, missing_lines,
+sequenced} | null, busy_seconds, messages: {from_agent, questions,
+from_user}}], timeline: [{at, kind, role, …, cost_so_far}],
+timeline_truncated, connections, gaps: [{what, …, why}], not_recorded,
+how_to_report}`. `{recorded: false, note}` when nothing was recorded. Works
+after agents stop serving the project.
+
+**`GET /api/agents/projects/{tag}/run/log?role&query&since&until&limit`** →
+`{matched, shown, lines: [{role, at, kind, seq, text, replayed?}], note}`:
+recorded firehose lines, oldest first, the newest `limit` (default 50, max
+200) of the matches; text is cut at 3000 characters.
+
+**Honesty.** The report says what it didn't see, rather than leaving it out:
+`gaps` lists time not connected (with why), firehose lines missing by
+sequence number, sequence restarts and roles with no usage; `not_recorded`
+lists what can't be known (anything before `recorded_from`, lines sent while
+away and not replayed, cost per stretch before a role's first usage frame).
+Usage totals are the endpoint's own running totals, so cost stays complete
+across gaps. The tool descriptions tell the model to report gaps plainly and
+never estimate or invent what's missing.
 
 ## Data Models
 

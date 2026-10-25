@@ -61,6 +61,7 @@ class Session:
         self.extra_projects = []  # made by create_project requests
         self.statuses = {}        # request id -> latest request_status (the snapshot)
         self.public_key = None
+        self.usage = {}           # channel -> latest usage frame (sent again at a welcome)
 
     async def send(self, frame):
         if self.ws is not None:
@@ -86,6 +87,19 @@ class Session:
         frame = {"type": "firehose", "project": self.project, "channel": channel,
                  "seq": len(lst) + 1, "ts": now(), "kind": kind, "text": text}
         lst.append(frame)
+        await self.send(frame)
+
+    async def turn_done(self, channel, model="fake/model-1"):
+        """A `usage` frame after a turn that called the model (PSM r11)."""
+        turn = {"input": random.randint(2000, 20000), "output": random.randint(100, 2000),
+                "cache_read": random.randint(0, 90000), "cache_write": 0,
+                "calls": random.randint(1, 8)}
+        turn["cost"] = round(turn["input"] * 1e-6 + turn["output"] * 4e-6, 6)
+        prev = (self.usage.get(channel) or {}).get("total") or {k: 0 for k in turn}
+        total = {k: round(prev[k] + turn[k], 6) for k in turn}
+        frame = {"type": "usage", "project": self.project, "channel": channel, "ts": now(),
+                 "model": model, "turn": turn, "total": total}
+        self.usage[channel] = frame
         await self.send(frame)
 
     async def event(self, channel, event, text, **extra):
@@ -250,6 +264,7 @@ async def reply_to(s: Session, frame):
     else:
         text = f"On it: \"{frame.get('text', '')[:80]}\""
     await s.say(channel, text)
+    await s.turn_done(channel)
     await s.channel(channel, label if s.scenario == "solo" else
                     (f"pm-{s.project}" if channel == "pm" else "design-lead"),
                     True, s.scenario == "solo" or channel == "design", "idle", busy=False)
@@ -274,12 +289,14 @@ async def script(s: Session):
     for t in THINKING:
         await asyncio.sleep(1.2)
         await s.line("frontend", t, kind="tool" if "Running" in t else "text")
+    await s.turn_done("frontend")
     await s.event("frontend", "work_complete", "frontend: spec 009 done → auditor",
                   work_item="spec-009", commit="9f3c2ab")
     await s.channel("auditor", "auditor", False, True, "auditing spec 009")
     for t in ("Checking out spec-009", "Running the Playwright checks", "8/8 passed"):
         await asyncio.sleep(1.5)
         await s.line("auditor", t)
+    await s.turn_done("auditor", model="fake/model-2")
     await s.event("auditor", "audit", "auditor: Spec 009 PASS → PM", work_item="spec-009")
     await s.event("frontend", "preview", "Try the swap page",
                   url="http://<tailnet-host>:5173/")
@@ -326,6 +343,8 @@ async def run_once(url, s: Session, key, name):
         await catch_up(s, first.get("acked") or {})
         for f in s.statuses.values():       # the snapshot on every welcome
             await s.send(f)
+        for f in s.usage.values():          # latest usage again, without its turn
+            await s.send({k: v for k, v in f.items() if k != "turn"})
         if s.player is None:
             s.player = asyncio.ensure_future(script(s))
         drop_at = time.time() + 40 if s.scenario == "drop" else None

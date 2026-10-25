@@ -10,7 +10,8 @@ message sent while busy does (midturn_input: steers or queues).
 
 The wire format is in API-SPEC.md ("Agent endpoints"). In short, JSON frames
 with a `type`; endpoint -> Collaborator: hello, discovery, channel,
-channel_removed, message, question_closed, firehose, event, health, ack;
+channel_removed, message, question_closed, firehose, event, health, ack,
+request_status, usage;
 Collaborator -> endpoint: pairing, welcome, message, ack, history_request.
 
 Boundaries this module keeps:
@@ -19,14 +20,15 @@ Boundaries this module keeps:
   - An endpoint is paired once, to the user who approves it. Its key is a
     random secret it generated; only the hash is stored (global DB).
   - Stored per user: the conversation (messages in channels, questions,
-    answers), channel declarations and project discovery. The firehose is
-    NEVER stored: a short in-memory buffer only (agent output is untrusted
-    and mostly worthless within hours).
+    answers), channel declarations and project discovery, and the run log
+    (agent_runs: firehose lines, usage, the timeline, when Collaborator was
+    connected), all in the user's own data. The live view still reads the
+    short in-memory buffer.
   - Nothing from the vault crosses toward a backend except what the user
     sends by hand (a message, a sent note, an answer).
-  - Channel content stays out of recall and the model's tools; the one
-    explicit tool reads stored messages (never the firehose) and marks them
-    as agent output.
+  - Channel content stays out of recall. Three explicit tools read it, used
+    only when the user asks: stored messages (read_agent_messages), the run
+    report and the run log (agent_runs). All mark it as agent output.
 """
 
 import asyncio
@@ -42,6 +44,7 @@ import uuid
 from typing import Callable, Dict, List, Optional, Tuple
 
 import agent_requests
+import agent_runs
 import feed
 import gate_client
 import notifications
@@ -567,6 +570,8 @@ class _Endpoint:
         self.connected_at: Optional[str] = None
         self.disconnected_at: Optional[float] = None
         self.health: Dict = {"state": "ok"}
+        self.seen_at = 0.0               # last time the run log's session was touched
+        self.replayed: set = set()       # channels asked to replay on this connection
 
 
 class Hub:
@@ -584,6 +589,7 @@ class Hub:
         self.pending: Dict[str, _Endpoint] = {}
         self.buffers: Dict[Tuple[str, str, str], collections.deque] = {}
         self.subscribers: Dict[str, List[asyncio.Queue]] = {}
+        self._db_paths: Dict[str, str] = {}
         self.started = time.time()
         self._server = None
 
@@ -598,6 +604,31 @@ class Hub:
         conn = sqlite3.connect(self.db_for_user(user_key))
         ensure_schema(conn)
         return conn
+
+    def _runs(self, user_key: str):
+        """The user's run log, for frames that arrive often (firehose lines):
+        their DB path is resolved once per process."""
+        if user_key not in self._db_paths:
+            self._db_paths[user_key] = self.db_for_user(user_key)
+        path = self._db_paths[user_key]
+        return agent_runs.connect(path), path
+
+    def _recording(self) -> bool:
+        return bool(_cfg().get("record_runs", True))
+
+    def _log(self, ep: "_Endpoint", fn):
+        """Write to the run log; a failure there never breaks the seam."""
+        if not ep.user_key or not self._recording():
+            return None
+        try:
+            conn, path = self._runs(ep.user_key)
+            try:
+                return fn(conn, path)
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"Warning: agent run log: {e!r}")
+            return None
 
     def _buffer(self, eid: str, project: str, channel: str) -> collections.deque:
         key = (eid, project, channel)
@@ -738,6 +769,7 @@ class Hub:
     async def _welcome(self, ep: _Endpoint) -> None:
         """Paired: say where the conversation left off (per channel, the
         highest seq stored), then resend whatever the endpoint hasn't acked."""
+        self._log(ep, lambda c, _p: agent_runs.session_start(c, ep.id, ep.name))
         conn = self._user_conn(ep.user_key)
         try:
             acked = {f"{p}/{c}": s for p, c, s in conn.execute(
@@ -776,6 +808,7 @@ class Hub:
                 reg.commit()
             finally:
                 reg.close()
+            self._log(live, lambda c, _p: agent_runs.session_end(c, ep.id))
             self.publish(live.user_key, {"type": "endpoint", "endpoint_id": ep.id,
                                          "connected": False})
 
@@ -783,10 +816,15 @@ class Hub:
 
     async def _frame(self, ep: _Endpoint, f: Dict) -> None:
         t = f.get("type")
+        now = time.time()
+        if now - ep.seen_at > 30:       # how long Collaborator was listening
+            ep.seen_at = now
+            self._log(ep, lambda c, _p: agent_runs.session_seen(c, ep.id))
         if t == "discovery":
             self._discovery(ep, f)
         elif t == "channel":
             self._channel(ep, f)
+            await self._maybe_replay(ep, f)
         elif t == "channel_removed":
             self._channel_removed(ep, f)
         elif t == "message":
@@ -803,6 +841,8 @@ class Hub:
             self._ack(ep, f)
         elif t == "request_status":
             self._request_status(ep, f)
+        elif t == "usage":
+            self._usage(ep, f)
         # Anything else is ignored: newer endpoints may speak more than we do.
 
     def _discovery(self, ep: _Endpoint, f: Dict) -> None:
@@ -826,6 +866,12 @@ class Hub:
             conn.close()
         if stray:
             self._warn_not_pm(ep)
+
+        def log(c, _p):
+            for tag, state in projects:
+                agent_runs.record_event(c, ep.id, tag, "project_state", {"state": state},
+                                        dedupe=True)
+        self._log(ep, log)
         self.publish(ep.user_key, {"type": "discovery", "endpoint_id": ep.id,
                                    "projects": [{"tag": t, "state": s} for t, s in projects]})
 
@@ -860,7 +906,32 @@ class Hub:
             c = get_channel(conn, project, ep.id, channel)
         finally:
             conn.close()
+
+        def log(lc, _p):
+            if not cur:
+                agent_runs.record_event(lc, ep.id, project, "channel", {"label": label},
+                                        channel=channel)
+            if row["busy"] != bool(cur.get("busy", False)):
+                agent_runs.record_event(lc, ep.id, project, "busy" if row["busy"] else "idle",
+                                        {}, channel=channel)
+            if row["status"] and row["status"] != cur.get("status", ""):
+                agent_runs.record_event(lc, ep.id, project, "status", {"text": row["status"]},
+                                        channel=channel)
+        self._log(ep, log)
         self.publish(ep.user_key, {"type": "channel", "project": project, "channel": c})
+
+    async def _maybe_replay(self, ep: _Endpoint, f: Dict) -> None:
+        """Once per connection per channel: ask for the firehose lines sent
+        while Collaborator wasn't listening (from one past the highest stored).
+        An endpoint that can't replay ignores it; the report counts the hole."""
+        project, channel = _ident(f.get("project")), _ident(f.get("channel"))
+        if not project or not channel or (project, channel) in ep.replayed:
+            return
+        ep.replayed.add((project, channel))
+        start = self._log(ep, lambda c, _p: agent_runs.replay_from(c, ep.id, project, channel))
+        if start is not None:
+            await self._send(ep, {"type": "history_request", "project": project,
+                                  "channel": channel, "from_seq": start})
 
     def _channel_removed(self, ep: _Endpoint, f: Dict) -> None:
         project, channel = _ident(f.get("project")), _ident(f.get("channel"))
@@ -872,6 +943,8 @@ class Hub:
         finally:
             conn.close()
         self.buffers.pop((ep.id, project, channel), None)
+        self._log(ep, lambda c, _p: agent_runs.record_event(c, ep.id, project, "channel_removed",
+                                                            {}, channel=channel))
         self.publish(ep.user_key, {"type": "channel_removed", "project": project,
                                    "endpoint_id": ep.id, "channel": channel})
 
@@ -996,6 +1069,7 @@ class Hub:
         if f.get("replay"):
             item["replay"] = True
         self._buffer(ep.id, project, channel).append(item)
+        self._log(ep, lambda c, p: agent_runs.record_firehose(c, p, ep.id, project, channel, item))
         self.publish(ep.user_key, {"type": "firehose", "project": project,
                                    "endpoint_id": ep.id, "channel": channel, "item": item})
 
@@ -1034,6 +1108,9 @@ class Hub:
             marker["url"] = url.strip()
         if channel:
             self._buffer(ep.id, project, channel).append(marker)
+        self._log(ep, lambda lc, _p: agent_runs.record_event(
+            lc, ep.id, project, "event", {k: v for k, v in marker.items() if k not in ("ts", "kind")},
+            channel=channel, ts=marker["ts"]))
         self.publish(ep.user_key, {"type": "event", "project": project, "endpoint_id": ep.id,
                                    "channel": channel, "item": marker, "channel_state": c})
 
@@ -1083,6 +1160,11 @@ class Hub:
         if res is None:
             return
         r = res["request"]
+        # Statuses come again at every welcome: the timeline keeps changes.
+        self._log(ep, lambda c, _p: agent_runs.record_event(
+            c, ep.id, r["project"] or "", "request",
+            {"id": r["id"], "request": r["kind"], "state": r["state"], "step": r["step"],
+             "text": r["text"]}, key=r["id"], dedupe=True))
         if res["notify"]:
             what = {"create_project": "New project", "merge": "Merge",
                     "withdraw": "Withdrawal"}.get(r["kind"], "Request")
@@ -1105,7 +1187,21 @@ class Hub:
             ep.health["since"] = (_clip(f.get("since"), 40) or
                                   (prev.get("since") if prev.get("state") == "degraded"
                                    else _now_iso()))
+        health = {"state": state, "detail": ep.health["detail"]}
+
+        def log(c, _p):
+            for (tag,) in c.execute("SELECT tag FROM agent_projects WHERE endpoint_id = ?",
+                                    (ep.id,)).fetchall():
+                agent_runs.record_event(c, ep.id, tag, "health", health, dedupe=True)
+        self._log(ep, log)
         self.publish(ep.user_key, {"type": "health", "endpoint_id": ep.id})
+
+    def _usage(self, ep: _Endpoint, f: Dict) -> None:
+        """Tokens and cost after a turn (PSM r11). Stored for run reports;
+        nothing about it needs an answer or reaches the live view."""
+        project, channel = _ident(f.get("project")), _ident(f.get("channel"))
+        if project and channel:
+            self._log(ep, lambda c, _p: agent_runs.record_usage(c, ep.id, f, project, channel))
 
     def _ack(self, ep: _Endpoint, f: Dict) -> None:
         mid = _ident(f.get("id"))

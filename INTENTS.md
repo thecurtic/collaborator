@@ -689,6 +689,35 @@ innocent. Usage stats are a second view over the same rows.
   tool loop. Rows from before the log existed were backfilled once from the
   per-reply Sources (`turns.tool_activity`), with no timing or preview.
 
+## Decision: Agent Runs Are Recorded, and Reports Name Their Gaps
+
+Decided 2026-10-25, reversing "the firehose is never stored". Git holds a
+project's code history; everything else about how a run unfolded (each
+role's firehose, tokens and cost from PSM's `usage` frames, the timeline,
+when Collaborator was connected) goes into a run log (`backend/agent_runs.py`,
+API-SPEC §28), so the user can ask for a full run report and use it to refine
+pi-session-manager.
+
+- **Per user, like all data.** Tables in the user's own `conversations.db`,
+  firehose text as JSONL in `agent-runs/` beside it. Nothing crosses users.
+- **Kept forever.** Text is the only thing that grows; earlier days are
+  gzipped, and a project's run is typically a few MB. No pruning until that
+  proves wrong.
+- **Recorded as it arrives, so it has holes.** Collaborator only sees what
+  reaches it. On reconnect it asks the endpoint to replay the firehose from
+  the last line stored; an endpoint that can't simply leaves the hole.
+- **Honest over complete.** The report lists time not connected (and why),
+  missing lines counted by sequence number, roles with no usage, and what
+  can't be known (anything before recording began). The model is told to
+  report those plainly and never estimate or invent what's missing. Usage
+  totals are the endpoint's own running counts, so cost stays complete
+  across gaps; only its breakdown over time has holes.
+- **Built in code, read by explicit tools.** `run_report` hands the model
+  facts and figures computed by Collaborator; `read_run_log` returns bounded
+  firehose excerpts. Both are offered only when a run exists, used only when
+  the user asks, and mark everything as untrusted agent output. Recall still
+  never sees agent content.
+
 ## Future Considerations (User-Defined)
 
 - [ ] Priority levels for recall

@@ -92,8 +92,15 @@ agents, run the fake endpoint from the dev box:
 (scenarios: team, solo, drop, silent, multi, unmatched).
 
 User data lives under `backend/data/users/<identity-hash>/`: the SQLite
-database and the notes vault. Back that directory up, plus `config.yaml` and
-`backend/data/authentication/passkeys.db`.
+database, the notes vault and `agent-runs/` (each agent project's run log:
+firehose lines as JSONL, earlier days gzipped; nothing is pruned, so it grows
+with use, typically a few MB per project). Back that directory up, plus
+`config.yaml` and `backend/data/authentication/passkeys.db`.
+
+The request-signing key (`agents.request_signing_key_file`, default
+`backend/data/keys/request-signing.key`) is deliberately outside user data.
+Back it up only somewhere as private as the box itself; if it's lost, make a
+new one in Settings → Agents and give the keeper the new public key.
 
 ## Note migrations
 

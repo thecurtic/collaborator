@@ -308,6 +308,7 @@ def load_config() -> dict:
             # e.g. "<tailnet-ip>:8765". None = off (no agent endpoints).
             "listen": None,
             "buffer_items": 500,         # live firehose lines kept per channel (memory only)
+            "record_runs": True,         # keep each project's run log (usage, firehose, timeline)
             "max_frame_bytes": 1048576,  # largest frame an endpoint may send
             "unreachable_after": 30,     # seconds without a connection before the badge says so
             # The Ed25519 private key that signs team requests (New project,

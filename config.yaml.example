@@ -208,6 +208,10 @@ titles:
 agents:
   listen: null                 # e.g. "<tailnet-ip>:8765"
   buffer_items: 500            # live firehose lines kept per channel, in memory only
+  # Run log: every firehose line, usage frame (tokens, cost) and timeline
+  # change from your agents, kept in your own data dir (agent-runs/ next to
+  # conversations.db; earlier days gzipped). Feeds run_report. Nothing pruned.
+  record_runs: true
   max_frame_bytes: 1048576
   unreachable_after: 30        # seconds without a connection before the badge says so
   # Signs team requests (New project, Merge, Withdraw) for the endpoint marked

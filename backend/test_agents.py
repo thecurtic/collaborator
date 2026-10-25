@@ -267,10 +267,10 @@ def test_events_status_markers_merged_and_preview():
     merged = [i for i in c.get("/api/feed").json()["items"] if i["type"] == "merged"]
     assert merged[0]["title"] == "Spec 009: swap page"
     assert notifications.list_notifications(sqlite3.connect(path)) == []
-    # Nothing of the firehose is stored.
+    # The firehose is kept in the user's run log, never as chat.
     con = sqlite3.connect(path)
-    tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-    assert not [t for t in tables if "firehose" in t]
+    assert con.execute("SELECT items FROM agent_firehose_files WHERE project = 'blockswap'"
+                       ).fetchone() == (1,)
     print("✓ events: status line + firehose marker, merged to Feed, http(s) previews only")
 
 

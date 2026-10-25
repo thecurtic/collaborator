@@ -39,6 +39,7 @@ _CATEGORY = {
     "git_read": "reads", "list_transcripts": "reads",
     "read_transcript": "reads", "list_attachments": "reads",
     "read_attachment": "reads", "read_agent_messages": "reads",
+    "run_report": "reads", "read_run_log": "reads",
     "calculate": "compute", "datetime": "compute", "synthesize": "compute",
 }
 CATEGORIES = ("money", "outbound", "writes", "reads", "compute", "other")
