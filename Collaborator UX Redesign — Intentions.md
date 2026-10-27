@@ -50,6 +50,7 @@ Opening the app shows a single feed ordered by warmth, not a list of conversatio
 - A message the backend flags as needing me notifies once and sits in the feed; its notification clears when the endpoint closes the question. A question in the feed can be answered right there, merge included. Merged work shows quietly, with no notification, so I can go and test it. Everything else from agents arrives quietly as unread in the project.
 - Branching conversations leave the front door. Branching stays as a chat-level feature, not an organizing concept.
 - Every branch runs from the root, and branches are not named by hand (2026-10-27). Branching without context is gone: a fresh start is a new chat. Branch labels are generated in the background along with branch summaries, and only a chat itself takes a name I give it. Old without-context branches were split off into their own chats; old branch names were dropped.
+- Summaries are made ahead of time, not on demand (2026-10-27). Every branch has its own summary, covering it from the first message, and a chat with forks also has an overview of where it split and what each branch did. A background job writes them once a chat has been quiet for a while, so search and the agent can rely on them; the chat card shows the overview (or the one branch summary) and still proposes tags that are only applied when I accept them.
 - Agent handoff chatter does not go into the warm feed; it would bury what actually needs me.
 - Pinning is necessary: some things stay at the top of the feed regardless of warmth.
 

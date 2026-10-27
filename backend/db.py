@@ -282,6 +282,9 @@ def ensure_conversation_schema(conn) -> None:
     # turns.tool_activity, so it runs after the turns migrations.
     import tool_log
     tool_log.ensure_schema(conn)
+    # Branch summaries + chat overviews (summaries.py).
+    import summaries
+    summaries.ensure_schema(conn)
 
 
 def _migrate_turns_branching(conn) -> None:

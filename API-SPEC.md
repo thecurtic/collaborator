@@ -404,6 +404,9 @@ parent it branched from. `preview` is a single-line label.
   `GET /api/tree?state=tree` (main map). Promote with `PATCH /api/turns/{id}/state`
   (below). All turns in a conversation share the same state (inherited on
   continuation/branch; set across the subtree on promote).
+- `label` (string, optional): on a turn that starts a branch (a child of a turn
+  with several children), the generated label of the line it continues on
+  (§9a, *Branch summaries*). Absent until that branch has been summarized.
 - `name` (string | null): the chat's user-set name, on ROOT turns only. `null` =
   unnamed. Set via `PATCH /api/turns/{turn_id}/name` with `{ "name": "..." }`
   (empty/whitespace clears it; returns `{ "turn_id", "name", "promoted" }`; `404` if
@@ -561,6 +564,8 @@ list, the card, project membership); they do **not** feed recall.
 ```
 `summary` is `null` until one is generated; `stale` is `true` once the chat has
 more committed turns than when it was generated. `404` for an unknown turn.
+For a chat with forks, `summary.text` is the chat overview; otherwise it is the
+chat's one branch summary (see *Branch summaries* below).
 
 **`PUT /api/chats/{turn_id}/tags`** `{ "tags": ["Project", "garden"] }` →
 replaces the chat's tags (full list; `[]` clears) and returns the card plus
@@ -568,15 +573,34 @@ replaces the chat's tags (full list; `[]` clears) and returns the card plus
 order kept); at most 12. `422` for a type tag (`event`, `social-graph`,
 `user-profile` — note types, never chat tags) or too many tags.
 
-**`POST /api/chats/{turn_id}/summary`** → generates (or regenerates) the summary
-from the branch through `turn_id` to its most recent leaf (pass the active leaf
-inside a chat; from a list, the root gives the branch last worked on) with
-`inference.utility_model`, caches it on the root and returns the card. It also
-proposes up to 4 tags, steered toward tags already used on notes and chats so a
-project's name isn't forked; proposals exclude tags the chat already wears and
-type tags, and are **never applied** — the client offers them. Generation is on
-demand only, never per turn. `502` when generation fails or returns nothing
-(nothing is stored). Prompt: `chat-summary-prompt.md`; config: `chat_summary`.
+**`POST /api/chats/{turn_id}/summary`** → brings the chat's summaries up to
+date now instead of waiting for the background job (below), skipping its idle
+and length gates, and returns the card. Only what is missing or stale is
+generated; a fresh chat costs no model call. The same calls propose up to 4
+tags, steered toward tags already used on notes and chats so a project's name
+isn't forked; proposals exclude tags the chat already wears and type tags, and
+are **never applied** — the client offers them. `502` when a generation fails
+or returns nothing (nothing is stored).
+
+**Branch summaries (background).** A *branch* is the path from a chat's root
+to one of its leaves (a committed turn with no committed children). A job in
+the backend process (`summaries.py`, config `summaries`) picks up chats idle
+for `idle_minutes` (default 15) with at least `min_exchanges` (default 2)
+exchanges, seeds included, and with `inference.utility_model` keeps:
+
+- one summary and a generated **label** per branch, covering the leaf and every
+  turn above it (never descendants or siblings, which are only mentioned where
+  the branch split off). Long branches are summarized rolling: previous
+  summary + the turns since. Stored in `branch_summaries`, keyed by leaf.
+- for a chat with forks, an **overview** built from the branch summaries (the
+  shared part, where each fork happened, what each branch went on to do),
+  rebuilt whenever a branch summary changes. Stored in `chat_overviews`.
+- the card's summary and proposed tags, and the title (a forked chat is
+  titled from its overview; per-reply titling leaves forked chats alone).
+
+A branch summary is stale when the branch has new committed turns, a new fork
+appears on its path, or a turn it covered is discarded or deleted. Prompts:
+`branch-summary-prompt.md`, `chat-overview-prompt.md`.
 
 A root deleted on its own (`DELETE /api/messages/{id}`, no subtree) hands its
 chat tags to the children that become roots.

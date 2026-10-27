@@ -21,6 +21,7 @@ function node(id: number, children: TreeNode[] = [], branched = false): TreeNode
     paragraphIndex: null,
     branched,
     name: null,
+    label: null,
     title: null,
     chatTags: [],
     state: 'tree',
@@ -126,7 +127,7 @@ describe('forkOf', () => {
       current: 0,
       total: 2,
       paragraphIndex: null,
-      name: null,
+      label: null,
     });
   });
 
@@ -134,10 +135,14 @@ describe('forkOf', () => {
     expect(forkOf(children, 20)?.current).toBe(2);
   });
 
-  it("reports the selected branch's own name, never the root's", () => {
-    const named = [node(3), { ...node(20, [], true), name: 'pricing idea' }];
-    expect(forkOf(named, 20)?.name).toBe('pricing idea');
-    expect(forkOf(named, undefined)?.name).toBeNull();
+  it("reports the label of the line shown: the selected branch or the main line", () => {
+    const labeled = [
+      { ...node(3), label: 'main plan' },
+      { ...node(20, [], true), label: 'pricing idea' },
+    ];
+    expect(forkOf(labeled, 20)?.label).toBe('pricing idea');
+    expect(forkOf(labeled, undefined)?.label).toBe('main plan');
+    expect(forkOf(children, 20)?.label).toBeNull();
   });
 
   it('treats CONTINUE as the main-line position', () => {

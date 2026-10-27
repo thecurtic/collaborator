@@ -1004,57 +1004,48 @@ def generate_title(turns: List[Dict]) -> str:
     return title[:80].rstrip(" .")
 
 
-# --- Chat card summary (on demand, utility model) ------------------------------
+# --- Branch summaries + chat overviews (background, utility model) -------------
 
-DEFAULT_CHAT_SUMMARY_PROMPT = (
-    "You summarize one conversation for its card in a chat list. Reply with ONLY "
-    'a JSON object: {"summary": "...", "tags": ["..."]}. The summary is 1-3 plain '
-    "sentences on what the conversation is about and where it got to. tags are "
-    "1-4 lowercase-hyphenated tags for organizing it; prefer tags from the "
-    "existing list when one fits, and invent one only when none does."
+DEFAULT_BRANCH_SUMMARY_PROMPT = (
+    "You summarize one branch of a conversation. Reply with ONLY a JSON object: "
+    '{"summary": "...", "label": "...", "tags": ["..."]}. The summary is 2-6 plain '
+    "sentences covering the whole branch from its start: what it was about and "
+    "where it got to. If you are given a previous summary, fold the new turns "
+    "into it. If the chat has several branches, say this is one of them and "
+    "roughly where it split off. label is 3-6 words naming what this branch "
+    "explored. tags are 1-4 lowercase-hyphenated tags; prefer existing ones."
+)
+
+DEFAULT_CHAT_OVERVIEW_PROMPT = (
+    "You write the overview of a conversation that forked into branches. Reply "
+    'with ONLY a JSON object: {"summary": "...", "tags": ["..."]}. The summary '
+    "covers the shared part of the conversation, where each fork happened, and "
+    "what each branch went on to explore or decide, in 3-8 plain sentences. tags "
+    "are 1-4 lowercase-hyphenated tags; prefer existing ones."
 )
 
 
-def generate_chat_summary(turns: List[Dict],
-                          vocabulary: Optional[List[str]] = None) -> Dict:
-    """One short LLM call: {summary, tags} for the three-dots chat card.
-
-    Utility model (app state, not the user's vault). `vocabulary` is the tags
-    already in use, so proposals reuse a project's name instead of forking it.
-    Config: chat_summary {prompt_file/prompt_text, temperature, max_tokens,
-    timeout}. Returns {"summary": "", "tags": []} on empty output; raises on
-    transport failure.
-    """
+def _summary_json_call(cfg: Dict, prompt_key: str, default_prompt: str,
+                       user_text: str, what: str, max_chars: int) -> Dict:
+    """One utility-model call that answers a JSON object with summary (+ label,
+    tags). Lenient: JSON is looked for anywhere in the reply, and a reply with
+    no JSON still counts as the summary. Raises on transport failure."""
     import json
 
-    scfg = _get_config().get("chat_summary", {}) or {}
-    prompt = _load_prompt_layer(scfg, "prompt_file", "prompt_text",
-                                DEFAULT_CHAT_SUMMARY_PROMPT)
-    # Same sampling as titles: the opening defines the subject, the end shows
-    # where it went.
-    if len(turns) > 16:
-        sampled = turns[:4] + [{"role": "...", "content":
-                                f"[{len(turns) - 16} turns omitted]"}] + turns[-12:]
-    else:
-        sampled = turns
-    excerpt = "\n".join(
-        f"{t.get('role', '?')}: {(t.get('content') or '')[:600]}"
-        for t in sampled)[:9000]
-    if vocabulary:
-        excerpt += "\n\nExisting tags: " + ", ".join(vocabulary)
+    prompt = _load_prompt_layer(cfg, prompt_key, prompt_key.replace("_file", "_text"),
+                                default_prompt)
     payload = _build_payload(
         [{"role": "system", "content": prompt},
-         {"role": "user", "content": excerpt}], stream=False)
-    payload["temperature"] = scfg.get("temperature", 0.3)
-    payload["max_tokens"] = scfg.get("max_tokens", 768)   # thinking headroom
+         {"role": "user", "content": user_text}], stream=False)
+    payload["temperature"] = cfg.get("temperature", 0.3)
+    payload["max_tokens"] = cfg.get("max_tokens", 1536)   # thinking headroom
     payload["model"] = _get_utility_model()
-
     response = requests.post(
         f"{_get_endpoint_url()}/chat/completions",
-        json=payload, timeout=scfg.get("timeout", 60),
+        json=payload, timeout=cfg.get("timeout", 120),
     )
     response.raise_for_status()
-    text = _extract_message_text(response.json(), "chat summary").strip()
+    text = _extract_message_text(response.json(), what).strip()
     parsed = None
     start, end = text.find("{"), text.rfind("}")
     if start != -1 and end > start:
@@ -1064,13 +1055,55 @@ def generate_chat_summary(turns: List[Dict],
             parsed = None
     if not isinstance(parsed, dict):
         # No JSON: a model that ignored the format still gave a summary.
-        return {"summary": " ".join(text.split())[:600], "tags": []}
+        return {"summary": " ".join(text.split())[:max_chars], "label": "", "tags": []}
     tags = parsed.get("tags") or []
     return {
-        "summary": " ".join(str(parsed.get("summary") or "").split())[:600],
+        "summary": " ".join(str(parsed.get("summary") or "").split())[:max_chars],
+        "label": " ".join(str(parsed.get("label") or "").split()).strip(' ."\'')[:60],
         "tags": [str(t) for t in tags if isinstance(t, (str, int))][:8]
                 if isinstance(tags, list) else [],
     }
+
+
+def generate_branch_summary(previous: Optional[str], turns: List[Dict],
+                            fork_note: str,
+                            vocabulary: Optional[List[str]] = None) -> Dict:
+    """{summary, label, tags} for one branch: `previous` (the summary of the
+    turns before `turns`, or None from the start) plus `turns`. `fork_note`
+    says where the branch sits in the chat. Config: summaries
+    {branch_prompt_file/branch_prompt_text, temperature, max_tokens, timeout,
+    turn_chars}."""
+    scfg = _get_config().get("summaries", {}) or {}
+    cap = scfg.get("turn_chars", 1200)
+    parts = [f"Where this branch sits: {fork_note}"]
+    if previous:
+        parts.append(f"Previous summary of the earlier turns:\n{previous}")
+    if turns:
+        parts.append(("New turns:" if previous else "Turns:") + "\n" + "\n".join(
+            f"{t.get('role', '?')}: {(t.get('content') or '')[:cap]}" for t in turns))
+    if vocabulary:
+        parts.append("Existing tags: " + ", ".join(vocabulary))
+    return _summary_json_call(scfg, "branch_prompt_file", DEFAULT_BRANCH_SUMMARY_PROMPT,
+                              "\n\n".join(parts), "branch summary", 1500)
+
+
+def generate_chat_overview(branches: List[Dict],
+                           vocabulary: Optional[List[str]] = None) -> Dict:
+    """{summary, tags} for a forked chat, built from its branch summaries
+    ([{label, split_after, summary}], oldest branch first), never raw turns."""
+    scfg = _get_config().get("summaries", {}) or {}
+    lines = []
+    for i, b in enumerate(branches, 1):
+        lines.append(f"Branch {i}: {b.get('label') or '(unlabeled)'}\n"
+                     f"Split off after: {b.get('split_after') or '(the main line)'}\n"
+                     f"Summary: {b.get('summary') or ''}")
+    text = "\n\n".join(lines)
+    if vocabulary:
+        text += "\n\nExisting tags: " + ", ".join(vocabulary)
+    out = _summary_json_call(scfg, "overview_prompt_file", DEFAULT_CHAT_OVERVIEW_PROMPT,
+                             text, "chat overview", 2000)
+    out.pop("label", None)
+    return out
 
 
 # --- Notes synthesis (tree -> atomic note drafts) ------------------------------

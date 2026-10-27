@@ -40,8 +40,8 @@ export interface Fork {
   /** Displayed numerator: 0 = empty "continue here" slot, 1..n = branches. */
   current: number;
   total: number;
-  /** The selected branch's own name (nested under the conversation name). */
-  name: string | null;
+  /** Generated label of the line shown (selected branch or main line). */
+  label: string | null;
   onPrev: () => void;
   onNext: () => void;
 }
@@ -107,7 +107,7 @@ export function UserText({ text }: { text: string }) {
 function Switcher({
   current,
   total,
-  name,
+  label,
   onPrev,
   onNext,
 }: Omit<Fork, 'paragraphIndex'>) {
@@ -125,9 +125,9 @@ function Switcher({
       <span className="min-w-[2.4rem] shrink-0 text-center tabular-nums">
         {current} / {total}
       </span>
-      {name && (
+      {label && (
         <span className="max-w-[9rem] truncate text-muted-foreground">
-          {name}
+          {label}
         </span>
       )}
       <button
@@ -513,7 +513,7 @@ export function TreeBubble({
             <Switcher
               current={fork.current}
               total={fork.total}
-              name={fork.name}
+              label={fork.label}
               onPrev={fork.onPrev}
               onNext={fork.onNext}
             />

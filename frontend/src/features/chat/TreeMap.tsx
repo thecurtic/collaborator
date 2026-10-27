@@ -48,7 +48,7 @@ function colorFor(column: number): string {
 
 interface Seg {
   startNodeId: number;
-  /** Name stored on this segment's start turn (a branch's own name). */
+  /** The chat's name on the root segment; a branch's generated label elsewhere. */
   name: string | null;
   nodeIds: number[];
   count: number;
@@ -99,7 +99,7 @@ function buildSeg(node: TreeNode, activeIds: Set<number>): Seg {
       : [];
     return {
       startNodeId: node.id,
-      name: node.name,
+      name: node.parentTurnId == null ? node.name : node.label,
       nodeIds,
       count: nodeIds.length,
       active: nodeIds.some((id) => activeIds.has(id)),

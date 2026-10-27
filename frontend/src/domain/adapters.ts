@@ -175,6 +175,7 @@ export function toTreeNode(api: ApiTreeNode): TreeNode {
     paragraphIndex: api.paragraph_index ?? null,
     branched: api.branched === true,
     name: typeof api.name === 'string' ? api.name : null,
+    label: typeof api.label === 'string' && api.label ? api.label : null,
     title: typeof api.title === 'string' && api.title ? api.title : null,
     chatTags: Array.isArray(api.chat_tags)
       ? api.chat_tags.filter((t): t is string => typeof t === 'string')

@@ -32,7 +32,7 @@ from inference import (
     call_llm_streaming, call_llm_non_streaming, stream_llm_tokens,
     get_embedding, embed_texts, synthesize_recall, get_available_models,
     generate_with_tools, synthesize, synthesize_notes, web_search, web_search_provider, fetch_url,
-    screenshot_page, generate_title, generate_chat_summary,
+    screenshot_page, generate_title, generate_branch_summary, generate_chat_overview,
     get_model_context_tokens, estimate_tokens, get_models_detail,
     resolve_prompt_layer, DEFAULT_PARAGRAPH_STYLE, DEFAULT_VOICE_STYLE,
     DEFAULT_TOOLS_GUIDANCE, DEFAULT_RECALL_SYNTHESIS_PROMPT,
@@ -55,6 +55,7 @@ import scratch
 import tool_log
 import link_preview
 import gate_client
+import summaries
 import unified_search
 import agents
 import agent_requests
@@ -316,10 +317,20 @@ def _maybe_update_title(db_path: str, leaf_turn_id: int, force: bool = False):
         stale = count - (generated_at or 0) >= tcfg.get("regenerate_after_turns", 6)
         if not force and current is not None and not stale:
             return root_id, None
-        # Whole branch, not a recency window — the title should name the
-        # conversation's subject, and the opening turns usually define it
-        # (generate_title samples start + end when the chain is long).
-        chain = get_ancestor_chain(conn, leaf_turn_id, limit=None)
+        # A forked chat is titled from its overview, by the summaries job: a
+        # title from whichever branch was just extended would name a part.
+        shape = summaries.load_shape(conn, root_id)
+        overview = summaries.get_overview(conn, root_id)
+        if shape is not None and shape.forked:
+            if not force:
+                return root_id, None
+            chain = ([{"role": "overview", "content": overview["text"]}] if overview
+                     else get_ancestor_chain(conn, leaf_turn_id, limit=None))
+        else:
+            # Whole branch, not a recency window — the title should name the
+            # conversation's subject, and the opening turns usually define it
+            # (generate_title samples start + end when the chain is long).
+            chain = get_ancestor_chain(conn, leaf_turn_id, limit=None)
         title = generate_title(chain)
         if title:
             set_turn_title(conn, root_id, title, count)
@@ -361,6 +372,26 @@ def _normalize_chat_tags(tags: List[str], what: str = "chat"):
     if len(out) > _MAX_CHAT_TAGS:
         return [], f"a {what} carries at most {_MAX_CHAT_TAGS} tags"
     return out, None
+
+
+def _proposed_chat_tags(tags: List[str], current: List[str]) -> List[str]:
+    """A summary's tag proposals for the chat card: normalized, minus type
+    tags and tags the chat already wears, at most 4. Never applied."""
+    proposed, _ = _normalize_chat_tags(
+        [t for t in tags or [] if _normalize_tag(t) not in TYPE_TAGS])
+    return [t for t in proposed if t not in set(current)][:4]
+
+
+def _summary_hooks() -> "summaries.Hooks":
+    """What the summaries job calls. Names resolve at call time, so tests can
+    patch main's generators."""
+    return summaries.Hooks(
+        branch_summary=lambda *a: generate_branch_summary(*a),
+        overview=lambda *a: generate_chat_overview(*a),
+        title=lambda turns: generate_title(turns),
+        vocabulary=lambda conn: _tag_vocabulary(conn),
+        propose_tags=lambda tags, current: _proposed_chat_tags(tags, current),
+    )
 
 
 def _tag_vocabulary(conn, limit: int = 80) -> List[str]:
@@ -2697,6 +2728,8 @@ async def get_tree(
         conn = sqlite3.connect(db_path)
         try:
             roots = get_turn_tree(conn)
+            # Generated branch labels where a branch starts (summaries.py).
+            summaries.attach_labels(conn, roots)
         finally:
             conn.close()
 
@@ -5064,35 +5097,24 @@ async def generate_chat_card_summary(
             if get_turn_by_id(conn, turn_id) is None:
                 raise HTTPException(status_code=404, detail=f"Turn {turn_id} not found")
             root_id = _find_root_id(conn, turn_id)
-            chain = get_ancestor_chain(conn, _latest_leaf(conn, turn_id), limit=None)
-            vocabulary = _tag_vocabulary(conn)
-            current = set(get_chat_tags(conn, root_id))
         finally:
             conn.close()
         try:
-            result = await asyncio.to_thread(generate_chat_summary, chain, vocabulary)
+            await asyncio.to_thread(summaries.reconcile_chat, db_path, root_id,
+                                    _summary_hooks())
         except Exception as e:
             # Transport details (hosts, ports) go to the log, not the UI.
             print(f"Warning: chat summary failed: {e}")
             raise HTTPException(status_code=502, detail="Summary generation failed "
                                 "— the model may be unreachable; try again")
-        if not result.get("summary"):
-            raise HTTPException(status_code=502, detail="Summary generation returned nothing")
-        import datetime as _dt
-        proposed, _ = _normalize_chat_tags(
-            [t for t in result.get("tags") or [] if _normalize_tag(t) not in TYPE_TAGS])
-        proposed = [t for t in proposed if t not in current][:4]
         conn = sqlite3.connect(db_path)
         try:
-            set_chat_summary(conn, root_id, {
-                "text": result["summary"], "proposed_tags": proposed,
-                "turns": count_tree_turns(conn, root_id),
-                "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(
-                    timespec="seconds"),
-            })
-            return _chat_card(conn, root_id)
+            card = _chat_card(conn, root_id)
         finally:
             conn.close()
+        if card["summary"] is None:
+            raise HTTPException(status_code=502, detail="Summary generation returned nothing")
+        return card
     except HTTPException:
         raise
     except Exception as e:
@@ -5345,9 +5367,17 @@ async def _start_agent_listener():
         print(f"Agent endpoints listening on {listen[0]}:{listen[1]}")
 
 
+@app.on_event("startup")
+async def _start_summaries():
+    # Branch summaries + chat overviews, made ahead of time (summaries.py).
+    if summaries.start(_summary_hooks()):
+        print("Summaries job started")
+
+
 @app.on_event("shutdown")
 async def _stop_agent_listener():
     await agents.hub().stop()
+    summaries.stop()
 
 
 def _agents_user(passkey: Optional[str]) -> tuple:

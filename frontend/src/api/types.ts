@@ -147,8 +147,11 @@ export interface ApiTreeNode {
   context_turns?: number;
   /** True when this turn was created via POST /api/branches (an explicit fork). */
   branched?: boolean;
-  /** User-set name (conversation/branch naming); null/absent = unnamed. */
+  /** The chat's user-set name (roots only); null/absent = unnamed. */
   name?: string | null;
+  /** Generated label of the branch this turn starts (set on children of a
+   * turn with several children, once the branch is summarized). */
+  label?: string | null;
   /** LLM-generated title (roots, all states). User-set `name` wins. */
   title?: string | null;
   /** Chat-level tags (roots only); distinct from per-turn recall tags. */

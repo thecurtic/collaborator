@@ -18,6 +18,7 @@ function node(id: number, children: TreeNode[] = []): TreeNode {
     paragraphIndex: null,
     branched: false,
     name: null,
+    label: null,
     title: null,
     chatTags: [],
     state: 'seed',

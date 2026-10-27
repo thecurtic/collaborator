@@ -43,8 +43,8 @@ export interface ForkInfo {
   total: number;
   /** Source paragraph of the active option (for highlight); null for empty. */
   paragraphIndex: number | null;
-  /** The selected branch's own name (its branch-root turn), if any. */
-  name: string | null;
+  /** Generated label of the line shown (selected branch or main line). */
+  label: string | null;
 }
 
 export interface PathEntry extends PathStep {
@@ -539,7 +539,7 @@ export function useConversation(reloadSignal: number) {
             current: f.current,
             total: f.total,
             paragraphIndex: f.paragraphIndex,
-            name: f.name,
+            label: f.label,
           }
         : null;
       return { ...s, fork };

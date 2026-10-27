@@ -85,8 +85,8 @@ export function computePath(
 /**
  * Branch switcher for a node's children: position 0 = the main line, 1..n = the
  * branches (branched children). null if there are no branches (linear turn).
- * `name` = the selected branch's own name (stored on its branch-root turn —
- * independent of the conversation root's name).
+ * `label` = the generated label of the line shown (the selected branch, or the
+ * main line), null until it's been summarized.
  */
 export function forkOf(
   children: TreeNode[],
@@ -95,20 +95,20 @@ export function forkOf(
   current: number;
   total: number;
   paragraphIndex: number | null;
-  name: string | null;
+  label: string | null;
 } | null {
   const branches = children.filter((c) => c.branched);
   if (branches.length === 0) return null;
   let current = 0; // 0 = main line
   let paragraphIndex: number | null = null;
-  let name: string | null = null;
+  let label: string | null = children.find((c) => !c.branched)?.label ?? null;
   if (selId !== undefined && selId !== CONTINUE) {
     const bi = branches.findIndex((b) => b.id === selId);
     if (bi >= 0) {
       current = bi + 1;
       paragraphIndex = branches[bi].paragraphIndex;
-      name = branches[bi].name;
+      label = branches[bi].label;
     }
   }
-  return { current, total: branches.length, paragraphIndex, name };
+  return { current, total: branches.length, paragraphIndex, label };
 }

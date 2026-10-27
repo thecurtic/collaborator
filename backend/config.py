@@ -343,14 +343,24 @@ def load_config() -> dict:
             "ocr_max_pages": 30,      # scanned PDF pages read by the vision model, per file
             "image_max_side": 1600,   # images are downscaled to this before the model sees them
         },
-        "chat_summary": {
-            # The three-dots chat card's summary: generated on demand (never
-            # after every turn) by the utility model, cached on the root, and
-            # flagged stale once the chat has grown since. Also proposes tags.
+        "summaries": {
+            # Branch summaries + chat overviews (summaries.py), made ahead of
+            # time by a background job in the backend process with the utility
+            # model. A chat is picked up once it has been idle idle_minutes and
+            # has min_exchanges exchanges; only what's stale is regenerated. The
+            # chat card shows the overview (forked) or the one branch summary,
+            # and the same calls propose the card's tags (never applied).
+            "enabled": True,
+            "idle_minutes": 15,
+            "interval_seconds": 300,   # how often the job looks for work
+            "min_exchanges": 2,
+            "chunk_chars": 8000,       # new turns folded in per call (rolling)
+            "turn_chars": 1200,        # each turn's text is cut to this
             "temperature": 0.3,
-            "max_tokens": 768,   # reasoning models spend this on thinking first
-            "timeout": 60,
-            "prompt_file": "chat-summary-prompt.md",
+            "max_tokens": 1536,        # reasoning models spend this on thinking first
+            "timeout": 120,
+            "branch_prompt_file": "branch-summary-prompt.md",
+            "overview_prompt_file": "chat-overview-prompt.md",
         },
         "tools": {
             "enabled": False,          # master switch; false = plain chat, no tools

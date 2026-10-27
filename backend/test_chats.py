@@ -120,15 +120,17 @@ def test_summary_generates_caches_and_proposes(monkeypatch):
     c.put(f"/api/chats/{root}/tags", json={"tags": ["garden"]})
     other, _ = _chat(c, 1)
     c.put(f"/api/chats/{other}/tags", json={"tags": ["project", "homestead"]})
+    monkeypatch.setattr(main, "generate_title", lambda turns: "Raised beds")
 
     seen = {}
-    def fake_summary(turns, vocabulary=None):
+    def fake_summary(previous, turns, fork_note, vocabulary=None):
         seen["turns"] = [t["content"] for t in turns]
         seen["vocabulary"] = vocabulary
-        return {"summary": "Planning raised beds; layout settled.",
+        seen["note"] = fork_note
+        return {"summary": "Planning raised beds; layout settled.", "label": "Beds",
                 "tags": ["Garden", "homestead", "project", "event", "Soil Mix",
                          "a", "b"]}
-    monkeypatch.setattr(main, "generate_chat_summary", fake_summary)
+    monkeypatch.setattr(main, "generate_branch_summary", fake_summary)
 
     assert c.get(f"/api/chats/{root}").json()["summary"] is None
     r = c.post(f"/api/chats/{leaf}/summary")
@@ -139,30 +141,33 @@ def test_summary_generates_caches_and_proposes(monkeypatch):
     assert card["summary"]["proposed_tags"] == ["homestead", "project", "soil-mix", "a"]
     assert card["summary"]["stale"] is False
     assert card["tags"] == ["garden"]                    # proposals not applied
-    # The leaf's whole branch, and the shared vocabulary (chat tags so far).
+    # The whole branch from the root, and the shared vocabulary.
     assert seen["turns"][0] == "seed garden beds" and len(seen["turns"]) == 4
     assert set(seen["vocabulary"]) == {"garden", "project", "homestead"}
+    assert "no branches" in seen["note"]
 
-    # From the root (the chat list's handle): the most recent branch.
+    # Fresh: asking again regenerates nothing.
+    seen.clear()
     c.post(f"/api/chats/{root}/summary")
-    assert seen["turns"][0] == "seed garden beds" and len(seen["turns"]) == 4
+    assert seen == {}
 
     # Cached: GET returns it; it goes stale once the chat grows.
     assert c.get(f"/api/chats/{root}").json()["summary"]["text"].startswith("Planning")
     _done(c.post("/api/messages", json={"message": "later", "parent_turn_id": leaf}))
     assert c.get(f"/api/chats/{root}").json()["summary"]["stale"] is True
-    print("✓ summary: branch-scoped, cached, stale on growth, proposals filtered")
+    print("✓ summary: whole branch, cached, stale on growth, proposals filtered")
 
 
 def test_summary_failure_is_502(monkeypatch):
     main, db, c, _ = _fresh_env()
     root, _ = _chat(c, 1)
-    def boom(turns, vocabulary=None):
+    monkeypatch.setattr(main, "generate_title", lambda turns: "")
+    def boom(*a):
         raise RuntimeError("model down")
-    monkeypatch.setattr(main, "generate_chat_summary", boom)
+    monkeypatch.setattr(main, "generate_branch_summary", boom)
     assert c.post(f"/api/chats/{root}/summary").status_code == 502
-    monkeypatch.setattr(main, "generate_chat_summary",
-                        lambda t, v=None: {"summary": "", "tags": []})
+    monkeypatch.setattr(main, "generate_branch_summary",
+                        lambda *a: {"summary": "", "label": "", "tags": []})
     assert c.post(f"/api/chats/{root}/summary").status_code == 502
     assert c.get(f"/api/chats/{root}").json()["summary"] is None
     print("✓ failed or empty generation is a 502 and stores nothing")
@@ -198,7 +203,7 @@ def test_deleting_a_root_keeps_its_tags():
     print("✓ deleting a root hands its chat tags to the new root")
 
 
-def test_generate_chat_summary_parsing(monkeypatch):
+def test_generate_branch_summary_parsing(monkeypatch):
     import importlib, inference
     importlib.reload(inference)
 
@@ -209,7 +214,8 @@ def test_generate_chat_summary_parsing(monkeypatch):
             return {"choices": [{"message": {"content": self.text}}]}
     import requests
     outputs = iter([
-        'Sure! {"summary": "  Beds   planned. ", "tags": ["garden", 3, null]}',
+        'Sure! {"summary": "  Beds   planned. ", "label": "Bed layout.", '
+        '"tags": ["garden", 3, null]}',
         "Just prose, no JSON at all.",
     ])
     sent = {}
@@ -217,11 +223,14 @@ def test_generate_chat_summary_parsing(monkeypatch):
         sent.update(json)
         return _R(next(outputs))
     monkeypatch.setattr(requests, "post", fake_post)
-    turns = [{"role": "user", "content": "x"}] * 20
-    out = inference.generate_chat_summary(turns, ["garden", "project"])
-    assert out == {"summary": "Beds planned.", "tags": ["garden", "3"]}
+    turns = [{"role": "user", "content": "x"}] * 3
+    out = inference.generate_branch_summary("Earlier: soil.", turns, "One line.",
+                                            ["garden", "project"])
+    assert out == {"summary": "Beds planned.", "label": "Bed layout", "tags": ["garden", "3"]}
     user = sent["messages"][-1]["content"]
-    assert "[4 turns omitted]" in user and user.endswith("Existing tags: garden, project")
-    assert inference.generate_chat_summary(turns) == {
-        "summary": "Just prose, no JSON at all.", "tags": []}
-    print("✓ generate_chat_summary: lenient JSON, prose fallback, sampling")
+    assert user.startswith("Where this branch sits: One line.")
+    assert "Previous summary of the earlier turns:\nEarlier: soil." in user
+    assert "New turns:" in user and user.endswith("Existing tags: garden, project")
+    assert inference.generate_branch_summary(None, turns, "One line.") == {
+        "summary": "Just prose, no JSON at all.", "label": "", "tags": []}
+    print("✓ generate_branch_summary: lenient JSON, prose fallback, rolling input")

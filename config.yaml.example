@@ -258,14 +258,24 @@ attachments:
   ocr_max_pages: 30           # scanned PDF pages the vision model reads, per file
   image_max_side: 1600        # images are downscaled to this many px before the model
 
-# The chat card's summary (three dots on a chat): generated on demand by
-# inference.utility_model, cached on the chat, marked stale once it grows.
-# Generating it also proposes tags, which are only applied when accepted.
-chat_summary:
+# Branch summaries and chat overviews, made ahead of time by a background job
+# in the backend process with inference.utility_model. Every branch (the path
+# from the first message to a latest one) gets its own summary and a generated
+# label; a chat with forks also gets an overview built from those summaries.
+# The chat card (three dots) shows the overview, or the one branch summary,
+# plus proposed tags, which are only applied when accepted.
+summaries:
+  enabled: true
+  idle_minutes: 15            # a chat is summarized once it has been quiet this long
+  interval_seconds: 300       # how often the job looks for work
+  min_exchanges: 2            # shorter chats are left alone
+  chunk_chars: 8000           # new turns folded into a summary per call
+  turn_chars: 1200            # each turn's text is cut to this
   temperature: 0.3
-  max_tokens: 768             # reasoning models spend this on thinking first
-  timeout: 60
-  prompt_file: "chat-summary-prompt.md"
+  max_tokens: 1536            # reasoning models spend this on thinking first
+  timeout: 120
+  branch_prompt_file: "branch-summary-prompt.md"
+  overview_prompt_file: "chat-overview-prompt.md"
 
 # Tool-calling. When enabled, the model drives retrieval/synthesis by calling tools
 # (recall is a set of tools) and streams status notes for what it's doing. Requires a

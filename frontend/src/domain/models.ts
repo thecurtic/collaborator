@@ -62,8 +62,10 @@ export interface TreeNode {
   paragraphIndex: number | null;
   /** True when this turn was created as an explicit fork (POST /api/branches). */
   branched: boolean;
-  /** User-set name (used to name a conversation/branch by its root turn). */
+  /** The chat's user-set name (roots only). */
   name: string | null;
+  /** Generated label of the branch this turn starts; null until summarized. */
+  label: string | null;
   /** LLM-generated title (roots, all states). `name` always wins. */
   title: string | null;
   /** Chat-level tags (roots only): organize the chat; never feed recall. */
