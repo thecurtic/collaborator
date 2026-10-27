@@ -56,6 +56,7 @@ import tool_log
 import link_preview
 import gate_client
 import summaries
+import search_context
 import unified_search
 import agents
 import agent_requests
@@ -545,18 +546,6 @@ def _synthesis_kinds() -> List[str]:
     return list(prompts.keys()) or ["memory"]
 
 
-def _tool_matches_payload(matches: List[dict]) -> List[dict]:
-    """Compact match list handed to the model (keep text, trim length)."""
-    return [{
-        "turn_id": m["turn_id"],
-        "role": m["role"],
-        "text": (m.get("text") or "")[:600],
-        "tags": m.get("tags") or [],
-        "branch_root_id": m.get("branch_root_id"),
-        "score": round(m.get("score", 0), 4),
-    } for m in matches]
-
-
 def _render_recall_block(matches: List[dict]) -> str:
     """Readable recall block from raw semantic matches — no LLM call.
 
@@ -594,10 +583,15 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                        "match — matches by LITERAL WORDING, not meaning. Use for names, "
                        "specific words, or quoted phrases a semantic search might miss. "
                        "One of two recall methods (see recall_semantic)."),
+    "read_turn_context": ("Read the turns around one past turn (a turn_id from recall): "
+                          "back toward the start of its chat, and forward up to the next "
+                          "fork, where it lists the branches and stops. Pick a branch and "
+                          "call again with its turn_id to read on."),
     "synthesize": ("Synthesize retrieved items into a concise block. Call after a search "
                    "tool to produce a memory block for the user."),
     "search_notes": ("Search the user's atomic notes (their curated knowledge base) by "
-                     "meaning or keyword, optionally filtered by tag. Category tags hold "
+                     "exact words and meaning together (hybrid, the default), or by "
+                     "meaning or keyword alone, optionally filtered by tag. Category tags hold "
                      "the user's extended cognition: user-profile, social-graph, memory, "
                      "goal, decision, question, project — pass tag with an empty query to "
                      "list a whole category (e.g. the full user profile). Use when the "
@@ -785,6 +779,21 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
         schemas.append(_search_schema("recall_semantic", descs["recall_semantic"]))
     if avail.get("recall_keyword", True):
         schemas.append(_search_schema("recall_keyword", descs["recall_keyword"]))
+    if avail.get("read_turn_context", True):
+        schemas.append({"type": "function", "function": {
+            "name": "read_turn_context",
+            "description": descs["read_turn_context"],
+            "parameters": {"type": "object", "properties": {
+                "turn_id": {"type": "integer",
+                            "description": "a turn_id from a recall result (or a "
+                                           "branch's turn_id at a fork)"},
+                "before": {"type": "integer",
+                           "description": "turns to read back toward the start "
+                                          "(default 6, max 30)"},
+                "after": {"type": "integer",
+                          "description": "turns to read forward, never past a fork "
+                                         "(default 6, max 30)"}},
+                "required": ["turn_id"]}}})
     if avail.get("synthesize", True):
         schemas.append({"type": "function", "function": {
             "name": "synthesize",
@@ -804,8 +813,9 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                           "description": "what to search for (may be empty when "
                                          "tag is given, to list ALL notes with "
                                          "that tag)"},
-                "mode": {"type": "string", "enum": ["semantic", "keyword"],
-                         "description": "retrieval strategy (default semantic)"},
+                "mode": {"type": "string", "enum": ["hybrid", "semantic", "keyword"],
+                         "description": "retrieval strategy (default hybrid: "
+                                        "exact words and meaning together)"},
                 "tag": {"type": "string",
                         "description": "only notes carrying this tag — category "
                                        "tags: user-profile, social-graph, memory, "
@@ -1250,15 +1260,29 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                         conn, query, limit=rc.get("search_limit", 10),
                         tag_boosts=rc.get("tag_boosts", {}),
                         exclude_ids=exclude_ids)
+                state["last_matches"] = matches
+                if name == "recall_semantic":
+                    # Semantic fires always leave a visible trace: these matches
+                    # become the turn's recall block even if the model never calls
+                    # synthesize (the GUI shows it when debug tools are on).
+                    state["semantic_matches"] = matches
+                # Whole exchanges grouped by branch, with chat + branch context.
+                return json.dumps(search_context.turn_hits(conn, matches))
             finally:
                 conn.close()
-            state["last_matches"] = matches
-            if name == "recall_semantic":
-                # Semantic fires always leave a visible trace: these matches
-                # become the turn's recall block even if the model never calls
-                # synthesize (the GUI shows it when debug tools are on).
-                state["semantic_matches"] = matches
-            return json.dumps(_tool_matches_payload(matches))
+        if name == "read_turn_context":
+            try:
+                tid = int(args.get("turn_id"))
+            except (TypeError, ValueError):
+                return json.dumps({"error": "read_turn_context needs a turn_id (a number)"})
+            conn = sqlite3.connect(db_path)
+            try:
+                return json.dumps(search_context.read_turn_context(
+                    conn, tid, args.get("before"), args.get("after")))
+            except (TypeError, ValueError):
+                return json.dumps({"error": "before and after must be numbers"})
+            finally:
+                conn.close()
         if name == "synthesize":
             block = synthesize(args.get("kind", "memory"), args.get("items", []), args.get("query", ""))
             state["synthesis"] = block
@@ -1280,22 +1304,17 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 pass
             conn = sqlite3.connect(db_path)
             try:
-                if args.get("mode") == "keyword" or not query.strip():
-                    results = notes_index.search_notes_keyword(
-                        conn, query, limit=limit, tag=tag, area=area,
-                        created_from=created_from, created_to=created_to)
-                else:
-                    vec = get_embedding(query)
-                    results = (notes_index.search_notes_semantic(
-                                   conn, vec, limit=limit, tag=tag, area=area,
-                                   created_from=created_from, created_to=created_to)
-                               if vec else notes_index.search_notes_keyword(
-                                   conn, query, limit=limit, tag=tag, area=area,
-                                   created_from=created_from, created_to=created_to))
+                results = _search_notes(conn, query, args.get("mode") or "hybrid",
+                                        limit, tag=tag, area=area,
+                                        created_from=created_from,
+                                        created_to=created_to)
+                # Backlinks (count + most recent) and the chat it came from.
+                search_context.note_extras(conn, results)
             finally:
                 conn.close()
             return json.dumps([{
                 "title": n["title"], "tags": n["tags"], "links": n["links"],
+                "backlinks": n["backlinks"], "from_chat": n["from_chat"],
                 "created": n.get("created"),
                 "fields": n.get("fields") or {},
                 "score": round(n.get("score", 0), 4),
@@ -1723,6 +1742,28 @@ def _resolve_vault_dir(db_path: str) -> str:
     see config.vault_dir_for, which the vault migration CLI shares."""
     return vault_dir_for(db_path, config.get("notes", {}).get("vault_dir"),
                          auth_enabled)
+
+
+def _query_vector(query: str):
+    """The query's embedding, or None when embedding fails (callers fall
+    back to keyword search)."""
+    try:
+        return get_embedding(query) or None
+    except Exception as e:
+        print(f"Warning: query embedding failed: {e}")
+        return None
+
+
+def _search_notes(conn, query: str, mode: str, limit: int, **filters) -> List[dict]:
+    """Note search by mode: hybrid (default; keyword + semantic fused by
+    reciprocal rank), semantic, or keyword. An empty query is a filter-only
+    listing; a failed embedding falls back to keyword."""
+    if mode == "keyword" or not (query or "").strip():
+        return notes_index.search_notes_keyword(conn, query, limit=limit, **filters)
+    vec = _query_vector(query)
+    if mode == "semantic" and vec:
+        return notes_index.search_notes_semantic(conn, vec, limit=limit, **filters)
+    return notes_index.search_notes_hybrid(conn, query, vec, limit=limit, **filters)
 
 
 def _find_duplicate_notes(conn, title: str, body: str) -> List[dict]:
@@ -3108,7 +3149,7 @@ async def list_vault_notes(
 @app.get("/api/notes/search")
 async def search_vault_notes(
     q: str = "",
-    mode: str = "semantic",
+    mode: str = "hybrid",
     limit: int = 10,
     tag: Optional[str] = None,
     from_: Optional[str] = Query(None, alias="from"),
@@ -3118,7 +3159,8 @@ async def search_vault_notes(
     area: Optional[str] = None,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
-    """Search notes: mode=semantic (embeddings) or mode=keyword (lexical).
+    """Search notes: mode=hybrid (default: keyword + semantic, fused by
+    reciprocal rank), mode=semantic (embeddings) or mode=keyword (FTS5).
 
     Optional ?tag= filters to notes carrying the tag; with an empty q it lists
     the whole category (e.g. ?tag=user-profile = the full user profile).
@@ -3132,15 +3174,10 @@ async def search_vault_notes(
         try:
             if from_ or to:
                 results = notes_index.list_events(conn, from_, to)
-            elif mode == "keyword" or not q.strip():
-                results = notes_index.search_notes_keyword(
-                    conn, q, limit=limit, tag=tag, area=area,
-                    created_from=created_from, created_to=created_to)
             else:
-                vec = get_embedding(q)
-                results = notes_index.search_notes_semantic(
-                    conn, vec, limit=limit, tag=tag, area=area,
-                    created_from=created_from, created_to=created_to) if vec else []
+                results = _search_notes(conn, q, mode, limit, tag=tag, area=area,
+                                        created_from=created_from,
+                                        created_to=created_to)
         finally:
             conn.close()
         for n in results:

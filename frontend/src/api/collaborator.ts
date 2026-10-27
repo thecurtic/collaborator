@@ -23,6 +23,7 @@ import type {
   Transcript,
   TranscriptList,
   TtsVoices,
+  NoteSearchMode,
   TurnsPage,
   WebSearch,
 } from '@/domain/models';
@@ -451,7 +452,8 @@ export interface CollaboratorApi {
   listNotes(tag?: string): Promise<NoteMeta[]>;
   searchNotes(
     q: string,
-    mode?: 'semantic' | 'keyword',
+    /** hybrid (default): exact words and meaning together. */
+    mode?: NoteSearchMode,
     limit?: number,
     /** Scope results to one reserved category tag (5b3e491). */
     tag?: string,
@@ -936,7 +938,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
 
   async searchNotes(
     q: string,
-    mode: 'semantic' | 'keyword' = 'semantic',
+    mode: NoteSearchMode = 'hybrid',
     limit = 20,
     tag?: string,
   ): Promise<NoteMeta[]> {

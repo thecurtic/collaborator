@@ -285,6 +285,34 @@ def ensure_conversation_schema(conn) -> None:
     # Branch summaries + chat overviews (summaries.py).
     import summaries
     summaries.ensure_schema(conn)
+    # Full-text indexes: notes (notes_index.py) and turns (below).
+    import notes_index
+    notes_index.ensure_fts(conn)
+    ensure_turns_fts(conn)
+
+
+def ensure_turns_fts(conn) -> None:
+    """turns_fts: FTS5 over turn text, an external-content index on `turns`
+    (rowid = turn id), kept in step by triggers. Filled from the table the
+    first time. Committed-ness is filtered at query time."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'turns_fts_ai'"
+                    ).fetchone():
+        return
+    import notes_index
+    conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5("
+                 "content, content = 'turns', content_rowid = 'id', "
+                 f"tokenize = '{notes_index.FTS_TOKENIZE}')")
+    conn.execute("CREATE TRIGGER IF NOT EXISTS turns_fts_ad AFTER DELETE ON turns BEGIN "
+                 "INSERT INTO turns_fts (turns_fts, rowid, content) "
+                 "VALUES ('delete', old.id, old.content); END")
+    conn.execute("CREATE TRIGGER IF NOT EXISTS turns_fts_au AFTER UPDATE OF content ON turns "
+                 "BEGIN INSERT INTO turns_fts (turns_fts, rowid, content) "
+                 "VALUES ('delete', old.id, old.content); "
+                 "INSERT INTO turns_fts (rowid, content) VALUES (new.id, new.content); END")
+    conn.execute("CREATE TRIGGER IF NOT EXISTS turns_fts_ai AFTER INSERT ON turns BEGIN "
+                 "INSERT INTO turns_fts (rowid, content) VALUES (new.id, new.content); END")
+    conn.execute("INSERT INTO turns_fts (turns_fts) VALUES ('rebuild')")
+    conn.commit()
 
 
 def _migrate_turns_branching(conn) -> None:
@@ -839,44 +867,39 @@ def search_similar_turns(db, query_vector: List[float], limit: int = 10,
 def search_keyword_turns(db, query: str, limit: int = 10,
                          tag_boosts: Optional[Dict[str, float]] = None,
                          exclude_ids: Optional[List[int]] = None) -> List[dict]:
-    """Lexical search over committed turns by term overlap (no embeddings needed).
-
-    Scores each turn by how many query terms it contains (case-insensitive), times
-    any per-tag boost. Returns the top matches with the same shape as the semantic
-    search (incl. branch_root_id). Turns in `exclude_ids` are skipped.
-    """
-    if not query or not query.strip():
+    """Full-text search (FTS5) over committed turns: whole words, ranked by
+    bm25 times any per-tag boost. Returns the top matches with the same shape
+    as the semantic search (incl. branch_root_id). Turns in `exclude_ids` are
+    skipped. `matches` is how many distinct query words the turn contains."""
+    import notes_index
+    match = notes_index.fts_query(query)
+    if match is None:
         return []
-    import re
-    terms = [t.lower() for t in re.split(r"\W+", query) if len(t) >= 2]
-    if not terms:
-        return []
+    ensure_turns_fts(db)
     tag_boosts = {k.lower(): v for k, v in (tag_boosts or {}).items()}
     exclude = set(exclude_ids or [])
-
-    cursor = db.cursor()
-    rows = cursor.execute(
-        "SELECT id, role, content, tags, created_at, parent_turn_id "
-        "FROM turns WHERE committed = 1"
-    ).fetchall()
-
+    rows = db.cursor().execute(
+        "SELECT t.id, t.role, t.content, t.tags, t.created_at, t.parent_turn_id, "
+        "-bm25(turns_fts) AS rank FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid "
+        "WHERE turns_fts MATCH ? AND t.committed = 1 ORDER BY rank DESC LIMIT ?",
+        (match, limit * 3 + len(exclude))).fetchall()
+    import re
+    words = [w.strip('"') for w in match.split(" OR ")]
     scored = []
-    for (tid, role, content, tags_raw, created_at, parent_id) in rows:
+    for (tid, role, content, tags_raw, created_at, parent_id, rank) in rows:
         if tid in exclude:
-            continue
-        low = (content or "").lower()
-        hits = sum(1 for t in set(terms) if t in low)
-        if hits == 0:
             continue
         tags = _parse_tags(tags_raw)
         boost = 1.0
         for t in tags:
             boost *= tag_boosts.get(t.lower(), 1.0)
+        low = (content or "").lower()
         scored.append({
             "turn_id": tid, "role": role, "text": content, "tags": tags,
             "created_at": created_at, "parent_turn_id": parent_id,
             "branch_root_id": get_root_id(db, tid),
-            "matches": hits, "score": hits * boost,
+            "matches": sum(1 for w in words if re.search(rf"\b{re.escape(w)}", low)),
+            "score": rank * boost,
         })
     scored.sort(key=lambda m: m["score"], reverse=True)
     return scored[:limit]

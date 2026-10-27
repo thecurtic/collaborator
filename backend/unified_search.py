@@ -54,8 +54,8 @@ def _chats(conn, q: str, limit: int) -> Dict:
     for rid, name, content, tags, created in conn.execute(
             "SELECT id, name, content, chat_tags, created_at FROM turns "
             "WHERE parent_turn_id IS NULL AND committed = 1").fetchall():
-        hay = f"{name or ''} {tags or ''}".lower()
-        if any(t in hay for t in terms) and rid not in by_root:
+        words = set(_terms(f"{name or ''} {tags or ''}"))
+        if any(t in words for t in terms) and rid not in by_root:
             by_root[rid] = {"best": {"turn_id": rid, "text": content, "score": 0.5},
                             "count": 0, "last": created}
     roots = {}

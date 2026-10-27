@@ -15,15 +15,30 @@ SEMANTIC recall: search the user's past conversation turns by cosine similarity 
 embedding vectors — matches by MEANING, not wording. Use this when the user refers to
 earlier discussion, ideas, or decisions and you don't know the exact words used — it
 finds related content even when the vocabulary differs entirely. One of two distinct
-recall methods (the other is recall_keyword; pick deliberately, or use both). Returns
-matching turns with their text, tags, similarity score, and branch id.
+recall methods (the other is recall_keyword; pick deliberately, or use both).
+Returns hits as whole exchanges (the user's message and the reply), dated, grouped
+by branch: each group names its chat and carries that branch's label and summary,
+so you know what the conversation was about without opening it. Groups from
+sibling branches of one chat are alternatives, not one conversation. A hit before
+a fork is marked shared_trunk and carries the chat overview and the branches
+below it. To read around a hit, call read_turn_context with its turn_id.
 
 ## recall_keyword
 KEYWORD recall: search the user's past conversation turns by exact term match —
 matches by LITERAL WORDING, not meaning. Use this for names, specific identifiers,
 quoted phrases, or when a semantic search might miss an exact string. One of two
 distinct recall methods (the other is recall_semantic; pick deliberately, or use
-both). Returns matching turns with their text, tags, match count, and branch id.
+both). Matches whole words ("art" never matches "start"), ranked by relevance.
+Returns the same grouped, whole-exchange hits as recall_semantic.
+
+## read_turn_context
+Read the turns around one past turn: back toward the start of its chat (`before`,
+default 6) and forward (`after`, default 6), with the chat's name, the date and
+the branch's summary. Use it when a recall hit looks relevant but you need what
+led up to it or what came after. Reading forward stops at the next fork: you get
+the branches that leave it (each with a turn_id, label and one-line gist) and
+nothing past it. Pick the branch that fits and call read_turn_context with that
+branch's turn_id; never assume one branch is the whole story.
 
 ## synthesize
 Combine retrieved snippets into a concise, first-person memory block. Call this after a
@@ -34,7 +49,9 @@ snippets to synthesize.
 
 ## search_notes
 Search the user's atomic notes — their curated, user-approved knowledge base — by
-meaning (default) or exact keyword, optionally filtered by tag. Notes are
+exact words and meaning together (`mode` hybrid, the default), or by meaning
+(semantic) or whole words (keyword) alone, optionally filtered by tag. Hybrid
+finds a note by its exact name even when its meaning is a weak match. Notes are
 higher-signal than raw conversation history: they are ideas the user chose to keep.
 Use this when the user refers to their notes, or when a question touches something
 they may have already distilled. Three tags are types with fields of their own:
@@ -45,7 +62,9 @@ question and memory mark what a note is about; project plus a name tag (e.g.
 to list everything wearing it — e.g. tag "user-profile" with no query returns the
 user's full profile; tag "social-graph" lists their people; a project's name tag
 lists that project.
-Returns titles, tags, created dates, link edges, and a body preview. Pass `limit`
+Returns titles, tags, created dates, link edges, backlinks (how many notes link
+here and the most recent few; graph_notes has the full list), the chat a note was
+distilled from (from_chat), and a body preview. Pass `limit`
 (up to 50) when you want a wider sweep than the default. `created_from` /
 `created_to` (ISO dates, inclusive) filter by when a note was APPROVED into the
 vault and compose with query and tag — so "notes from this week that mention X"

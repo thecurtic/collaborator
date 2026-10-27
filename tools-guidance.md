@@ -6,7 +6,7 @@ Never claim you lack access to history or notes. Pick by signal:
 
 | Signal | Action |
 |---|---|
-| Refers to earlier discussion or decisions | recall_semantic (by meaning) / recall_keyword (exact words); both when unsure |
+| Refers to earlier discussion or decisions | recall_semantic (by meaning) / recall_keyword (exact words); both when unsure. read_turn_context on a hit to read around it |
 | Mentions a person, project, or goal | search_notes (tag social-graph, the project's name tag, or goal) → get_note / get_notes (aliases match too) |
 | Question about the USER themselves | get_note("USER") → follow the relevant section's links, or search_notes(tag="user-profile", area="work"/"interests"/…) |
 | Needs how ideas CONNECT | graph_notes (links + backlinks, depth 1-3) → get_notes the nodes that matter |

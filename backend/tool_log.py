@@ -34,6 +34,7 @@ _CATEGORY = {
     "propose_note": "writes", "propose_edit": "writes",
     "stage_note_send": "writes",
     "recall_semantic": "reads", "recall_keyword": "reads",
+    "read_turn_context": "reads",
     "search_notes": "reads", "get_note": "reads", "get_notes": "reads",
     "graph_notes": "reads", "list_events": "reads", "read_logs": "reads",
     "git_read": "reads", "list_transcripts": "reads",

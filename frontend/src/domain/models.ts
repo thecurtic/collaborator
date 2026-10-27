@@ -407,6 +407,9 @@ export type NoteFieldsPatch = Record<
 >;
 
 /** Vault note metadata (list/search rows). */
+/** GET /api/notes/search: hybrid (default) fuses keyword and semantic. */
+export type NoteSearchMode = 'hybrid' | 'semantic' | 'keyword';
+
 export interface NoteMeta {
   filename: string;
   title: string;

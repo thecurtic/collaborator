@@ -148,7 +148,8 @@ data: {"type":"done", ...}
 - The old single `recall` event is **removed** — recall is now tool-driven.
 
 **Available tools** (each gated in `tools.available`): `recall_semantic`,
-`recall_keyword` (turn history), `synthesize`, `search_notes`, `get_note` (the notes
+`recall_keyword` (turn history; `recall_keyword` is FTS5 full-text search over
+committed turns, `turns_fts`), `read_turn_context`, `synthesize`, `search_notes`, `get_note` (the notes
 vault — read-only; `get_note` includes backlinks for graph traversal),
 `propose_note` — which **only ever creates a pending draft** in the review inbox
 (never the vault; the user approves/rejects as usual; near-duplicates of existing
@@ -161,6 +162,20 @@ model only when that URL is configured, and SearXNG must have the `json` format
 enabled in its settings.yml) — and `fetch_url`, which reads a specific web page
 (pasted links; readable text extraction, `tools.fetch_url.max_chars` cap;
 private/tailnet addresses refused unless `tools.fetch_url.allow_private`).
+
+**What search hands the model** (`search_context.py`, caps in config `search`):
+`recall_semantic` and `recall_keyword` return `{ results: [group…],
+omitted_exchanges? }`. A group is one branch of one chat (`chat`, `chat_id`,
+`where: "branch"` with `branch_label`, `branch_summary` and, in a forked chat,
+`sibling_branches`) or the shared trunk above a fork (`where: "shared_trunk"`
+with `chat_overview` and `branches_below: [{turn_id, label, gist}]`), plus its
+`exchanges: [{turn_id, date, user, assistant, score}]`, each hit as its whole
+exchange. Groups from one chat carry `alternatives`. `read_turn_context(turn_id,
+before?, after?)` returns the turns around a committed turn with the same chat
+and branch context: back toward the root, forward up to the next fork, then
+`fork: {after_turn_id, branches}` and nothing past it (else `more_after` or
+`end_of_branch`). `search_notes` results also carry `backlinks: {count, recent}`
+and `from_chat` (the chat the note was distilled from, via `source_turns`).
 
 **`drafts_proposed` SSE event** — emitted after the answer streams when the model
 called `propose_note` or `propose_edit` during the turn:
@@ -788,11 +803,17 @@ GET /api/notes/{title}
 
 **Search**:
 ```
-GET /api/notes/search?q=…&mode=semantic|keyword&limit=10
--> 200 { "results": [ ...notes with "score"... ], "count": N, "mode": "semantic" }
+GET /api/notes/search?q=…&mode=hybrid|semantic|keyword&limit=10
+-> 200 { "results": [ ...notes with "score"... ], "count": N, "mode": "hybrid" }
 ```
-`semantic` uses the local embedder (same as recall); `keyword` is lexical over
-title/body/tags.
+`keyword` is full-text search (SQLite FTS5, `notes_fts`) over title, aliases,
+body and tags: whole words (stemmed, so "plans" finds "plan" but "art" never
+finds "start"), ranked by bm25 with title and aliases weighted above body.
+`semantic` uses the local embedder (same as recall). `hybrid` (the default) runs
+both and merges them by reciprocal rank fusion (k = 60), so an exact name is
+found even when its meaning is a weak match; when embedding fails it falls back
+to keyword alone. `notes_fts` is derived from `notes_index`, which is derived
+from the files: triggers keep it in step and a reindex rebuilds it whole.
 
 **Edit a note** (body, tags, and/or rename):
 ```
@@ -1263,7 +1284,8 @@ One search over the user's own world: chats, notes (events included),
 Scratch, transcripts, attachments and agent conversations, grouped by pile. In-screen search bars
 use the same search scoped to their pile. **The user's search, not the
 model's:** it includes Scratch, so it is never offered as a tool or used for
-recall. Keyword matching, no model involved.
+recall. Keyword matching, no model involved: chats and notes use the same
+full-text search as the model's keyword tools (whole words, bm25-ranked).
 
 **`GET /api/find?q=<words>&scope=<piles>&limit=5`** → `{ q, groups: [{ scope,
 total, items }] }`, piles in the order chats, notes, scratch, transcripts,

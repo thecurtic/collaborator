@@ -343,6 +343,19 @@ def load_config() -> dict:
             "ocr_max_pages": 30,      # scanned PDF pages read by the vision model, per file
             "image_max_side": 1600,   # images are downscaled to this before the model sees them
         },
+        "search": {
+            # What the model gets back from recall and read_turn_context
+            # (search_context.py): hits as whole exchanges, grouped by branch,
+            # with chat + branch context. Caps keep a search from flooding the
+            # context: per exchange, per summary, and per whole result.
+            "hit_chars": 900,           # one exchange (user third, reply the rest)
+            "summary_chars": 700,       # a branch summary or chat overview
+            "max_result_chars": 12000,  # one recall result in total
+            "context_turn_chars": 1500, # one turn in read_turn_context
+            "context_before": 6,
+            "context_after": 6,
+            "backlinks_shown": 3,       # note hits: most recent backlinks named
+        },
         "summaries": {
             # Branch summaries + chat overviews (summaries.py), made ahead of
             # time by a background job in the backend process with the utility
@@ -377,6 +390,7 @@ def load_config() -> dict:
             "available": {
                 "recall_semantic": True,
                 "recall_keyword": True,
+                "read_turn_context": True,
                 "synthesize": True,
                 "search_notes": True,
                 "get_note": True,

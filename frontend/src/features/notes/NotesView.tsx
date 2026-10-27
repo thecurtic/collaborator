@@ -19,7 +19,13 @@ import { NoteSendPanel } from '@/features/agents/NoteSendPanel';
 import { ProjectNoteTeam } from '@/features/projects/ProjectNoteTeam';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { Note, NoteFieldsPatch, NoteMeta, TreeNode } from '@/domain/models';
+import type {
+  Note,
+  NoteFieldsPatch,
+  NoteMeta,
+  NoteSearchMode,
+  TreeNode,
+} from '@/domain/models';
 import { categoryOf } from './categories';
 import {
   draftToPatch,
@@ -408,7 +414,7 @@ export function NotesView({
 }: NotesViewProps) {
   const [screen, setScreen] = useState<Screen>({ kind: 'list' });
   const [query, setQuery] = useState('');
-  const [mode, setMode] = useState<'semantic' | 'keyword'>('semantic');
+  const [mode, setMode] = useState<NoteSearchMode>('hybrid');
   // Notes goes straight to the whole pile (UX doc, Destinations); People,
   // from the menu, opens this screen on its own lens. Profile lives in
   // Settings now.
@@ -605,7 +611,9 @@ export function NotesView({
             <button
               type="button"
               onClick={() =>
-                setMode((m) => (m === 'semantic' ? 'keyword' : 'semantic'))
+                setMode((m) =>
+                  m === 'hybrid' ? 'semantic' : m === 'semantic' ? 'keyword' : 'hybrid',
+                )
               }
               title="Toggle search mode"
               className="shrink-0 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"

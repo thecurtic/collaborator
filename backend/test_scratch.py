@@ -222,7 +222,7 @@ def test_agent_isolation_by_construction():
     conn.close()
     _, execute, _ = main._build_tools(dbp)
     hits = json.loads(execute("recall_keyword", {"query": "SECRETISH"}))
-    assert hits == []
+    assert hits["results"] == []
     print("✓ isolation: separate table — agent surfaces physically can't see scratch")
 
 

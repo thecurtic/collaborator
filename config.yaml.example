@@ -258,6 +258,17 @@ attachments:
   ocr_max_pages: 30           # scanned PDF pages the vision model reads, per file
   image_max_side: 1600        # images are downscaled to this many px before the model
 
+# What the model gets back from recall and read_turn_context: hits as whole
+# exchanges, grouped by branch, with the chat's name and the branch summary.
+search:
+  hit_chars: 900              # one recalled exchange (user third, reply the rest)
+  summary_chars: 700          # a branch summary or chat overview on a hit
+  max_result_chars: 12000     # one recall result in total; the rest is counted, not sent
+  context_turn_chars: 1500    # one turn in read_turn_context
+  context_before: 6           # read_turn_context defaults
+  context_after: 6
+  backlinks_shown: 3          # note hits name this many most recent backlinks
+
 # Branch summaries and chat overviews, made ahead of time by a background job
 # in the backend process with inference.utility_model. Every branch (the path
 # from the first message to a latest one) gets its own summary and a generated
@@ -294,7 +305,8 @@ tools:
     preview_chars: 400        # results are kept as size + this many characters; args in full
   available:                  # enable/disable individual tools
     recall_semantic: true     # semantic (embedding) search over turns
-    recall_keyword: true      # lexical keyword search over turns
+    recall_keyword: true      # full-text (whole-word) search over turns
+    read_turn_context: true   # read around a recalled turn, stopping at forks
     synthesize: true          # synthesize retrieved items into a block
     search_notes: true        # search the notes vault (curated knowledge)
     get_note: true            # read one note in full (body + backlinks)

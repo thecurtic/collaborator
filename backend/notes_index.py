@@ -224,6 +224,82 @@ def _upsert(conn, note: dict, embedding=None) -> None:
     conn.commit()
 
 
+# --- Full-text index (FTS5) -------------------------------------------------------
+#
+# notes_fts mirrors notes_index (itself rebuildable from the files), so it is
+# derived from note content alone like everything else here. Triggers keep it
+# in step with every write to notes_index; reindex_vault rebuilds it whole.
+
+FTS_TOKENIZE = "porter unicode61 remove_diacritics 2"
+# bm25 column weights: filename (unindexed), title, aliases, body, tags.
+_NOTE_WEIGHTS = (0.0, 10.0, 8.0, 1.0, 3.0)
+_ALIASES_SQL = ("CASE WHEN json_valid({r}.fields) "
+                "THEN COALESCE(json_extract({r}.fields, '$.aliases'), '') ELSE '' END")
+
+
+def ensure_fts(conn) -> None:
+    """Create notes_fts + its triggers if missing (filling it from the index
+    the first time). Cheap when they exist."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'notes_index_fts_ai'"
+                    ).fetchone():
+        return
+    conn.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5("
+                 f"filename UNINDEXED, title, aliases, body, tags, "
+                 f"tokenize = '{FTS_TOKENIZE}')")
+    new = ("INSERT INTO notes_fts (filename, title, aliases, body, tags) VALUES "
+           f"(new.filename, new.title, {_ALIASES_SQL.format(r='new')}, new.body, "
+           "COALESCE(new.tags, ''));")
+    conn.execute("CREATE TRIGGER IF NOT EXISTS notes_index_fts_ad AFTER DELETE ON "
+                 "notes_index BEGIN DELETE FROM notes_fts WHERE filename = old.filename; END")
+    conn.execute("CREATE TRIGGER IF NOT EXISTS notes_index_fts_au AFTER UPDATE ON "
+                 "notes_index BEGIN DELETE FROM notes_fts WHERE filename = old.filename; "
+                 f"{new} END")
+    conn.execute("CREATE TRIGGER IF NOT EXISTS notes_index_fts_ai AFTER INSERT ON "
+                 f"notes_index BEGIN {new} END")
+    rebuild_fts(conn)
+
+
+def rebuild_fts(conn) -> None:
+    """Refill notes_fts from notes_index (which is refilled from the files)."""
+    conn.execute("DELETE FROM notes_fts")
+    conn.execute("INSERT INTO notes_fts (filename, title, aliases, body, tags) "
+                 f"SELECT filename, title, {_ALIASES_SQL.format(r='notes_index')}, "
+                 "body, COALESCE(tags, '') FROM notes_index")
+    conn.commit()
+
+
+def fts_query(query: str):
+    """An FTS5 MATCH expression for free text: whole words (len >= 2), any of
+    them, each quoted so nothing in the text is read as FTS syntax. None when
+    there are no words. Whole words: "art" never matches "start"."""
+    terms = []
+    for t in re.split(r"\W+", (query or "").lower()):
+        if len(t) >= 2 and t not in terms:
+            terms.append(t)
+    return " OR ".join(f'"{t}"' for t in terms) or None
+
+
+def _filter_sql(tag=None, created_from=None, created_to=None, area=None, alias="ni"):
+    where, params = [], []
+    if tag:
+        where.append(f"EXISTS (SELECT 1 FROM json_each({alias}.tags) "
+                     "WHERE lower(json_each.value) = ?)")
+        params.append(tag.lower())
+    if created_from or created_to:
+        # Notes without a created date are left out of any dated query.
+        where.append(f"COALESCE({alias}.created, '') != ''")
+        if created_from:
+            where.append(f"substr({alias}.created, 1, 10) >= ?")
+            params.append(created_from[:10])
+        if created_to:
+            where.append(f"substr({alias}.created, 1, 10) <= ?")
+            params.append(created_to[:10])
+    if area:
+        where.append(f"json_extract({alias}.fields, '$.area') = ?")
+        params.append(area)
+    return where, params
+
+
 def _embed_blob(vector):
     if not vector:
         return None
@@ -337,6 +413,9 @@ def reindex_vault(conn, vault_dir: str, embed_fn=None,
         cursor.execute("DELETE FROM notes_index WHERE filename = ?", (name,))
         removed += 1
     conn.commit()
+    # The full-text index is rebuilt whole, so it always matches the files.
+    ensure_fts(conn)
+    rebuild_fts(conn)
 
     total = cursor.execute("SELECT COUNT(*) FROM notes_index").fetchone()[0]
     return {"added": added, "updated": updated, "removed": removed,
@@ -589,35 +668,60 @@ def list_events(conn, window_start: str = None, window_end: str = None,
 def search_notes_keyword(conn, query: str, limit: int = 10, tag: str = None,
                          created_from: str = None, created_to: str = None,
                          area: str = None):
-    """Lexical search over title/body/tags by term overlap. Optional tag and
-    created-date-range filters (composable).
+    """Full-text search (FTS5) over title, aliases, body and tags, ranked by
+    bm25 with title and aliases weighted above body. Whole words only.
+    Optional tag, created-date-range and area filters (composable, in SQL).
 
-    With filters and NO query terms, returns every note passing the filters
+    With filters and NO query words, returns every note passing the filters
     (e.g. the full user profile via tag, or "everything from this week" via
-    a date range alone).
+    a date range alone), by title.
     """
-    terms = [t.lower() for t in re.split(r"\W+", query or "") if len(t) >= 2]
-    if not terms and not tag and not created_from and not created_to:
-        return []
-    scored = []
-    for row in conn.cursor().execute(f"SELECT {_COLS} FROM notes_index").fetchall():
-        note = _row_to_note(row)
-        if tag and not _note_has_tag(note, tag):
-            continue
-        if not _note_in_created_range(note, created_from, created_to):
-            continue
-        if not _note_matches_area(note, area):
-            continue
-        if not terms:
+    ensure_fts(conn)
+    where, params = _filter_sql(tag, created_from, created_to, area)
+    cols = ", ".join(f"ni.{c}" for c in NOTES_INDEX_COLUMNS)
+    match = fts_query(query)
+    if match is None:
+        if not (tag or created_from or created_to):
+            return []
+        rows = conn.execute(
+            f"SELECT {cols} FROM notes_index ni "
+            f"{'WHERE ' + ' AND '.join(where) if where else ''} "
+            f"ORDER BY ni.title LIMIT ?", (*params, limit)).fetchall()
+        out = []
+        for row in rows:
+            note = _row_to_note(row)
             note["score"] = 1
-            scored.append(note)
-            continue
-        aliases = " ".join((note.get("fields") or {}).get("aliases") or [])
-        haystack = (f"{note['title']}\n{aliases}\n{note['body']}\n"
-                    f"{' '.join(note['tags'])}").lower()
-        hits = sum(1 for t in set(terms) if t in haystack)
-        if hits:
-            note["score"] = hits
-            scored.append(note)
-    scored.sort(key=lambda n: (-n["score"], n["title"]))
-    return scored[:limit]
+            out.append(note)
+        return out
+    weights = ", ".join(str(w) for w in _NOTE_WEIGHTS)
+    rows = conn.execute(
+        f"SELECT {cols}, -bm25(notes_fts, {weights}) AS score "
+        f"FROM notes_fts JOIN notes_index ni ON ni.filename = notes_fts.filename "
+        f"WHERE notes_fts MATCH ? {''.join(' AND ' + w for w in where)} "
+        f"ORDER BY score DESC, ni.title LIMIT ?",
+        (match, *params, limit)).fetchall()
+    out = []
+    for row in rows:
+        note = _row_to_note(row[:-1])
+        note["score"] = row[-1]
+        out.append(note)
+    return out
+
+
+def search_notes_hybrid(conn, query: str, query_vector=None, limit: int = 10,
+                        k: int = 60, **filters):
+    """Keyword (FTS5) and semantic search fused by reciprocal rank (k=60):
+    exact names and wording from the one, meaning from the other. Falls back
+    to keyword alone when there is no query vector (embedding failed).
+    Each note's `score` is its fused RRF score."""
+    depth = max(limit * 3, 30)
+    keyword = search_notes_keyword(conn, query, limit=depth, **filters)
+    if not query_vector:
+        return keyword[:limit]
+    semantic = search_notes_semantic(conn, query_vector, limit=depth, **filters)
+    fused = {}
+    for results in (keyword, semantic):
+        for rank, note in enumerate(results, 1):
+            entry = fused.setdefault(note["filename"], dict(note, score=0.0))
+            entry["score"] += 1.0 / (k + rank)
+    return sorted(fused.values(), key=lambda n: (-n["score"], n["title"]))[:limit]
