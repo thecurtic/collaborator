@@ -913,7 +913,6 @@ function AppShell() {
                 setBranchTarget({
                   turnId: node.id,
                   label: node.preview,
-                  withContext: true,
                 });
                 introBranchRef.current = true;
               }

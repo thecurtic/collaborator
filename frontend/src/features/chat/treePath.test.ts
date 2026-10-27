@@ -19,7 +19,6 @@ function node(id: number, children: TreeNode[] = [], branched = false): TreeNode
     paragraphs: [],
     parentTurnId: null,
     paragraphIndex: null,
-    contextBoundary: false,
     branched,
     name: null,
     title: null,

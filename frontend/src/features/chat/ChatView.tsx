@@ -9,7 +9,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { JumpToLatest } from '@/components/JumpToLatest';
 import { Markdown } from '@/components/Markdown';
 import { Thinking } from '@/components/Thinking';
-import { useModalA11y } from '@/lib/useModalA11y';
 import { useScrollHold } from '@/lib/useScrollHold';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import type { RecallBlock } from '@/domain/models';
@@ -50,12 +49,6 @@ function formatTurns(entries: PathEntry[]): string {
         `${e.node.role === 'user' ? 'You' : 'Collaborator'}:\n${e.node.content}`,
     )
     .join('\n\n---\n\n');
-}
-
-interface BranchPoint {
-  turnId: number;
-  paragraphIndex?: number;
-  label: string;
 }
 
 /** The recalled-memory block: rendered between a user message and its reply. */
@@ -129,8 +122,6 @@ export function ChatView({
   } = convo;
   // Gates the in-flight recall-block card (diagnostic display, 9aee10b).
   const debug = useDebugEnabled();
-  // Pending branch point awaiting a with/without-context choice.
-  const [branchChoice, setBranchChoice] = useState<BranchPoint | null>(null);
   // Regenerate: the leaf reply to replace — the next send deletes the old
   // exchange and resends the (possibly edited) draft. Nothing is deleted
   // until the user actually sends, so cancelling is free.
@@ -143,9 +134,6 @@ export function ChatView({
     setNotice(msg);
     noticeTimer.current = setTimeout(() => setNotice(null), 2500);
   };
-  const branchDialogRef = useModalA11y<HTMLDivElement>(branchChoice !== null, () =>
-    setBranchChoice(null),
-  );
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -278,7 +266,6 @@ export function ChatView({
         branchTarget.turnId,
         message,
         branchTarget.paragraphIndex,
-        branchTarget.withContext,
         ids,
       );
       onBranchTargetChange(null);
@@ -287,18 +274,14 @@ export function ChatView({
     return send(message, ids);
   };
 
-  // Tapping a branch button asks with/without context first.
+  // Tapping a branch button arms the next send to fork from here. Every
+  // branch carries the history from the root.
   const handleBranch = (
     turnId: number,
     paragraphIndex: number | undefined,
     label: string,
   ) => {
-    setBranchChoice({ turnId, paragraphIndex, label: label.slice(0, 80) });
-  };
-
-  const chooseContext = (withContext: boolean) => {
-    if (branchChoice) onBranchTargetChange({ ...branchChoice, withContext });
-    setBranchChoice(null);
+    onBranchTargetChange({ turnId, paragraphIndex, label: label.slice(0, 80) });
     setEditTarget(null); // branch and regenerate are mutually exclusive
   };
 
@@ -317,28 +300,17 @@ export function ChatView({
     if (wipesConversation) onConversationGone();
   };
 
-  // A without-context branch is a fresh chat: show only from its start (the most
-  // recent branched context-boundary on the path) down to the tip, hiding the
-  // prior thread that the model can't see anyway.
-  let freshStart = 0;
-  for (let i = path.length - 1; i >= 0; i--) {
-    if (path[i].node.branched && path[i].node.contextBoundary) {
-      freshStart = i;
-      break;
-    }
-  }
-  const displayPath = freshStart > 0 ? path.slice(freshStart) : path;
-  // In-context turns = the last `contextWindow` turns of the (fresh) shown path.
+  // In-context turns = the last `contextWindow` turns of the shown path.
   const inCtxStart =
     contextWindow != null
-      ? Math.max(0, displayPath.length - contextWindow)
+      ? Math.max(0, path.length - contextWindow)
       : 0;
 
   // Share a single turn or the current context window as plain text; falls
   // back to the clipboard where the Web Share API is unavailable (desktop).
   const handleShare = async (node: TreeNode, scope: ShareScope) => {
     const text =
-      scope === 'turn' ? node.content : formatTurns(displayPath.slice(inCtxStart));
+      scope === 'turn' ? node.content : formatTurns(path.slice(inCtxStart));
     try {
       if (navigator.share) {
         await navigator.share({ text });
@@ -353,51 +325,6 @@ export function ChatView({
 
   return (
     <div className="relative flex h-full flex-col">
-      {/* Branch context choice. */}
-      {branchChoice && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
-          <button
-            aria-label="Cancel"
-            onClick={() => setBranchChoice(null)}
-            className="absolute inset-0 bg-black/60"
-          />
-          <div
-            ref={branchDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Branch from here"
-            tabIndex={-1}
-            className="pb-safe relative w-full rounded-t-2xl border border-border bg-card p-5 outline-none sm:max-w-sm sm:rounded-2xl"
-          >
-            <p className="mb-1 text-sm font-medium">Branch from here</p>
-            <p className="mb-4 truncate text-xs text-muted-foreground">
-              {branchChoice.label}
-            </p>
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={() => chooseContext(true)}
-                className="rounded-lg border border-border px-4 py-3 text-left text-sm hover:bg-muted active:scale-[0.99]"
-              >
-                <span className="font-medium">Branch with context</span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Keeps the conversation history in context.
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => chooseContext(false)}
-                className="rounded-lg border border-border px-4 py-3 text-left text-sm hover:bg-muted active:scale-[0.99]"
-              >
-                <span className="font-medium">Branch without context</span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Fresh start — the model gets no prior history.
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={scrollRef}
@@ -419,11 +346,11 @@ export function ChatView({
               </p>
             </div>
           ) : (
-            displayPath.map((entry, i) => {
+            path.map((entry, i) => {
               // Regenerate is leaf-exchange only: the reply has no children
               // and its user turn has no other branches — otherwise deleting
               // the pair would destroy downstream turns.
-              const prev = i > 0 ? displayPath[i - 1] : undefined;
+              const prev = i > 0 ? path[i - 1] : undefined;
               const canRegenerate =
                 entry.node.role === 'assistant' &&
                 entry.node.children.length === 0 &&
@@ -641,7 +568,7 @@ export function ChatView({
             editTarget != null
               ? 'Regenerating — edit your message (or send as-is); replaces the current reply'
               : branchTarget
-                ? `${branchTarget.label}${branchTarget.withContext ? '' : ' · no context'}`
+                ? branchTarget.label
                 : null
           }
           onCancelBranch={() => {

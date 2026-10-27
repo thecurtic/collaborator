@@ -90,9 +90,9 @@ def test_naming_branching_and_synthesis_promote():
     main, db, c, _ = _fresh_env()
 
     root, leaf = _chat(c, 1)
-    r = c.patch(f"/api/turns/{leaf}/name", json={"name": ""})
+    r = c.patch(f"/api/turns/{root}/name", json={"name": ""})
     assert r.json()["promoted"] is False and _root_node(c, root)["state"] == "seed"
-    r = c.patch(f"/api/turns/{leaf}/name", json={"name": "Garden"})
+    r = c.patch(f"/api/turns/{root}/name", json={"name": "Garden"})
     assert r.json()["promoted"] is True and _root_node(c, root)["state"] == "tree"
 
     root2, leaf2 = _chat(c, 1)

@@ -107,9 +107,9 @@ X-Passkey: <your-passkey>
   backend knows which branch is active. **Omit it only to start a fresh root
   conversation** (no prior context). Returns `404` if the id doesn't exist.
 - `context_turns` (optional): Prior committed turns to include. **Omitted/null** =
-  the configured default window (`memory.default_context_window`). **`0`** = fresh
-  context, no history injected (the model gets a clean slate) while the turn is still
-  stored and linked in the tree.
+  the configured default window (`memory.default_context_window`); otherwise at
+  least `1`. **`0` is a `422`**: branching without context was removed on
+  2026-10-27, and every branch runs from the root.
 - `commit` (optional, default: true): Whether to commit this turn to database
 - `user_id` (optional): User identifier
 - `mode` (optional): Turn source. `"voice"` = came from call mode (spoken); absent or
@@ -392,10 +392,8 @@ parent it branched from. `preview` is a single-line label.
 
 - Top-level `context_turns` is the default window size (how many recent turns feed
   the next message) — use it to shade the in-context window on the active path.
-- Each node also carries its own stored `context_turns` and a `context_boundary`
-  boolean (`true` when that turn was generated with `context_turns: 0`, i.e. a
-  "branch without context" start). When shading back from the active leaf, stop at
-  the most recent `context_boundary` so without-context branches shade correctly.
+- Each node also carries its own stored `context_turns`. (There is no
+  `context_boundary` any more: every branch runs from the root.)
 - `branched` (boolean) is `true` only for turns created via `POST /api/branches` (an
   explicit fork), `false` for `POST /api/messages` continuations. Use it to render the
   fork switcher even when a with-context branch shares the parent of a continuation
@@ -406,11 +404,11 @@ parent it branched from. `preview` is a single-line label.
   `GET /api/tree?state=tree` (main map). Promote with `PATCH /api/turns/{id}/state`
   (below). All turns in a conversation share the same state (inherited on
   continuation/branch; set across the subtree on promote).
-- `name` (string | null): a user-set display name for the turn (used to name a
-  conversation/branch by naming its root turn). `null` = unnamed. Set via
-  `PATCH /api/turns/{turn_id}/name` with `{ "name": "..." }` (empty/whitespace clears
-  it; returns `{ "turn_id", "name", "promoted" }`; `404` if the turn doesn't exist).
-  A non-empty name promotes a seed chat (see §9).
+- `name` (string | null): the chat's user-set name, on ROOT turns only. `null` =
+  unnamed. Set via `PATCH /api/turns/{turn_id}/name` with `{ "name": "..." }`
+  (empty/whitespace clears it; returns `{ "turn_id", "name", "promoted" }`; `404` if
+  the turn doesn't exist, `422` if it isn't a root: branches are not named by hand,
+  their labels are generated). A non-empty name promotes a seed chat (see §9).
 - `chat_tags` (string[], present only on ROOT turns that have any): the **chat's
   tags** — see §9a. Distinct from `tags`, the per-turn recall tags.
 - `title` (string, present only on ROOT turns that have one): the **auto-generated

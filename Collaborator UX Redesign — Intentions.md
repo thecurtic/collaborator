@@ -49,6 +49,7 @@ Opening the app shows a single feed ordered by warmth, not a list of conversatio
 - Tapping an item opens that object or navigates to the appropriate destination (possible second tap).
 - A message the backend flags as needing me notifies once and sits in the feed; its notification clears when the endpoint closes the question. A question in the feed can be answered right there, merge included. Merged work shows quietly, with no notification, so I can go and test it. Everything else from agents arrives quietly as unread in the project.
 - Branching conversations leave the front door. Branching stays as a chat-level feature, not an organizing concept.
+- Every branch runs from the root, and branches are not named by hand (2026-10-27). Branching without context is gone: a fresh start is a new chat. Branch labels are generated in the background along with branch summaries, and only a chat itself takes a name I give it. Old without-context branches were split off into their own chats; old branch names were dropped.
 - Agent handoff chatter does not go into the warm feed; it would bury what actually needs me.
 - Pinning is necessary: some things stay at the top of the feed regardless of warmth.
 
@@ -337,6 +338,7 @@ Tapping an item opens it or takes me to its destination. For anything the feed d
 - [x] How does a note get made from a chat: do I ask for it, is there a control, or does Collaborator offer?
 - [x] Seeds vs conversations: same object, one state flag. Promotion is derived from a deliberate act (naming, tagging, branching, synthesizing), not pressed by hand. Conversations is the list of promoted chats inside the Chats area, reached from a top-bar control beside the hamburger.
 - [x] Chat tags: on the root turn. Tags exist today only per turn, for recall; chat-level tags are new.
+- [x] Branches: always from the root, labels generated, no manual branch names, no without-context branching (2026-10-27).
 - [x] Recurring events: one note with a rule and an exceptions list, exceptions kept forever; an occurrence that needs its own body becomes a linked one-off note.
 - [x] Where a sent note lands: superseded 2026-10-20. Collaborator never commits; the note goes over the seam and the backend commits it. The bot token, the `@pm` commit and the push gate are gone.
 - [x] Wallet: LNbits on my LND node, pay and receive, copied from the broker; NWC kept dormant. (A sandbox wallet was planned and dropped with the real-data sandbox, 2026-10-21.) Built 2026-10-14 as `wallet.py`: one `wallet` tool (balance, pay, top-up invoice) in place of `nwc_pay`, with `tools.wallet.provider` choosing lnbits or nwc. The two can sit on different nodes, so each keeps its own daily cap, and an attempt parked by one is never checked or repaid through the other.

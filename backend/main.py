@@ -128,7 +128,8 @@ class UserMessage(BaseModel):
     # chain and the new turns chain off it. Omitted/None = start a fresh root
     # conversation (no prior context).
     parent_turn_id: Optional[int] = None
-    # None = use the configured default window; 0 = fresh context (no history).
+    # None = use the configured default window; otherwise >= 1 (0 is a 422:
+    # every branch runs from the root).
     context_turns: Optional[int] = None
     commit: Optional[bool] = True
     user_id: Optional[str] = None
@@ -180,7 +181,7 @@ class DeleteTurnResponse(BaseModel):
 class BranchRequest(BaseModel):
     message: str
     paragraph_index: Optional[int] = None
-    # None = configured default window; 0 = "branch without context" (fresh).
+    # None = configured default window; otherwise >= 1 (see UserMessage).
     context_turns: Optional[int] = None
     commit: Optional[bool] = True
     user_id: Optional[str] = None
@@ -408,8 +409,15 @@ def _chat_card(conn, root_id: int) -> dict:
 
 
 def _effective_context_turns(value: Optional[int]) -> int:
-    """Resolve a request's context_turns: None -> configured default; 0 -> fresh."""
-    return _default_context_window() if value is None else value
+    """Resolve a request's context_turns: None -> configured default. Below 1 is
+    a 422: branching without context was removed, so an old client asking for
+    a fresh branch fails loudly instead of silently getting history."""
+    if value is None:
+        return _default_context_window()
+    if value < 1:
+        raise HTTPException(status_code=422,
+                            detail="context_turns must be at least 1")
+    return value
 
 
 # Estimated prompt overhead beyond history + message: system prompt layers,
@@ -2140,10 +2148,6 @@ def _enrich_tree_node(node: dict) -> dict:
     """Recursively add preview + paragraphs to tree nodes for the metro map."""
     node = dict(node)
     node["preview"] = _preview(node.get("content", ""))
-    # A turn generated with context_turns == 0 reset the context window ("branch
-    # without context"). The frontend should stop shading the in-context window at
-    # this boundary when walking back the active path.
-    node["context_boundary"] = (node.get("context_turns") == 0)
     # True only for turns created via POST /api/branches (an explicit fork), so a
     # with-context branch is distinguishable from a normal continuation.
     node["branched"] = bool(node.get("branched"))
@@ -2550,7 +2554,7 @@ async def send_message(
     - **parent_turn_id**: The active leaf to continue from. Context is built from
       this turn's ancestor chain. Omit it to start a fresh root conversation.
     - **context_turns**: Prior committed turns to include (None = configured default,
-      0 = fresh/no history).
+      otherwise at least 1).
     - **commit**: Whether to commit this turn to memory (default: true)
     - **X-Passkey**: User's passkey for authentication
     """
@@ -4963,12 +4967,17 @@ async def patch_turn_name(
     request: NameRequest,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
-    """Set or clear a turn's display name (used to name conversations/branches)."""
+    """Set or clear a chat's name, on its root turn. Branches are not named by
+    hand (their labels are generated): a non-root turn is a 422."""
     _require_auth(passkey)
     try:
         db_path = _resolve_db_path(passkey)
         conn = sqlite3.connect(db_path)
         try:
+            turn = get_turn_by_id(conn, turn_id)
+            if turn is not None and turn.get("parent_turn_id") is not None:
+                raise HTTPException(status_code=422,
+                                    detail="only a chat's root turn can be named")
             found, value = update_turn_name(conn, turn_id, request.name)
             # Naming is a deliberate act: it promotes a seed chat.
             promoted = bool(found and value) and _promote_chat(conn, turn_id)

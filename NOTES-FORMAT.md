@@ -285,7 +285,7 @@ approved notes only.
   transfers ownership, and the note then speaks the idea in the user's voice.
 - Tree structure marks idea-dense spots: branch points (`paragraph_index` points at
   the paragraph that spawned a thought), sibling branches (comparison ideas), leaves
-  of exhausted branches (resolutions or open questions), names/tags/context-resets
+  of exhausted branches (resolutions or open questions), chat names and tags
   (explicit user-attention signals).
 - **Granularity:** fewer, stronger notes — review attention is the scarce resource.
   Drafts in one batch dedupe against each other (later: against the vault, proposing

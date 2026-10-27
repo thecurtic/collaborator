@@ -145,8 +145,6 @@ export interface ApiTreeNode {
   committed?: boolean | number;
   /** This turn's stored context window. */
   context_turns?: number;
-  /** True when generated with context_turns:0 (a fresh-context boundary). */
-  context_boundary?: boolean;
   /** True when this turn was created via POST /api/branches (an explicit fork). */
   branched?: boolean;
   /** User-set name (conversation/branch naming); null/absent = unnamed. */

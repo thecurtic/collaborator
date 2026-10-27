@@ -344,7 +344,6 @@ export function useConversation(reloadSignal: number) {
       parentTurnId: number,
       message: string,
       paragraphIndex?: number,
-      withContext = true,
       attachmentIds: number[] = [],
     ): Promise<boolean> => {
       const trimmed = message.trim();
@@ -362,8 +361,6 @@ export function useConversation(reloadSignal: number) {
             tools: getToolsEnabled(),
             location: await currentLocation(),
             attachmentIds,
-            // "Without context" → fresh branch, no prior turns injected.
-            ...(withContext ? {} : { contextTurns: 0 }),
           },
           handlers,
           signal,
@@ -410,7 +407,7 @@ export function useConversation(reloadSignal: number) {
       }
       const parentId = parentOf.get(u.id); // VIRTUAL_ROOT for conversation roots
       const isRoot = parentId === VIRTUAL_ROOT;
-      const keepName = u.name; // conversation name (root) or branch name
+      const keepName = isRoot ? u.name : null; // only a chat (root) is named
       const keepState = isRoot ? u.state : null;
       const keepChatTags = isRoot ? u.chatTags : [];
 
@@ -433,7 +430,6 @@ export function useConversation(reloadSignal: number) {
                 tools: getToolsEnabled(),
                 location: await currentLocation(),
                 attachmentIds,
-                ...(u.contextBoundary ? { contextTurns: 0 } : {}),
               },
               handlers,
               signal,

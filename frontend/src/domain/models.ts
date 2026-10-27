@@ -60,8 +60,6 @@ export interface TreeNode {
   paragraphs: string[];
   parentTurnId: number | null;
   paragraphIndex: number | null;
-  /** True when generated with context_turns:0 — a fresh-context boundary. */
-  contextBoundary: boolean;
   /** True when this turn was created as an explicit fork (POST /api/branches). */
   branched: boolean;
   /** User-set name (used to name a conversation/branch by its root turn). */

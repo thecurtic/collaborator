@@ -474,17 +474,13 @@ def get_latest_turn_id(db, committed_only: bool = True) -> Optional[int]:
 
 def get_ancestor_chain(db, turn_id: int, limit: Optional[int] = None,
                        committed_only: bool = True) -> List[dict]:
-    """Walk parent_turn_id from turn_id up to the root (or a context reset).
+    """Walk parent_turn_id from turn_id up to the root.
 
     Returns the chain oldest-first, INCLUDING turn_id itself, so a branch inherits
     context up to and including its parent. When limit is set, only the most recent
-    `limit` turns are returned.
-
-    A "context reset" — a USER turn generated with context_turns == 0 (a
-    without-context branch start) — is the boundary: it is INCLUDED, but the walk
-    stops there and does not reach the turns above it. Only the user turn is the
-    reset; its assistant reply (also stored with context_turns == 0) is internal to
-    the branch, so a branch still shares its own prior turns as context.
+    `limit` turns are returned. Every branch runs from the root: there is no
+    context reset (migrate_branches.py split old without-context branches off
+    into their own chats).
     """
     if turn_id is None:
         return []
@@ -500,9 +496,6 @@ def get_ancestor_chain(db, turn_id: int, limit: Optional[int] = None,
             break
         turn = _row_to_turn(row)
         chain.append(turn)
-        # Stop at (but include) a context reset: a user turn with context_turns == 0.
-        if turn.get("role") == "user" and turn.get("context_turns") == 0:
-            break
         current = turn["parent_turn_id"]
 
     chain.reverse()  # oldest first

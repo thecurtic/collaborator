@@ -566,7 +566,7 @@ export function useCall(
           const pb = pendingBranch;
           pendingBranch = null; // only the first turn forks
           onBranchConsumedRef.current?.();
-          log(`branching from turn ${pb.turnId}${pb.withContext ? '' : ' (no ctx)'}`);
+          log(`branching from turn ${pb.turnId}`);
           const res = await api.branchMessage(
             {
               parentTurnId: pb.turnId,
@@ -578,7 +578,6 @@ export function useCall(
               // Tools (web/notes/recall) on voice turns — same toggle as text.
               tools: getToolsEnabled(),
               location: await currentLocation(),
-              ...(pb.withContext ? {} : { contextTurns: 0 }),
             },
             { onToken, onReasoning, onStatus: onToolEvent, onDrafts },
             streamAbort.signal,

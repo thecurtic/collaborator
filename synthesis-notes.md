@@ -61,8 +61,7 @@ rejection by the user may itself be a note).
   single branch contains — synthesize across branches when the tree supports it.
 - Leaves of exhausted branches tend to hold resolutions, or abandoned lines that are
   really open questions.
-- Turns with a "name", user "tags", or a context reset ("context_turns": 0) carry
-  explicit user attention — weight them.
+- A chat "name" and user "tags" carry explicit user attention — weight them.
 
 ## Metadata per note (draft envelope, not body text)
 

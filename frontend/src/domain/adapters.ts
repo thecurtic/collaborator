@@ -173,7 +173,6 @@ export function toTreeNode(api: ApiTreeNode): TreeNode {
     paragraphs: api.paragraphs ?? [],
     parentTurnId: api.parent_turn_id ?? null,
     paragraphIndex: api.paragraph_index ?? null,
-    contextBoundary: api.context_boundary === true,
     branched: api.branched === true,
     name: typeof api.name === 'string' ? api.name : null,
     title: typeof api.title === 'string' && api.title ? api.title : null,

@@ -3,5 +3,4 @@ export interface BranchTarget {
   turnId: number;
   paragraphIndex?: number;
   label: string;
-  withContext: boolean;
 }

@@ -81,41 +81,22 @@ interface TreeLayout {
   minCol: number;
   maxCol: number;
   rows: number;
-  originId: number | null; // node this without-context tree branched from
-  side: number; // -1 left of main, +1 right, 0 = a main/root tree
   xOffset: number; // px offset of this tree in the forest
 }
 
-interface Detach {
-  node: TreeNode;
-  originId: number;
-}
-
-/** Build a tidy tree, detaching context-boundary children as new tree roots. */
-function buildSeg(node: TreeNode, activeIds: Set<number>, detached: Detach[]): Seg {
+/** Build a tidy tree: one segment per run of single children. */
+function buildSeg(node: TreeNode, activeIds: Set<number>): Seg {
   const nodeIds: number[] = [];
   let cur = node;
   for (;;) {
     nodeIds.push(cur.id);
-    const attached: TreeNode[] = [];
-    for (const k of cur.children) {
-      // Detach only a WITHOUT-context branch START (its user turn is both an
-      // explicit branch and a context boundary) — not its reply/continuations,
-      // which also carry context_boundary but must stay in the same tree.
-      if (k.branched && k.contextBoundary) {
-        detached.push({ node: k, originId: cur.id });
-      } else {
-        attached.push(k);
-      }
-    }
-    if (attached.length === 1) {
-      cur = attached[0];
+    if (cur.children.length === 1) {
+      cur = cur.children[0];
       continue;
     }
-    const children =
-      attached.length > 1
-        ? attached.map((a) => buildSeg(a, activeIds, detached))
-        : [];
+    const children = cur.children.length > 1
+      ? cur.children.map((k) => buildSeg(k, activeIds))
+      : [];
     return {
       startNodeId: node.id,
       name: node.name,
@@ -196,22 +177,15 @@ function assign(
 }
 
 function buildForest(tree: ConversationTree, activeIds: Set<number>) {
-  const queue: { node: TreeNode; originId: number | null; side: number }[] =
-    tree.roots.map((r) => ({ node: r, originId: null, side: 0 }));
   const trees: TreeLayout[] = [];
   const measureState = { toggle: 1 }; // shared so branch sides alternate globally
 
-  while (queue.length) {
-    const { node, originId, side } = queue.shift()!;
-    const detached: Detach[] = [];
-    const rootSeg = buildSeg(node, activeIds, detached);
+  for (const node of tree.roots) {
+    const rootSeg = buildSeg(node, activeIds);
     measure(rootSeg, measureState);
     const segments: Segment[] = [];
     assign(rootSeg, 0, 0, null, null, segments);
     const cols = segments.map((s) => s.column);
-    // Which column each node sits in (to decide a detached child's side).
-    const colOf = new Map<number, number>();
-    for (const s of segments) for (const id of s.nodeIds) colOf.set(id, s.column);
     trees.push({
       rootNodeId: node.id,
       rootName: node.name ?? node.title ?? node.preview ?? 'Untitled',
@@ -219,42 +193,16 @@ function buildForest(tree: ConversationTree, activeIds: Set<number>) {
       minCol: Math.min(...cols),
       maxCol: Math.max(...cols),
       rows: segments.reduce((m, s) => Math.max(m, s.startRow + s.count), 0),
-      originId,
-      side,
       xOffset: 0,
     });
-    for (const d of detached) {
-      // A detached tree goes on the side its origin branch is on (relative to the
-      // parent tree's trunk); on the trunk it inherits the parent tree's side.
-      const oc = colOf.get(d.originId) ?? 0;
-      const childSide = oc > 0 ? 1 : oc < 0 ? -1 : side || 1;
-      queue.push({ node: d.node, originId: d.originId, side: childSide });
-    }
   }
 
-  const widthOf = (t: TreeLayout) => (t.maxCol - t.minCol) * COL + COL;
-  // Main/root trees form the center block; detached trees stack out to each side.
-  let mainX = 0;
-  for (const t of trees)
-    if (t.side === 0) {
-      t.xOffset = mainX;
-      mainX += widthOf(t) + TREE_GAP;
-    }
-  let rightX = mainX;
-  for (const t of trees)
-    if (t.side > 0) {
-      t.xOffset = rightX;
-      rightX += widthOf(t) + TREE_GAP;
-    }
-  let leftX = -TREE_GAP;
-  for (const t of trees)
-    if (t.side < 0) {
-      t.xOffset = leftX - widthOf(t);
-      leftX = t.xOffset - TREE_GAP;
-    }
-  // Shift everything positive so the leftmost tree starts at the origin.
-  const minOff = Math.min(0, ...trees.map((t) => t.xOffset));
-  for (const t of trees) t.xOffset -= minOff;
+  // Trees sit side by side, left to right.
+  let x = 0;
+  for (const t of trees) {
+    t.xOffset = x;
+    x += (t.maxCol - t.minCol) * COL + COL + TREE_GAP;
+  }
   return trees;
 }
 
@@ -314,22 +262,14 @@ export function TreeMap({
     const shiftX = PAD - minX; // keep everything (incl. left overhang) >= PAD
     const globalX = (t: TreeLayout, col: number) => rawX(t, col) + shiftX;
     const rowY = (row: number) => PAD + NAME_H + row * ROW;
-    const pos = new Map<number, { x: number; y: number }>();
-    for (const t of trees) {
-      for (const s of t.segments) {
-        s.nodeIds.forEach((id, j) => {
-          pos.set(id, { x: globalX(t, s.column), y: rowY(s.startRow + j) });
-        });
-      }
-    }
     const width = trees.length ? maxX - minX + PAD * 2 : 200;
     const height = trees.length
       ? Math.max(...trees.map((t) => rowY(t.rows))) + PAD
       : 200;
-    return { globalX, rowY, pos, width, height };
+    return { globalX, rowY, width, height };
   }, [trees]);
 
-  const { globalX, rowY, pos, width, height } = layout;
+  const { globalX, rowY, width, height } = layout;
 
   const localPoint = (e: { clientX: number; clientY: number }) => {
     const r = containerRef.current?.getBoundingClientRect();
@@ -421,27 +361,6 @@ export function TreeMap({
             }}
           >
             <svg width={width} height={height} className="select-none">
-              {/* Dashed connectors from a branch point to a detached tree. */}
-              {trees.map((t) => {
-                if (t.originId == null) return null;
-                const from = pos.get(t.originId);
-                const to = pos.get(t.rootNodeId);
-                if (!from || !to) return null;
-                const dx = Math.max(40, (to.x - from.x) / 2);
-                return (
-                  <path
-                    key={`conn-${t.rootNodeId}`}
-                    d={`M ${from.x} ${from.y} C ${from.x + dx} ${from.y} ${to.x - dx} ${to.y} ${to.x} ${to.y}`}
-                    fill="none"
-                    stroke="currentColor"
-                    className="text-muted-foreground"
-                    strokeWidth={2}
-                    strokeDasharray="5 5"
-                    opacity={0.5}
-                    pointerEvents="none"
-                  />
-                );
-              })}
 
               {/* Tree name labels (centered above each root). */}
               {trees.map((t) => (
@@ -606,7 +525,7 @@ export function TreeMap({
         )}
       </div>
 
-      {/* Rename panel (a conversation via its root, a branch via its start). */}
+      {/* Rename panel (a conversation, via its root). */}
       {editing && (
         <div className="border-t border-border bg-card p-4">
           <p className="mb-2 text-sm font-medium">Rename</p>
@@ -660,10 +579,9 @@ export function TreeMap({
               <Trash2 className="h-4 w-4" />
               Delete
             </Button>
-            {/* Only stable anchors are nameable: the tree root (= the
-                conversation) and explicit branch roots. Trunk continuation
-                segments are not entities — the trunk is one singular line. */}
-            {(selected.parentColumn == null || selected.branched) && (
+            {/* Only the conversation (its root segment) is named by hand;
+                branches get generated labels. */}
+            {selected.parentColumn == null && (
               <Button
                 variant="outline"
                 onClick={() =>

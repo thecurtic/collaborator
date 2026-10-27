@@ -114,6 +114,20 @@ cd backend
 .venv/bin/python data/migrate_notes.py
 ```
 
+## Conversation migrations
+
+Some releases reshape the conversation DBs. Back up `backend/data/users/`,
+run `./deploy.sh` (it restarts the service), stop the service, run the
+migration, then start the service again. Don't chat in between. Each
+migrates every user's DB in one transaction per DB, is safe to re-run, and
+`--dry-run` shows what would change.
+
+```bash
+cd backend
+.venv/bin/python data/migrate_branches.py --dry-run   # 2026-10-27: branches from the root
+.venv/bin/python data/migrate_branches.py
+```
+
 ## Passkeys
 
 ```bash

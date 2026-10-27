@@ -291,7 +291,7 @@ def test_state_seed_promote_and_filter():
 
 
 def test_turn_name_endpoint_and_tree():
-    """PATCH /api/turns/{id}/name sets node.name; clearing and 404 work."""
+    """PATCH /api/turns/{id}/name names a chat (root only); clearing and 404 work."""
     main, db = _fresh_env()
     import sqlite3
     conn = sqlite3.connect(os.environ["DB_PATH"])
@@ -311,52 +311,50 @@ def test_turn_name_endpoint_and_tree():
     assert c.get("/api/tree").json()["roots"][0]["name"] is None
 
     assert c.patch("/api/turns/999999/name", json={"name": "x"}).status_code == 404
-    print("✓ turn name: set/trim/clear + tree node.name + 404")
+
+    # Only a chat's root is named; branches get generated labels.
+    conn = sqlite3.connect(os.environ["DB_PATH"])
+    child = db.create_turn(conn, None, "assistant", "reply", parent_turn_id=t["id"])
+    conn.close()
+    assert c.patch(f"/api/turns/{child['id']}/name", json={"name": "x"}).status_code == 422
+    print("✓ turn name: set/trim/clear + tree node.name + 404 + non-root 422")
 
 
-def test_no_context_branch_shares_internal_context():
-    """A without-context branch shares its OWN prior turns but not turns above the reset."""
+def test_ancestor_chain_has_no_reset():
+    """Every branch runs from the root: a legacy context_turns == 0 row is
+    walked through like any other turn."""
     main, db = _fresh_env()
     import sqlite3
     conn = sqlite3.connect(os.environ["DB_PATH"])
-    r = db.create_turn(conn, None, "user", "above")               # pre-boundary
+    r = db.create_turn(conn, None, "user", "above")
     ra = db.create_turn(conn, None, "assistant", "above-reply", parent_turn_id=r["id"])
-    # without-context branch: user turn with context_turns=0, assistant reply also 0
-    u1 = db.create_turn(conn, None, "user", "fresh start",
+    u1 = db.create_turn(conn, None, "user", "legacy fresh start",
                         parent_turn_id=ra["id"], context_turns=0, branched=True)
-    a1 = db.create_turn(conn, None, "assistant", "fresh reply",
-                        parent_turn_id=u1["id"], context_turns=0)
+    a1 = db.create_turn(conn, None, "assistant", "reply", parent_turn_id=u1["id"])
+    chain = [t["content"] for t in db.get_ancestor_chain(conn, a1["id"])]
+    assert chain == ["above", "above-reply", "legacy fresh start", "reply"], chain
     conn.close()
-
-    conn = sqlite3.connect(os.environ["DB_PATH"])
-    # Continuing the branch from a1 sees the branch's internal turns, not "above".
-    chain = [t["content"] for t in db.get_ancestor_chain(conn, a1["id"], limit=5)]
-    assert chain == ["fresh start", "fresh reply"], chain
-    # The reset (u1) is included; the walk stops before its parent.
-    assert "above" not in chain and "above-reply" not in chain
-    # A normal (with-context) chain from the pre-boundary reply still reaches root.
-    normal = [t["content"] for t in db.get_ancestor_chain(conn, ra["id"], limit=5)]
-    assert normal == ["above", "above-reply"]
-    conn.close()
-    print("✓ no-context branch shares internal context, stops at the reset boundary")
+    print("✓ ancestor chain always reaches the root")
 
 
-def test_tree_exposes_context_window_and_boundary():
+def test_context_turns_zero_rejected_and_no_boundary_flag():
     main, db = _fresh_env()
     import sqlite3
     conn = sqlite3.connect(os.environ["DB_PATH"])
     root = db.create_turn(conn, None, "user", "root", context_turns=5)
-    # a "branch without context" start: context_turns == 0
-    nob = db.create_turn(conn, None, "user", "fresh", parent_turn_id=root["id"], context_turns=0)
+    reply = db.create_turn(conn, None, "assistant", "reply", parent_turn_id=root["id"])
     conn.close()
 
     from starlette.testclient import TestClient
-    tree = TestClient(main.app).get("/api/tree").json()
+    c = TestClient(main.app)
+    tree = c.get("/api/tree").json()
     assert tree["context_turns"] == 20                     # default window surfaced
-    root_node = tree["roots"][0]
-    assert root_node["context_boundary"] is False
-    assert root_node["children"][0]["context_boundary"] is True   # the fresh branch start
-    print("✓ tree exposes context_turns + per-node context_boundary")
+    assert "context_boundary" not in tree["roots"][0]
+    assert c.post("/api/messages", json={"message": "x", "parent_turn_id": reply["id"],
+                                         "context_turns": 0}).status_code == 422
+    assert c.post(f"/api/branches/{reply['id']}",
+                  json={"message": "x", "context_turns": 0}).status_code == 422
+    print("✓ context_turns 0 is a 422; tree has no context_boundary")
 
 
 if __name__ == "__main__":
@@ -369,6 +367,6 @@ if __name__ == "__main__":
     test_messages_continue_from_active_leaf()
     test_state_seed_promote_and_filter()
     test_turn_name_endpoint_and_tree()
-    test_no_context_branch_shares_internal_context()
-    test_tree_exposes_context_window_and_boundary()
+    test_ancestor_chain_has_no_reset()
+    test_context_turns_zero_rejected_and_no_boundary_flag()
     print("\n✓ All branching tests passed!")
