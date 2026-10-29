@@ -10,6 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { useBack } from '@/lib/back';
 import { api } from '@/api/collaborator';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -423,6 +424,7 @@ export function InboxView({
   }, [load]);
 
   const selected = drafts?.find((d) => d.id === selectedId) ?? null;
+  useBack(selected !== null, () => setSelectedId(null));
 
   // Optimistic reject: the card leaves immediately; a failure puts it back
   // where it was with a notice. (Approve stays pessimistic on purpose — its
@@ -478,7 +480,7 @@ export function InboxView({
         >
           <ChevronLeft className="h-5 w-5" />
         </Button>
-        <h2 className="text-2xl font-semibold">Drafts inbox</h2>
+        <h2 className="min-w-0 truncate text-lg font-semibold">Drafts inbox</h2>
         {runId && (
           <button
             type="button"

@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'r
 import { agentsApi, connectAgentsLive, type AgentProject } from '@/api/agents';
 import { api } from '@/api/collaborator';
 import { request } from '@/api/http';
+import { useBack } from '@/lib/back';
 import { ActionSheet, type SheetAction } from '@/components/ActionSheet';
 import { Button } from '@/components/ui/button';
 import type { TreeNode } from '@/domain/models';
@@ -225,6 +226,16 @@ export function ProjectsView({
     else if (m.root) onOpenChat(m.root);
     else if (m.transcriptId != null) onOpenTranscript(m.transcriptId);
   };
+
+  // Back: out of the agent area to its project, then out to the list.
+  useBack(open !== null, () => {
+    if (agentsOpen) {
+      setAgentsOpen(null);
+      load();
+    } else {
+      setOpen(null);
+    }
+  });
 
   if (open && agentsOpen) {
     return (

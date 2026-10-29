@@ -22,6 +22,8 @@ import { ActiveFilter, ListFilterButton } from '@/components/ListFilter';
 import { Button } from '@/components/ui/button';
 import { useModalA11y } from '@/lib/useModalA11y';
 import { cn } from '@/lib/utils';
+import { PageBar } from '@/components/PageBar';
+import { useBack } from '@/lib/back';
 import {
   toolLogApi,
   type ToolCall,
@@ -647,6 +649,8 @@ export function ToolLogView({ onOpenTurn }: { onOpenTurn?: (turnId: number) => v
     }
   };
 
+  useBack(selectedId != null, () => setSelectedId(null));
+
   if (selectedId != null) {
     return (
       <CallDetail
@@ -664,6 +668,7 @@ export function ToolLogView({ onOpenTurn }: { onOpenTurn?: (turnId: number) => v
 
   return (
     <div className="flex h-full flex-col">
+      <PageBar title="Tool log" />
       <div className="space-y-2 border-b border-border px-4 py-2">
         <div className="flex items-center gap-2">
           <div role="tablist" className="flex rounded-lg bg-muted p-0.5 text-sm">

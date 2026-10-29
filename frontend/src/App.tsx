@@ -29,6 +29,7 @@ import { PasskeyScreen } from '@/auth/PasskeyScreen';
 import { ActionSheet, type SheetAction } from '@/components/ActionSheet';
 import { AppMenu } from '@/components/AppMenu';
 import { Button } from '@/components/ui/button';
+import { PageBar } from '@/components/PageBar';
 import { RenameSheet } from '@/components/RenameSheet';
 import { ReferencesView } from '@/features/reference/ReferencesView';
 import { ProfileView } from '@/features/notes/ProfileView';
@@ -37,6 +38,7 @@ import { WebSearchView } from '@/features/search/WebSearchView';
 import { TranscriptsView } from '@/features/transcripts/TranscriptsView';
 import { ToolLogView } from '@/features/toollog/ToolLogView';
 import { useLongPress } from '@/lib/useLongPress';
+import { goBack, installBack, LAYER, ScreenVisible, useBack } from '@/lib/back';
 import { cleanUrlsInText } from '@/lib/urlClean';
 import { HealthIndicator } from '@/features/health/HealthIndicator';
 import { ChatView } from '@/features/chat/ChatView';
@@ -80,6 +82,33 @@ export default function App() {
  * consulted on purpose, so they live in the menu as pushed screens.
  */
 type Tab = 'feed' | 'chats' | 'scratch' | 'calendar' | 'projects';
+
+/**
+ * Screens pushed over the tabs. They stack: each opens on top of whatever
+ * is showing, and back returns to the one underneath with its state intact
+ * (screens below the top stay mounted, hidden). A kind appears once; opening
+ * it again brings it to the top.
+ */
+type Screen =
+  | { kind: 'chat' }
+  | { kind: 'notes'; lens: string | null }
+  | { kind: 'transcripts'; focus: number | null; nonce: number }
+  | { kind: 'find'; q: string; scope: FindScope | null; nonce: number }
+  | { kind: 'webSearch' }
+  | { kind: 'toolLog' }
+  | { kind: 'profile' }
+  | { kind: 'references' }
+  | { kind: 'wallet' };
+
+let screenNonce = 0;
+
+function screenKey(screen: Screen): string {
+  return screen.kind === 'find' || screen.kind === 'transcripts'
+    ? `${screen.kind}-${screen.nonce}`
+    : screen.kind === 'notes'
+      ? `notes-${screen.lens ?? 'all'}`
+      : screen.kind;
+}
 
 /** One backgrounded synthesis run (at most one at a time). */
 interface SynthState {
@@ -147,23 +176,24 @@ function AppShell() {
   const [chatsTagFilter, setChatsTagFilter] = useState<'untagged' | null>(null);
   // Chats' own search bar: unified search, scoped to chats.
   const [chatsQuery, setChatsQuery] = useState('');
-  // The chat screen is "pushed" over the tabs (back arrow returns to them).
-  const [chatOpen, setChatOpen] = useState(false);
-  // Web Search and Transcripts push over whatever is showing; so do Profile
-  // and References, which are pages of Settings.
-  const [settingsPage, setSettingsPage] = useState<'profile' | 'references' | 'wallet' | null>(null);
-  // Notes (the vault: list, graph, people, drafts inbox) — a pushed
-  // screen from the menu; `notesLens` opens it on a lens (People).
-  const [notesOpen, setNotesOpen] = useState(false);
-  const [notesLens, setNotesLens] = useState<string | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [transcriptsOpen, setTranscriptsOpen] = useState(false);
-  const [toolLogOpen, setToolLogOpen] = useState(false);
-  // A transcript to open straight away (from a notification's deep link).
-  const [transcriptFocus, setTranscriptFocus] = useState<number | null>(null);
-  // Unified search (UX doc, Search): a pushed screen over whatever's open;
-  // in-screen bars hand off to it with their query (and pile).
-  const [find, setFind] = useState<{ q: string; scope: FindScope | null; nonce: number } | null>(null);
+  // Pushed screens (chat, Notes, Transcripts, unified search, Web Search,
+  // the tool log, Settings' pages), bottom first.
+  const [stack, setStack] = useState<Screen[]>([]);
+  const top = stack.length > 0 ? stack[stack.length - 1] : null;
+  const chatOpen = top?.kind === 'chat';
+  const push = useCallback((screen: Screen) => {
+    setStack((prev) => [...prev.filter((s) => s.kind !== screen.kind), screen]);
+  }, []);
+  /** Leave the pushed screens: back to the tabs. */
+  const resetScreens = useCallback(() => setStack([]), []);
+  const closeScreen = useCallback((kind: Screen['kind']) => {
+    setStack((prev) => prev.filter((s) => s.kind !== kind));
+  }, []);
+  const openChat = useCallback(() => push({ kind: 'chat' }), [push]);
+  const openTranscripts = useCallback(
+    (focus: number | null = null) => push({ kind: 'transcripts', focus, nonce: ++screenNonce }),
+    [push],
+  );
   const [scratchSearch, setScratchSearch] = useState<{ q: string; nonce: number } | null>(null);
   // Composer prefill for chats spawned from search ("chat about this page").
   const [chatDraft, setChatDraft] = useState<{
@@ -214,6 +244,24 @@ function AppShell() {
   // Latest turn id spoken in the current call — where the chat lands on close.
   const callLeafRef = useRef<number | null>(null);
 
+  // Back (arrow, gesture, Android back button): modals and views' inner
+  // levels first (they register their own), then the top pushed screen,
+  // then the tree map, then a tab other than Feed goes to Feed. From Feed,
+  // back leaves the app.
+  useEffect(() => installBack(), []);
+  useBack(stack.length > 0 || mapOpen || tab !== 'feed', () => {
+    if (stack.length > 0) setStack((prev) => prev.slice(0, -1));
+    else if (mapOpen) setMapOpen(false);
+    else setTab('feed');
+  }, LAYER.app);
+
+  /** A bottom tab: always lands on that tab's own page. */
+  const selectTab = (t: Tab) => {
+    resetScreens();
+    setMapOpen(false);
+    setTab(t);
+  };
+
   const { count: pendingDrafts, refresh: refreshDrafts } = usePendingDrafts(
     gate === 'open',
   );
@@ -241,7 +289,7 @@ function AppShell() {
       .addScratch(cleanUrlsInText(shared))
       .catch(() => {}) // offline: the text is lost, but never double-posted
       .finally(() => {
-        setChatOpen(false);
+        resetScreens();
         setTab('scratch');
       });
   }, [gate]);
@@ -260,23 +308,16 @@ function AppShell() {
     const m = /^transcript:(\d+)$/.exec(sp.get('open') ?? '');
     if (!m) return;
     window.history.replaceState(null, '', window.location.pathname);
-    setChatOpen(false);
-    setSettingsPage(null);
-    setSearchOpen(false);
-    setTranscriptFocus(Number(m[1]));
-    setTranscriptsOpen(true);
+    setStack([{ kind: 'transcripts', focus: Number(m[1]), nonce: ++screenNonce }]);
   }, [gate]);
 
   /** Open the Notes screen, optionally on a lens. */
   const openNotes = useCallback((lens: string | null = null) => {
-    setFind(null);
-    setChatOpen(false);
-    setSettingsPage(null);
-    setSearchOpen(false);
-    setTranscriptsOpen(false);
-    setNotesLens(lens);
-    setNotesOpen(true);
-  }, []);
+    // A plain open shows the list; deep links set their request after this.
+    setNoteRequest(null);
+    setInboxRequest(null);
+    push({ kind: 'notes', lens });
+  }, [push]);
 
   /** Open the drafts inbox (in Notes), optionally filtered to one run. */
   const openInbox = useCallback((runId: string | null) => {
@@ -287,12 +328,7 @@ function AppShell() {
   /** Open a project, straight into its agent area when `agents` is set. */
   const openProject = useCallback((project: string, agents: boolean,
                                    channel: ProjectRequest['channel'] = null) => {
-    setFind(null);
-    setChatOpen(false);
-    setSettingsPage(null);
-    setSearchOpen(false);
-    setTranscriptsOpen(false);
-    setNotesOpen(false);
+    setStack([]);
     setTab('projects');
     setProjectRequest((prev) => ({ project, agents, channel, nonce: (prev?.nonce ?? 0) + 1 }));
   }, []);
@@ -403,34 +439,25 @@ function AppShell() {
 
   const openRoot = (root: TreeNode) => {
     convo.selectPathTo(root.id); // path continues to the tip via main-line defaults
-    setChatOpen(true);
+    openChat();
     void api.touchFeedItem(`chat:${root.id}`); // opened = touched (warm feed)
   };
 
   const openFind = (q: string, scope: FindScope | null) =>
-    setFind((prev) => ({ q, scope, nonce: (prev?.nonce ?? 0) + 1 }));
+    push({ kind: 'find', q, scope, nonce: ++screenNonce });
 
-  // A search hit → wherever that kind of thing lives.
+  // A search hit → wherever that kind of thing lives, on top of the
+  // results (back returns to them).
   const openFindHit = (hit: FindHit, q: string) => {
-    setFind(null);
     if (hit.type === 'chat') {
-      setSettingsPage(null);
-      setSearchOpen(false);
-      setTranscriptsOpen(false);
-      setNotesOpen(false);
       convo.selectPathTo(hit.turn_id ?? Number(hit.id));
-      setChatOpen(true);
+      openChat();
     } else if (hit.type === 'note') {
       openNoteByTitle(String(hit.id));
     } else if (hit.type === 'transcript') {
-      setNotesOpen(false);
-      setTranscriptFocus(Number(hit.id));
-      setTranscriptsOpen(true);
+      openTranscripts(Number(hit.id));
     } else if (hit.type === 'scratch') {
-      setChatOpen(false);
-      setNotesOpen(false);
-      setTranscriptsOpen(false);
-      setSettingsPage(null);
+      resetScreens();
       setTab('scratch');
       setScratchSearch((prev) => ({ q, nonce: (prev?.nonce ?? 0) + 1 }));
     } else if (hit.type === 'agent' && hit.project) {
@@ -444,15 +471,14 @@ function AppShell() {
     const r = item.ref;
     if (item.type === 'chat' && r.leafId != null) {
       convo.selectPathTo(r.leafId);
-      setChatOpen(true);
+      openChat();
       void api.touchFeedItem(item.key);
     } else if ((item.type === 'note' || item.type === 'event') && r.title) {
       openNoteByTitle(r.title);
     } else if (item.type === 'approval') {
       openInbox(r.runId ?? null);
     } else if (item.type === 'transcript' && r.transcriptId != null) {
-      setTranscriptFocus(r.transcriptId);
-      setTranscriptsOpen(true);
+      openTranscripts(r.transcriptId);
       void api.touchFeedItem(item.key);
     } else if ((item.type === 'agent_question' || item.type === 'agent_message') && r.project) {
       openAgents(r.project, r.endpointId && r.channel
@@ -465,17 +491,14 @@ function AppShell() {
   };
   const openNewChat = () => {
     convo.startNewChat();
-    setChatOpen(true);
+    openChat();
   };
 
   // From Web Search: new seed chat with the URL/query pre-drafted — the user
   // can add their question or just send (pasted URLs get auto-fetched).
   const startChatWithDraft = (text: string) => {
-    setSearchOpen(false);
-    setSettingsPage(null);
-    setTranscriptsOpen(false);
     convo.startNewChat();
-    setChatOpen(true);
+    openChat();
     setChatDraft((prev) => ({ text, nonce: (prev?.nonce ?? 0) + 1 }));
   };
 
@@ -552,55 +575,137 @@ function AppShell() {
       ]
     : [];
 
+
+  /** One pushed screen. Chat renders only on top (its state lives in convo). */
+  const renderScreen = (screen: Screen, visible: boolean) => {
+    switch (screen.kind) {
+      case 'find':
+        return (
+          <>
+            <PageBar title="Search" />
+            <div className="min-h-0 flex-1">
+              <FindView
+                key={screen.nonce}
+                initialQuery={screen.q}
+                initialScope={screen.scope}
+                onOpen={openFindHit}
+              />
+            </div>
+          </>
+        );
+      case 'webSearch':
+        return (
+          <>
+            <PageBar title="Web Search" />
+            <div className="min-h-0 flex-1">
+              <WebSearchView onStartChat={startChatWithDraft} />
+            </div>
+          </>
+        );
+      case 'references':
+        return <ReferencesView />;
+      case 'wallet':
+        return (
+          <>
+            <PageBar title="Wallet" />
+            <div className="min-h-0 flex-1">
+              <WalletView />
+            </div>
+          </>
+        );
+      case 'profile':
+        return (
+          <>
+            <PageBar title="Profile" />
+            <div className="min-h-0 flex-1">
+              <ProfileView onOpenNote={openNoteByTitle} />
+            </div>
+          </>
+        );
+      case 'notes':
+        return (
+          <NotesView
+            pendingCount={pendingDrafts}
+            inboxRequest={inboxRequest}
+            noteRequest={noteRequest}
+            initialLens={screen.lens}
+            onBadgeRefresh={() => void refreshDrafts()}
+            onSearchEverywhere={(q) => openFind(q, null)}
+            roots={convo.tree.roots}
+            onOpenProject={(tag) => openProject(tag, false)}
+            onOpenTurn={(turnId) => {
+              convo.selectPathTo(turnId);
+              openChat();
+            }}
+          />
+        );
+      case 'transcripts':
+        return (
+          <TranscriptsView
+            initialId={screen.focus}
+            onSearchEverywhere={(q) => openFind(q, null)}
+            onBack={goBack}
+          />
+        );
+      case 'toolLog':
+        return (
+          <ToolLogView
+            onOpenTurn={(turnId) => {
+              convo.selectPathTo(turnId);
+              openChat();
+            }}
+          />
+        );
+      case 'chat':
+        if (!visible) return null;
+        return (
+              <ChatView
+                convo={convo}
+                branchTarget={branchTarget}
+                onBranchTargetChange={setBranchTarget}
+                onReviewDrafts={openInbox}
+                onStartCall={(draft, attachments) => {
+                  // A typed draft becomes the call's opening turn; attached files
+                  // go with it, or alone, straight to the model.
+                  setCallIntro(
+                    draft || attachments?.length
+                      ? { kind: 'send', text: draft ?? '', attachments }
+                      : null,
+                  );
+                  setCallOpen(true);
+                }}
+                onStartCallFromTurn={(node) => {
+                  // Reads this reply aloud, then listens. Tip continues in
+                  // place; anything higher forks via the branch machinery.
+                  if (node.id !== convo.activeLeafId) {
+                    setBranchTarget({
+                      turnId: node.id,
+                      label: node.preview,
+                    });
+                    introBranchRef.current = true;
+                  }
+                  setCallIntro({ kind: 'speak', text: node.content });
+                  setCallOpen(true);
+                }}
+                draftSeed={chatDraft}
+                onDraftSeedConsumed={() => setChatDraft(null)}
+                onConversationGone={() => closeScreen('chat')}
+              />
+        );
+    }
+  };
+
   return (
     <div className="flex h-full flex-col">
       <header className="pt-safe px-safe border-b border-border">
         <div className="flex items-center gap-2 px-2 py-3">
-          {find !== null || settingsPage !== null || searchOpen || transcriptsOpen || notesOpen || toolLogOpen ? (
+          {chatOpen ? (
             <>
               <Button
                 variant="ghost"
                 size="icon"
                 aria-label="Back"
-                onClick={() =>
-                  find !== null
-                    ? setFind(null)
-                    : searchOpen
-                    ? setSearchOpen(false)
-                    : transcriptsOpen
-                      ? setTranscriptsOpen(false)
-                      : notesOpen
-                        ? setNotesOpen(false)
-                        : toolLogOpen && settingsPage === null
-                          ? setToolLogOpen(false)
-                          : setSettingsPage(null)
-                }
-                className="h-8 w-8 shrink-0"
-              >
-                <ChevronLeft className="h-5 w-5" />
-              </Button>
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {find !== null
-                  ? 'Search'
-                  : searchOpen
-                  ? 'Web Search'
-                  : transcriptsOpen
-                    ? 'Transcripts'
-                    : notesOpen
-                      ? notesLens === 'social-graph' ? 'People' : 'Notes'
-                      : toolLogOpen && settingsPage === null
-                        ? 'Tool log'
-                        : settingsPage === 'profile' ? 'Profile'
-                        : settingsPage === 'wallet' ? 'Wallet' : 'References'}
-              </span>
-            </>
-          ) : chatOpen ? (
-            <>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Back"
-                onClick={() => setChatOpen(false)}
+                onClick={() => goBack()}
                 className="h-8 w-8 shrink-0"
               >
                 <ChevronLeft className="h-5 w-5" />
@@ -641,7 +746,7 @@ function AppShell() {
             </div>
           )}
           <div className="flex shrink-0 items-center gap-1">
-            {find === null && gate === 'open' && (
+            {top?.kind !== 'find' && gate === 'open' && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -655,39 +760,14 @@ function AppShell() {
             )}
             <InferenceSwitch />
             <AppMenu
-              onOpenSettings={() => {
-                setFind(null);
-                setSettingsOpen(true);
-              }}
-              onOpenWebSearch={() => {
-                setFind(null);
-                setSettingsPage(null);
-                setTranscriptsOpen(false);
-                setSearchOpen(true);
-              }}
-              onOpenTranscripts={() => {
-                setFind(null);
-                setSettingsPage(null);
-                setSearchOpen(false);
-                setNotesOpen(false);
-                setTranscriptsOpen(true);
-              }}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenWebSearch={() => push({ kind: 'webSearch' })}
+              onOpenTranscripts={() => openTranscripts()}
               onOpenNotes={() => openNotes(null)}
               onOpenPeople={() => openNotes('social-graph')}
-              onOpenToolLog={() => {
-                setFind(null);
-                setSettingsPage(null);
-                setSearchOpen(false);
-                setNotesOpen(false);
-                setTranscriptsOpen(false);
-                setToolLogOpen(true);
-              }}
+              onOpenToolLog={() => push({ kind: 'toolLog' })}
               onSignOut={() => {
-                setSettingsPage(null);
-                setSearchOpen(false);
-                setTranscriptsOpen(false);
-                setToolLogOpen(false);
-                setChatOpen(false);
+                resetScreens();
                 signOut();
               }}
             />
@@ -784,27 +864,9 @@ function AppShell() {
       <SettingsSheet
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        onOpenProfile={() => {
-          setSearchOpen(false);
-          setTranscriptsOpen(false);
-          setNotesOpen(false);
-          setChatOpen(false);
-          setSettingsPage('profile');
-        }}
-        onOpenReferences={() => {
-          setSearchOpen(false);
-          setTranscriptsOpen(false);
-          setNotesOpen(false);
-          setChatOpen(false);
-          setSettingsPage('references');
-        }}
-        onOpenWallet={() => {
-          setSearchOpen(false);
-          setTranscriptsOpen(false);
-          setNotesOpen(false);
-          setChatOpen(false);
-          setSettingsPage('wallet');
-        }}
+        onOpenProfile={() => push({ kind: 'profile' })}
+        onOpenReferences={() => push({ kind: 'references' })}
+        onOpenWallet={() => push({ kind: 'wallet' })}
       />
 
       {/* Chat-title hold menu (+ its rename sheet). */}
@@ -838,260 +900,190 @@ function AppShell() {
           </div>
         ) : gate === 'locked' ? (
           <PasskeyScreen />
-        ) : find !== null ? (
-          <FindView
-            key={find.nonce}
-            initialQuery={find.q}
-            initialScope={find.scope}
-            onOpen={openFindHit}
-          />
-        ) : searchOpen ? (
-          <WebSearchView onStartChat={startChatWithDraft} />
-        ) : settingsPage === 'references' ? (
-          <ReferencesView />
-        ) : settingsPage === 'wallet' ? (
-          <WalletView />
-        ) : settingsPage === 'profile' ? (
-          <ProfileView onOpenNote={(title) => {
-            setSettingsPage(null);
-            openNoteByTitle(title);
-          }} />
-        ) : notesOpen ? (
-          <NotesView
-            key={notesLens ?? 'notes'}
-            pendingCount={pendingDrafts}
-            inboxRequest={inboxRequest}
-            noteRequest={noteRequest}
-            initialLens={notesLens}
-            onBadgeRefresh={() => void refreshDrafts()}
-            onSearchEverywhere={(q) => openFind(q, null)}
-            roots={convo.tree.roots}
-            onOpenProject={(tag) => openProject(tag, false)}
-            onOpenTurn={(turnId) => {
-              setNotesOpen(false);
-              convo.selectPathTo(turnId);
-              setChatOpen(true);
-            }}
-          />
-        ) : transcriptsOpen ? (
-          <TranscriptsView
-            initialId={transcriptFocus}
-            onSearchEverywhere={(q) => openFind(q, null)}
-            onBack={() => {
-              setTranscriptsOpen(false);
-              setTranscriptFocus(null);
-            }}
-          />
-        ) : toolLogOpen ? (
-          <ToolLogView
-            onOpenTurn={(turnId) => {
-              setToolLogOpen(false);
-              convo.selectPathTo(turnId);
-              setChatOpen(true);
-            }}
-          />
-        ) : chatOpen ? (
-          <ChatView
-            convo={convo}
-            branchTarget={branchTarget}
-            onBranchTargetChange={setBranchTarget}
-            onReviewDrafts={openInbox}
-            onStartCall={(draft, attachments) => {
-              // A typed draft becomes the call's opening turn; attached files
-              // go with it, or alone, straight to the model.
-              setCallIntro(
-                draft || attachments?.length
-                  ? { kind: 'send', text: draft ?? '', attachments }
-                  : null,
-              );
-              setCallOpen(true);
-            }}
-            onStartCallFromTurn={(node) => {
-              // Reads this reply aloud, then listens. Tip continues in
-              // place; anything higher forks via the branch machinery.
-              if (node.id !== convo.activeLeafId) {
-                setBranchTarget({
-                  turnId: node.id,
-                  label: node.preview,
-                });
-                introBranchRef.current = true;
-              }
-              setCallIntro({ kind: 'speak', text: node.content });
-              setCallOpen(true);
-            }}
-            draftSeed={chatDraft}
-            onDraftSeedConsumed={() => setChatDraft(null)}
-            onConversationGone={() => setChatOpen(false)}
-          />
-        ) : tab === 'feed' ? (
-          <FeedView
-            onOpen={openFeedItem}
-            pendingDrafts={pendingDrafts}
-            onOpenInbox={() => openInbox(null)}
-          />
-        ) : tab === 'projects' ? (
-          <ProjectsView
-            roots={convo.tree.roots}
-            request={projectRequest}
-            onRequestDone={clearProjectRequest}
-            onOpenNote={openNoteByTitle}
-            onOpenChat={openRoot}
-            onOpenTranscript={(id) => {
-              setTranscriptFocus(id);
-              setTranscriptsOpen(true);
-            }}
-          />
-        ) : convo.loading ? (
-          <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading…
-          </div>
-        ) : tab === 'calendar' ? (
-          <CalendarView
-            onOpenNote={openNoteByTitle}
-            onReviewImport={(runId) => openInbox(runId)}
-          />
-        ) : tab === 'scratch' ? (
-          <ScratchView
-            onStartChat={startChatWithDraft}
-            onOpenTranscripts={() => setTranscriptsOpen(true)}
-            searchRequest={scratchSearch}
-            onSearchEverywhere={(q) => openFind(q, null)}
-          />
-        ) : mapOpen ? (
-          // The tree map, pushed within Chats (like Mind's Graph View).
-          <div className="relative h-full">
-            <TreeMap
-              tree={mapTree}
-              activeIds={convo.activeIds}
-              onSelect={convo.selectPathTo}
-              onDeleteSubtree={handleDeleteSubtree}
-              onRename={(id, name) => void convo.renameTurn(id, name)}
-              onOpenConversation={() => setChatOpen(true)}
-              onSynthesize={startSynthesis}
-            />
-            <Button
-              variant="secondary"
-              size="icon"
-              aria-label="Back to chats"
-              onClick={() => setMapOpen(false)}
-              className="absolute left-3 top-3 z-10 h-9 w-9 rounded-full shadow-md"
-            >
-              <ChevronLeft className="h-5 w-5" />
-            </Button>
-          </div>
         ) : (
-          // Chats (UX doc): every chat, seeds included; the promoted ones are
-          // also reachable as Conversations, behind the control here.
-          <div className="relative flex h-full flex-col">
-            <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-              <h2 className="text-2xl font-semibold">Chats</h2>
-              <div className="flex items-center gap-1">
-                <div className="flex rounded-md border border-border p-0.5">
-                  {(['all', 'conversations'] as const).map((f) => (
-                    <button
-                      key={f}
-                      type="button"
-                      onClick={() => setChatsFilter(f)}
-                      className={
-                        'rounded px-2 py-1 text-xs capitalize ' +
-                        (chatsFilter === f
-                          ? 'bg-primary/10 font-medium text-primary'
-                          : 'text-muted-foreground hover:text-foreground')
-                      }
+          <>
+            <ScreenVisible.Provider value={top === null}>
+              <div className={top === null ? 'h-full' : 'hidden'}>
+                {tab === 'feed' ? (
+                  <FeedView
+                    onOpen={openFeedItem}
+                    pendingDrafts={pendingDrafts}
+                    onOpenInbox={() => openInbox(null)}
+                  />
+                ) : tab === 'projects' ? (
+                  <ProjectsView
+                    roots={convo.tree.roots}
+                    request={projectRequest}
+                    onRequestDone={clearProjectRequest}
+                    onOpenNote={openNoteByTitle}
+                    onOpenChat={openRoot}
+                    onOpenTranscript={(id) => openTranscripts(id)}
+                  />
+                ) : convo.loading ? (
+                  <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading…
+                  </div>
+                ) : tab === 'calendar' ? (
+                  <CalendarView
+                    onOpenNote={openNoteByTitle}
+                    onReviewImport={(runId) => openInbox(runId)}
+                  />
+                ) : tab === 'scratch' ? (
+                  <ScratchView
+                    onStartChat={startChatWithDraft}
+                    onOpenTranscripts={() => openTranscripts()}
+                    searchRequest={scratchSearch}
+                    onSearchEverywhere={(q) => openFind(q, null)}
+                  />
+                ) : mapOpen ? (
+                  // The tree map, pushed within Chats (like Mind's Graph View).
+                  <div className="relative h-full">
+                    <TreeMap
+                      tree={mapTree}
+                      activeIds={convo.activeIds}
+                      onSelect={convo.selectPathTo}
+                      onDeleteSubtree={handleDeleteSubtree}
+                      onRename={(id, name) => void convo.renameTurn(id, name)}
+                      onOpenConversation={openChat}
+                      onSynthesize={startSynthesis}
+                    />
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      aria-label="Back to chats"
+                      onClick={() => setMapOpen(false)}
+                      className="absolute left-3 top-3 z-10 h-9 w-9 rounded-full shadow-md"
                     >
-                      {f}
-                    </button>
-                  ))}
-                </div>
-                <ListFilterButton
-                  title="Show only"
-                  options={[{ key: 'untagged', label: 'No tag' }]}
-                  value={chatsTagFilter}
-                  onChange={setChatsTagFilter}
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Tree map"
-                  title="Tree map — every conversation as a metro line"
-                  onClick={() => setMapOpen(true)}
-                  className="h-8 w-8 text-muted-foreground"
-                >
-                  <TreePine className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-            <div className="border-b border-border px-4 py-2">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <input
-                  value={chatsQuery}
-                  onChange={(e) => setChatsQuery(e.target.value)}
-                  placeholder="Search chats…"
-                  aria-label="Search chats"
-                  enterKeyHint="search"
-                  className="w-full rounded-md border border-input bg-background py-2 pl-8 pr-8 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
-                />
-                {chatsQuery && (
-                  <button
-                    type="button"
-                    aria-label="Clear search"
-                    onClick={() => setChatsQuery('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
+                      <ChevronLeft className="h-5 w-5" />
+                    </Button>
+                  </div>
+                ) : (
+                  // Chats (UX doc): every chat, seeds included; the promoted ones are
+                  // also reachable as Conversations, behind the control here.
+                  <div className="relative flex h-full flex-col">
+                    <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+                      <h2 className="text-2xl font-semibold">Chats</h2>
+                      <div className="flex items-center gap-1">
+                        <div className="flex rounded-md border border-border p-0.5">
+                          {(['all', 'conversations'] as const).map((f) => (
+                            <button
+                              key={f}
+                              type="button"
+                              onClick={() => setChatsFilter(f)}
+                              className={
+                                'rounded px-2 py-1 text-xs capitalize ' +
+                                (chatsFilter === f
+                                  ? 'bg-primary/10 font-medium text-primary'
+                                  : 'text-muted-foreground hover:text-foreground')
+                              }
+                            >
+                              {f}
+                            </button>
+                          ))}
+                        </div>
+                        <ListFilterButton
+                          title="Show only"
+                          options={[{ key: 'untagged', label: 'No tag' }]}
+                          value={chatsTagFilter}
+                          onChange={setChatsTagFilter}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Tree map"
+                          title="Tree map — every conversation as a metro line"
+                          onClick={() => setMapOpen(true)}
+                          className="h-8 w-8 text-muted-foreground"
+                        >
+                          <TreePine className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="border-b border-border px-4 py-2">
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <input
+                          value={chatsQuery}
+                          onChange={(e) => setChatsQuery(e.target.value)}
+                          placeholder="Search chats…"
+                          aria-label="Search chats"
+                          enterKeyHint="search"
+                          className="w-full rounded-md border border-input bg-background py-2 pl-8 pr-8 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
+                        />
+                        {chatsQuery && (
+                          <button
+                            type="button"
+                            aria-label="Clear search"
+                            onClick={() => setChatsQuery('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                      <SearchEverywhere q={chatsQuery} onSearch={(q) => openFind(q, null)} />
+                    </div>
+                    <ActiveFilter
+                      label={chatsTagFilter && !chatsQuery.trim() ? 'No tag' : null}
+                      count={listedRoots.length}
+                      onClear={() => setChatsTagFilter(null)}
+                    />
+                    {chatsQuery.trim() ? (
+                      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                        <ScopedResults
+                          scope="chats"
+                          q={chatsQuery}
+                          onOpen={(hit) => openFindHit(hit, chatsQuery.trim())}
+                        />
+                      </div>
+                    ) : (
+                    <div className="min-h-0 flex-1">
+                      <RootList
+                        roots={listedRoots}
+                        emptyTitle={chatsTagFilter ? 'Every chat has a tag'
+                          : chatsFilter === 'all' ? 'No chats yet' : 'No conversations yet'}
+                        emptyHint={chatsTagFilter ? 'Nothing loose here.' : chatsFilter === 'all'
+                          ? 'Start one — it stays a seed until you name, tag, branch or synthesize it.'
+                          : 'A chat becomes a conversation when you name, tag, branch or synthesize it.'}
+                        onOpen={openRoot}
+                        onRename={(id, name) => void convo.renameTurn(id, name)}
+                        onPromote={(id) => void convo.promote(id)}
+                        onSynthesize={startSynthesis}
+                        onRegenerateTitle={regenerateTitle}
+                        onDelete={handleDeleteSubtree}
+                        onOpenCard={openChatCard}
+                      />
+                    </div>
+                    )}
+                    {/* Floating pill, sitting just above the tab bar. */}
+                    <Button
+                      onClick={openNewChat}
+                      className="absolute bottom-4 right-4 h-12 gap-2 rounded-full px-5 shadow-lg"
+                    >
+                      <Plus className="h-5 w-5" />
+                      New chat
+                    </Button>
+                  </div>
                 )}
               </div>
-              <SearchEverywhere q={chatsQuery} onSearch={(q) => openFind(q, null)} />
-            </div>
-            <ActiveFilter
-              label={chatsTagFilter && !chatsQuery.trim() ? 'No tag' : null}
-              count={listedRoots.length}
-              onClear={() => setChatsTagFilter(null)}
-            />
-            {chatsQuery.trim() ? (
-              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                <ScopedResults
-                  scope="chats"
-                  q={chatsQuery}
-                  onOpen={(hit) => openFindHit(hit, chatsQuery.trim())}
-                />
-              </div>
-            ) : (
-            <div className="min-h-0 flex-1">
-              <RootList
-                roots={listedRoots}
-                emptyTitle={chatsTagFilter ? 'Every chat has a tag'
-                  : chatsFilter === 'all' ? 'No chats yet' : 'No conversations yet'}
-                emptyHint={chatsTagFilter ? 'Nothing loose here.' : chatsFilter === 'all'
-                  ? 'Start one — it stays a seed until you name, tag, branch or synthesize it.'
-                  : 'A chat becomes a conversation when you name, tag, branch or synthesize it.'}
-                onOpen={openRoot}
-                onRename={(id, name) => void convo.renameTurn(id, name)}
-                onPromote={(id) => void convo.promote(id)}
-                onSynthesize={startSynthesis}
-                onRegenerateTitle={regenerateTitle}
-                onDelete={handleDeleteSubtree}
-                onOpenCard={openChatCard}
-              />
-            </div>
-            )}
-            {/* Floating pill, sitting just above the tab bar. */}
-            <Button
-              onClick={openNewChat}
-              className="absolute bottom-4 right-4 h-12 gap-2 rounded-full px-5 shadow-lg"
-            >
-              <Plus className="h-5 w-5" />
-              New chat
-            </Button>
-          </div>
+            </ScreenVisible.Provider>
+            {stack.map((screen, i) => {
+              const visible = i === stack.length - 1;
+              return (
+                <ScreenVisible.Provider key={screenKey(screen)} value={visible}>
+                  <div className={visible ? 'flex h-full flex-col' : 'hidden'}>
+                    {renderScreen(screen, visible)}
+                  </div>
+                </ScreenVisible.Provider>
+              );
+            })}
+          </>
         )}
       </main>
 
       {/* Errors on tab screens (the chat screen shows its own strip). */}
-      {!chatOpen && settingsPage === null && !searchOpen && !transcriptsOpen && !notesOpen && !toolLogOpen && gate === 'open' && convo.error && (
+      {top === null && gate === 'open' && convo.error && (
         <div className="flex items-start gap-2 border-t border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           <p className="max-h-24 min-w-0 flex-1 overflow-y-auto break-words">
             {convo.error}
@@ -1114,40 +1106,41 @@ function AppShell() {
         </div>
       )}
 
-      {/* Bottom tabs — hidden while a pushed screen (chat/references/search) is open. */}
-      {find === null && !chatOpen && settingsPage === null && !searchOpen && !transcriptsOpen && !notesOpen && !toolLogOpen && gate === 'open' && (
+      {/* Bottom tabs: on every screen but the chat (its composer sits there).
+          A tab leaves the pushed screens for that tab's page. */}
+      {!chatOpen && gate === 'open' && (
         <nav className="pb-safe px-safe border-t border-border" aria-label="Main">
           <div className="mx-auto flex max-w-3xl">
             <TabButton
               icon={Flame}
               label="Feed"
-              active={tab === 'feed'}
+              active={top === null && tab === 'feed'}
               badge={pendingDrafts}
-              onClick={() => setTab('feed')}
+              onClick={() => selectTab('feed')}
             />
             <TabButton
               icon={Sprout}
               label="Chats"
-              active={tab === 'chats'}
-              onClick={() => setTab('chats')}
+              active={top === null && tab === 'chats'}
+              onClick={() => selectTab('chats')}
             />
             <TabButton
               icon={StickyNote}
               label="Scratch"
-              active={tab === 'scratch'}
-              onClick={() => setTab('scratch')}
+              active={top === null && tab === 'scratch'}
+              onClick={() => selectTab('scratch')}
             />
             <TabButton
               icon={CalendarDays}
               label="Calendar"
-              active={tab === 'calendar'}
-              onClick={() => setTab('calendar')}
+              active={top === null && tab === 'calendar'}
+              onClick={() => selectTab('calendar')}
             />
             <TabButton
               icon={FolderKanban}
               label="Projects"
-              active={tab === 'projects'}
-              onClick={() => setTab('projects')}
+              active={top === null && tab === 'projects'}
+              onClick={() => selectTab('projects')}
             />
           </div>
         </nav>

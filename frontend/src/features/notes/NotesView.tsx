@@ -18,6 +18,7 @@ import { SearchEverywhere } from '@/features/find/ScopedSearch';
 import { NoteSendPanel } from '@/features/agents/NoteSendPanel';
 import { ProjectNoteTeam } from '@/features/projects/ProjectNoteTeam';
 import { Button } from '@/components/ui/button';
+import { goBack, useBack } from '@/lib/back';
 import { cn } from '@/lib/utils';
 import type {
   Note,
@@ -412,7 +413,19 @@ export function NotesView({
   roots = NO_ROOTS,
   onOpenProject,
 }: NotesViewProps) {
-  const [screen, setScreen] = useState<Screen>({ kind: 'list' });
+  // What's open over the list, bottom first: notes opened from notes (links,
+  // the graph, the inbox) stack, and back walks them in reverse.
+  const [screens, setScreens] = useState<Screen[]>([]);
+  const screen: Screen = screens.length > 0 ? screens[screens.length - 1] : { kind: 'list' };
+  const pushScreen = useCallback((next: Screen) => {
+    setScreens((prev) => {
+      const last = prev[prev.length - 1];
+      return last && JSON.stringify(last) === JSON.stringify(next) ? prev : [...prev, next];
+    });
+  }, []);
+  const replaceScreen = (next: Screen) => setScreens((prev) => [...prev.slice(0, -1), next]);
+  const popScreen = useCallback(() => setScreens((prev) => prev.slice(0, -1)), []);
+  useBack(screens.length > 0, popScreen);
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<NoteSearchMode>('hybrid');
   // Notes goes straight to the whole pile (UX doc, Destinations); People,
@@ -429,11 +442,11 @@ export function NotesView({
 
   // Deep link from the app (synthesis banner / chat proposal chip).
   useEffect(() => {
-    if (inboxRequest) setScreen({ kind: 'inbox', runId: inboxRequest.runId });
-  }, [inboxRequest]);
+    if (inboxRequest) pushScreen({ kind: 'inbox', runId: inboxRequest.runId });
+  }, [inboxRequest, pushScreen]);
   useEffect(() => {
-    if (noteRequest) setScreen({ kind: 'note', title: noteRequest.title });
-  }, [noteRequest]);
+    if (noteRequest) pushScreen({ kind: 'note', title: noteRequest.title });
+  }, [noteRequest, pushScreen]);
 
   // Load the full list, or search (debounced) when there's a query.
   useEffect(() => {
@@ -495,15 +508,15 @@ export function NotesView({
     }
   };
 
-  const openNote = (title: string) => setScreen({ kind: 'note', title });
+  const openNote = (title: string) => pushScreen({ kind: 'note', title });
   const shown = notes && tagFilter === 'untagged' ? notes.filter((n) => n.tags.length === 0) : notes;
 
   if (screen.kind === 'inbox') {
     return (
       <InboxView
         runId={screen.runId}
-        onBack={() => setScreen({ kind: 'list' })}
-        onClearFilter={() => setScreen({ kind: 'inbox', runId: null })}
+        onBack={popScreen}
+        onClearFilter={() => replaceScreen({ kind: 'inbox', runId: null })}
         onChanged={onBadgeRefresh}
         onOpenNote={openNote}
         onOpenTurn={onOpenTurn}
@@ -515,15 +528,18 @@ export function NotesView({
     return (
       <NoteScreen
         title={screen.title}
-        onBack={() => setScreen({ kind: 'list' })}
+        onBack={popScreen}
         onOpenNote={openNote}
         onOpenTurn={onOpenTurn}
         roots={roots}
         onOpenProject={onOpenProject}
-        onRetitle={(t) => setScreen({ kind: 'note', title: t })}
+        onRetitle={(t) =>
+          // Renamed: every open copy of it carries the new title.
+          setScreens((prev) => prev.map((x) =>
+            x.kind === 'note' && x.title === screen.title ? { kind: 'note', title: t } : x))}
         onDeleted={(t, unresolvedIn) => {
           setNotes((prev) => prev?.filter((n) => n.title !== t) ?? prev);
-          setScreen({ kind: 'list' });
+          setScreens((prev) => prev.filter((x) => !(x.kind === 'note' && x.title === t)));
           setReindexNotice(
             unresolvedIn.length > 0
               ? `Deleted “${t}” — ${unresolvedIn.length} linking ${
@@ -539,7 +555,7 @@ export function NotesView({
   if (screen.kind === 'graph') {
     return (
       <GraphView
-        onClose={() => setScreen({ kind: 'list' })}
+        onClose={popScreen}
         onOpenNote={openNote}
       />
     );
@@ -547,9 +563,20 @@ export function NotesView({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <h2 className="text-2xl font-semibold">Notes</h2>
-        <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 border-b border-border px-2 py-3">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Back"
+          onClick={() => goBack()}
+          className="h-9 w-9 shrink-0"
+        >
+          <ChevronLeft className="h-5 w-5" />
+        </Button>
+        <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">
+          {lens === 'social-graph' ? 'People' : 'Notes'}
+        </h2>
+        <div className="flex shrink-0 items-center gap-1">
           {lens !== 'social-graph' && (
             <ListFilterButton
               title="Show only"
@@ -563,7 +590,7 @@ export function NotesView({
             size="icon"
             aria-label="Graph View"
             title="Graph View — the vault as a network"
-            onClick={() => setScreen({ kind: 'graph' })}
+            onClick={() => pushScreen({ kind: 'graph' })}
             className="h-8 w-8 text-muted-foreground"
           >
             <Waypoints className="h-4 w-4" />
@@ -582,7 +609,7 @@ export function NotesView({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setScreen({ kind: 'inbox', runId: null })}
+            onClick={() => pushScreen({ kind: 'inbox', runId: null })}
             className="relative h-8 gap-1.5 px-2.5"
           >
             <Inbox className="h-4 w-4" />

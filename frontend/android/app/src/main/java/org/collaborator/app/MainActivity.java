@@ -4,6 +4,8 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 
+import androidx.activity.OnBackPressedCallback;
+
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -13,6 +15,28 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
         handleSendIntent(getIntent());
         handleViewIntent(getIntent());
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                askWebAppToGoBack();
+            }
+        });
+    }
+
+    /**
+     * Back button / gesture: the web app keeps its own back stack (open
+     * sheets, detail views, pushed screens) and takes one step back through
+     * window.collaboratorBack(). Only when it has nowhere left to go does the
+     * app go to the background, like any Android app's home screen.
+     */
+    private void askWebAppToGoBack() {
+        String js = "(function(){try{return !!(window.collaboratorBack"
+                + " && window.collaboratorBack());}catch(e){return false;}})()";
+        bridge.getWebView().evaluateJavascript(js, handled -> {
+            if (!"true".equals(handled)) {
+                moveTaskToBack(true);
+            }
+        });
     }
 
     @Override

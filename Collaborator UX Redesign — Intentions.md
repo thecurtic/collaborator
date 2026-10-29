@@ -40,6 +40,8 @@ The bottom bar holds five destinations, left to right: Feed, Chats, Scratch, Eve
 - Nothing floats over every screen. A permanent capture bubble is clutter in an agent conversation or a review.
 - **The inference switch is on every screen.** It lives in the top bar next to the hamburger menu, separate from the bottom bar. It toggles local inference between serving Collaborator only and serving all requests (a separate script proxies the port on the Mac). It's a pill-shaped switch with a round knob that slides to one end and the current state written inside it on the other side, so the setting reads at a glance rather than from knob position alone. The pill is red while set to Collaborator only. It's also the switch the Notifications section refers to, so stops caused by flipping it don't notify.
 
+- **Back always goes back one step, the same way everywhere.** The header arrow, the phone's back gesture and the Android back button all take the same step. A sheet closes, then a detail returns to its list, then the screen on top returns to the one it was opened from, as I left it. A tab other than Feed then goes to Feed, and only Feed leaves the app. Screens opened from other screens stack (a chat opened from a note comes back to that note), and the bottom bar stays on all of them except an open chat, where the composer sits. Each screen is titled once, in its own title row under the shared top bar.
+
 ### Feed
 
 Opening the app shows a single feed ordered by warmth, not a list of conversations. Warmth covers both what I was just doing and what moved while I was away.

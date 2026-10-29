@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useBack } from '@/lib/back';
 import { api } from '@/api/collaborator';
 import { SearchEverywhere } from '@/features/find/ScopedSearch';
 import { Button } from '@/components/ui/button';
@@ -235,6 +236,7 @@ export function TranscriptsView({
   useEffect(() => {
     if (initialId != null) setSelectedId(initialId);
   }, [initialId]);
+  useBack(selectedId != null, () => setSelectedId(null));
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
   const [channel, setChannel] = useState<string | null>(null);

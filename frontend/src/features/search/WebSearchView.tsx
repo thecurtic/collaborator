@@ -147,7 +147,6 @@ export function WebSearchView({
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border px-4 py-3">
-        <h2 className="mb-2 text-2xl font-semibold">Web Search</h2>
         <form onSubmit={(e) => void run(e)} className="flex items-center gap-2">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

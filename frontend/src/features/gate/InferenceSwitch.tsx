@@ -14,6 +14,7 @@ interface GateState {
 }
 
 const POLL_MS = 5000;
+const LABELS = ['Gate offline', 'Collab only', 'All requests'] as const;
 
 /**
  * The inference switch (UX doc, Destinations): on every screen, in the top
@@ -97,7 +98,7 @@ export function InferenceSwitch() {
 
   const queued = state.queued ?? 0;
   const inFlight = state.in_flight ?? 0;
-  const label = !online
+  const label: (typeof LABELS)[number] = !online
     ? 'Gate offline'
     : collabOnly
       ? 'Collab only'
@@ -127,7 +128,8 @@ export function InferenceSwitch() {
         title={detail}
         onClick={() => void flip()}
         className={cn(
-          'relative flex h-7 w-[7.75rem] shrink-0 items-center rounded-full border text-[11px] font-semibold transition-colors',
+          'relative flex h-7 shrink-0 items-center rounded-full border text-[11px] font-semibold transition-colors',
+          collabOnly ? 'pl-2 pr-[1.625rem]' : 'pl-[1.625rem] pr-2',
           !online
             ? 'border-border bg-muted text-muted-foreground'
             : collabOnly
@@ -136,14 +138,19 @@ export function InferenceSwitch() {
           busy && 'opacity-70',
         )}
       >
-        {/* The state, written on the side the knob isn't. */}
-        <span
-          className={cn(
-            'absolute inset-y-0 flex items-center whitespace-nowrap',
-            collabOnly ? 'left-2.5' : 'right-2.5',
-          )}
-        >
-          {label}
+        {/* The state, written on the side the knob isn't. Every label sits in
+            the same grid cell, so the pill is as wide as the longest one and
+            doesn't change size when it flips. */}
+        <span className="inline-grid whitespace-nowrap">
+          {LABELS.map((l) => (
+            <span
+              key={l}
+              aria-hidden={l !== label}
+              className={cn('col-start-1 row-start-1 text-center', l !== label && 'invisible')}
+            >
+              {l}
+            </span>
+          ))}
         </span>
         <span
           aria-hidden

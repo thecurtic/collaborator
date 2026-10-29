@@ -3,6 +3,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/api/collaborator';
 import { Markdown } from '@/components/Markdown';
 import { Button } from '@/components/ui/button';
+import { PageBar } from '@/components/PageBar';
+import { useBack } from '@/lib/back';
 import { cn } from '@/lib/utils';
 import type { PromptInfo } from '@/domain/models';
 
@@ -46,6 +48,7 @@ export function ReferencesView() {
   }, [load]);
 
   const detail = prompts?.find((p) => p.name === selected) ?? null;
+  useBack(detail !== null, () => setSelected(null));
 
   if (detail) {
     return (
@@ -88,14 +91,7 @@ export function ReferencesView() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div>
-          <h2 className="text-2xl font-semibold">References</h2>
-          <p className="text-xs text-muted-foreground">
-            The prompts the model actually receives — live from the backend,
-            read-only.
-          </p>
-        </div>
+      <PageBar title="References">
         <Button
           variant="ghost"
           size="icon"
@@ -106,7 +102,10 @@ export function ReferencesView() {
         >
           <RefreshCw className={cn('h-4 w-4', prompts === null && 'animate-spin')} />
         </Button>
-      </div>
+      </PageBar>
+      <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
+        The prompts the model actually receives — live from the backend, read-only.
+      </p>
 
       <div className="flex-1 overflow-y-auto overscroll-contain">
         {error && <p className="px-4 py-3 text-sm text-destructive">{error}</p>}

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { registerModalBack } from '@/lib/back';
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), ' +
@@ -15,7 +16,8 @@ const stack: symbol[] = [];
  * aria-label). While `active`:
  *   - focus moves into the dialog on open (respecting any autoFocus inside),
  *   - Tab / Shift+Tab cycle within it,
- *   - Escape calls `onClose` (omit onClose to disable — e.g. an active call),
+ *   - Escape and back (gesture, Android back button) call `onClose`; omit
+ *     onClose to disable both (back is then swallowed, e.g. an active call),
  *   - on close, focus returns to the element that opened it.
  *
  * Escape listens on the document bubble phase, so an inner handler (e.g. a
@@ -37,6 +39,7 @@ export function useModalA11y<T extends HTMLElement>(
     const token = Symbol('modal');
     stack.push(token);
     const isTop = () => stack[stack.length - 1] === token;
+    const unregisterBack = registerModalBack(() => onCloseRef.current?.());
     const opener = document.activeElement as HTMLElement | null;
 
     // Move focus inside unless something in the dialog (autoFocus) has it.
@@ -78,6 +81,7 @@ export function useModalA11y<T extends HTMLElement>(
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
+      unregisterBack();
       stack.splice(stack.indexOf(token), 1);
       opener?.focus?.();
     };
