@@ -116,6 +116,7 @@ export function ChatView({
     branch,
     editResend,
     stopGeneration,
+    stopping,
     clearError,
     cycleFork,
     remove,
@@ -418,7 +419,7 @@ export function ChatView({
                   {/* Chain-of-thought, full height (display-only; it stays
                       under the finished reply until the next send). */}
                   {reasoning && (
-                    <Thinking text={reasoning} done={!!streaming.reply} />
+                    <Thinking text={reasoning} done={!!streaming.reply || stopping} />
                   )}
                   {/* Live tool activity: one row per call, resolved in place
                       (✓ n results / ∅ / ✕ reason). Persists while the answer
@@ -433,12 +434,15 @@ export function ChatView({
                   <div ref={replyTopRef} className="scroll-mt-3" />
                   {streaming.reply ? (
                     <Markdown>{streaming.reply}</Markdown>
-                  ) : reasoning ? null : (
+                  ) : stopping ? null : reasoning ? null : (
                     <span className="flex gap-1 py-1" aria-label="Responding">
                       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.3s]" />
                       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.15s]" />
                       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50" />
                     </span>
+                  )}
+                  {stopping && (
+                    <p className="mt-1 text-xs text-muted-foreground">Stopped</p>
                   )}
                 </div>
               </div>
@@ -563,6 +567,7 @@ export function ChatView({
           disabled={sending}
           onSend={handleSend}
           onStop={stopGeneration}
+          stopping={stopping}
           onStartCall={onStartCall}
           branchLabel={
             editTarget != null

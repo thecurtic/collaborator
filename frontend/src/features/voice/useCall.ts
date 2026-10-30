@@ -17,6 +17,7 @@ import {
   updateCallService,
 } from '@/native/nativeShell';
 import { saveTurnSources } from '@/features/chat/sourcesStore';
+import { newStreamId, STOP_GRACE_MS } from '@/features/chat/useConversation';
 import { foldToolEvent } from '@/features/chat/toolActivity';
 import { withTimeout } from '@/lib/utils';
 import type { ToolActivity, TurnAttachment } from '@/domain/models';
@@ -107,7 +108,7 @@ interface Controls {
  */
 export function useCall(
   open: boolean,
-  onClose: () => void,
+  onClose: (saving?: Promise<void>) => void,
   branchTarget?: BranchTarget | null,
   activeLeafId?: number | null,
   onBranchConsumed?: () => void,
@@ -243,6 +244,20 @@ export function useCall(
     let queue: SpeechSession | null = null;
     let finalizing = false;
     let streamAbort: AbortController | null = null;
+    // The reply in flight (its stream id) and the respond() still running.
+    // A barge-in or hang-up STOPS the reply (the backend saves what was said
+    // and ends the stream with its turn id) rather than cutting it, so the
+    // call continues from that turn and the chat shows it on hang-up.
+    let replyStreamId: string | null = null;
+    let inflight: Promise<void> | null = null;
+    const stopReply = () => {
+      const id = replyStreamId;
+      replyStreamId = null;
+      if (!id) return;
+      const abort = streamAbort;
+      void api.stopStream(id).catch(() => abort?.abort());
+      setTimeout(() => abort?.abort(), STOP_GRACE_MS); // no-op once it ended
+    };
     // True while the CURRENT listen session uses server phrase detection —
     // the server strips the end phrase, so no client-side word stripping.
     let phraseMode = false;
@@ -338,7 +353,7 @@ export function useCall(
       void stopCallService();
       stopKws();
       stopInterruptMonitor();
-      streamAbort?.abort();
+      stopReply();
       stopCapture();
       transcriber?.close();
       transcriber = null;
@@ -507,6 +522,22 @@ export function useCall(
     };
 
     const respond = async (text: string) => {
+      // One reply at a time: a stopped one finishes saving first, so this
+      // turn continues from it.
+      const prior = inflight;
+      let release = () => {};
+      const mine = new Promise<void>((r) => (release = r));
+      inflight = mine;
+      try {
+        if (prior) await prior;
+        await respondNow(text);
+      } finally {
+        release();
+        if (inflight === mine) inflight = null;
+      }
+    };
+
+    const respondNow = async (text: string) => {
       if (!active) return;
       log(`responding to: "${text.slice(0, 40)}"`);
       // Whatever was handed over goes with this turn.
@@ -552,11 +583,14 @@ export function useCall(
         );
       }
       streamAbort = new AbortController();
+      const streamId = newStreamId();
+      replyStreamId = streamId;
       // Capture this turn's session: tap-to-skip reassigns `queue`, and the
       // still-streaming reply must not push tokens into the new session.
       const session = queue;
       let full = '';
       const onToken = (c: string) => {
+        if (replyStreamId !== streamId) return; // stopped: keep what was shown
         full += c;
         updateTurn(aid, full);
         session?.push(c);
@@ -578,6 +612,7 @@ export function useCall(
               // Tools (web/notes/recall) on voice turns — same toggle as text.
               tools: getToolsEnabled(),
               location: await currentLocation(),
+              streamId,
             },
             { onToken, onReasoning, onStatus: onToolEvent, onDrafts },
             streamAbort.signal,
@@ -600,6 +635,7 @@ export function useCall(
               // Tools (web/notes/recall) on voice turns — same toggle as text.
               tools: getToolsEnabled(),
               location: await currentLocation(),
+              streamId,
             },
             // Other voice event rendering is server-side (spoken citations,
             // drafts announced verbally); tool activity shows in the call UI.
@@ -612,7 +648,8 @@ export function useCall(
             onLeafChangedRef.current?.(res.id);
           }
         }
-        session?.finish();
+        // A stopped reply's session was already cut off; don't flush it.
+        if (replyStreamId === streamId) session?.finish();
       } catch (err) {
         const aborted = err instanceof DOMException && err.name === 'AbortError';
         if (!aborted && active) {
@@ -623,13 +660,15 @@ export function useCall(
           setPhase('error');
         }
         // aborted (barge-in): interrupt() handles the loop; reply text is kept
+      } finally {
+        if (replyStreamId === streamId) replyStreamId = null;
       }
     };
 
     const interrupt = () => {
       stopKws();
       stopInterruptMonitor();
-      streamAbort?.abort();
+      stopReply();
       queue?.stop();
       queue = null;
       setSpeakingId(null);
@@ -770,8 +809,11 @@ export function useCall(
         interrupt();
       },
       end: () => {
+        // Close at once; `saving` settles when a reply that was cut off is
+        // saved (the app reloads the chat after it, in the background).
+        const saving = inflight ?? undefined;
         cleanup();
-        onClose();
+        onClose(saving);
       },
       setMuted,
       // Recover from an error without ending the call: if the mic is still

@@ -156,6 +156,11 @@ export interface BranchInput {
   location?: TurnLocation;
   /** Uploaded attachments this message carries. */
   attachmentIds?: number[];
+  /**
+   * Client-chosen id for the streamed reply, so it can be stopped with the
+   * reply so far kept (api.stopStream).
+   */
+  streamId?: string;
 }
 
 /**
@@ -545,6 +550,11 @@ export interface SendMessageInput {
   state?: ConversationState;
   /** Uploaded attachments this message carries. */
   attachmentIds?: number[];
+  /**
+   * Client-chosen id for the streamed reply, so it can be stopped with the
+   * reply so far kept (api.stopStream).
+   */
+  streamId?: string;
 }
 
 

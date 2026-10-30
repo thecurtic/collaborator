@@ -683,7 +683,18 @@ export function CalendarView({
         <MonthGrid onOpenEvent={openEvent} reload={reload} />
       )}
       <CreateEventSheet range={creating} onClose={() => setCreating(null)}
-                        onCreated={() => setReload((n) => n + 1)} />
+                        onSaving={(t) => {
+                          setExportError(null);
+                          setNotice(`Adding “${t}”…`);
+                        }}
+                        onCreated={() => {
+                          setNotice(null);
+                          setReload((n) => n + 1);
+                        }}
+                        onFailed={(t, err) => {
+                          setNotice(null);
+                          setExportError(`Couldn’t add “${t}”: ${err}`);
+                        }} />
       <OccurrenceSheet event={occurrence} onClose={() => setOccurrence(null)}
                        onChanged={() => setReload((n) => n + 1)} onOpenNote={onOpenNote} />
     </div>

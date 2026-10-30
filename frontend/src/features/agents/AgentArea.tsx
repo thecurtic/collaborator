@@ -263,10 +263,11 @@ function Composer({ channel, onSend }: { channel: AgentChannel; onSend: (text: s
     if (!t) return;
     setBusy(true);
     setError(null);
+    setText(''); // it's in the conversation already (optimistic)
     try {
       await onSend(t);
-      setText('');
     } catch (err) {
+      setText((cur) => cur || t); // not sent: hand it back
       setError(errMessage(err));
     } finally {
       setBusy(false);
@@ -448,10 +449,12 @@ export function AgentArea({
     : [];
 
   const makeDefault = async (c: AgentChannel) => {
+    const before = detail?.default ?? null;
+    setDetail((d) => d && { ...d, default: { endpointId: c.endpointId, channel: c.channel } });
     try {
       await agentsApi.setDefault(tag, c);
-      setDetail((d) => d && { ...d, default: { endpointId: c.endpointId, channel: c.channel } });
     } catch (err) {
+      setDetail((d) => d && { ...d, default: before });
       setError(errMessage(err));
     }
   };
@@ -539,12 +542,27 @@ export function AgentArea({
           )}
           {channel.acceptsInput && !showFirehose && (
             <Composer channel={channel} onSend={async (text) => {
-              const m = await agentsApi.send(tag, channel, text);
-              setMessages((prev) => {
-                const list = prev[keyOf(channel)] ?? [];
-                return list.some((x) => x.id === m.id) ? prev
-                  : { ...prev, [keyOf(channel)]: [...list, m] };
-              });
+              // Optimistic: the message shows at once (unsent), and is
+              // swapped for the stored one, or taken back if sending fails.
+              const k = keyOf(channel);
+              const temp: AgentMessage = {
+                id: -Date.now(), endpointId: channel.endpointId, project: tag,
+                channel: channel.channel, from: 'you', text, needsReply: false,
+                question: null, questionState: null, outcome: null, note: null,
+                request: null, createdAt: new Date().toISOString(),
+                deliveredAt: null, readAt: null,
+              };
+              setMessages((prev) => ({ ...prev, [k]: [...(prev[k] ?? []), temp] }));
+              try {
+                const m = await agentsApi.send(tag, channel, text);
+                setMessages((prev) => {
+                  const list = (prev[k] ?? []).filter((x) => x.id !== temp.id);
+                  return { ...prev, [k]: list.some((x) => x.id === m.id) ? list : [...list, m] };
+                });
+              } catch (err) {
+                setMessages((prev) => ({ ...prev, [k]: (prev[k] ?? []).filter((x) => x.id !== temp.id) }));
+                throw err;
+              }
             }} />
           )}
         </>

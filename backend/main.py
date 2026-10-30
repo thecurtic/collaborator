@@ -56,6 +56,7 @@ import tool_log
 import link_preview
 import gate_client
 import summaries
+import streams
 import search_context
 import unified_search
 import agents
@@ -153,6 +154,9 @@ class UserMessage(BaseModel):
     location: Optional[dict] = None
     # Uploaded attachments (POST /api/attachments) carried by this turn.
     attachment_ids: Optional[List[int]] = None
+    # Client-chosen id for this streamed reply, so it can be stopped
+    # (POST /api/streams/{stream_id}/stop) with the reply so far kept.
+    stream_id: Optional[str] = None
 
 
 class MessageResponse(BaseModel):
@@ -194,6 +198,9 @@ class BranchRequest(BaseModel):
     recall: Optional[bool] = None
     location: Optional[dict] = None
     attachment_ids: Optional[List[int]] = None
+    # Client-chosen id for this streamed reply, so it can be stopped
+    # (POST /api/streams/{stream_id}/stop) with the reply so far kept.
+    stream_id: Optional[str] = None
 
 
 class TagsRequest(BaseModel):
@@ -2317,6 +2324,12 @@ def _ambient_note_hints(db_path: str, message: str) -> Optional[str]:
         return None
 
 
+# Saved in place of a silently empty generation (issue #2).
+EMPTY_REPLY_PLACEHOLDER = ("[The model returned an empty response — the server "
+                           "logs may show why. This placeholder keeps the "
+                           "conversation usable.]")
+
+
 def _stream_turn_response(
     db_path: str,
     *,
@@ -2333,8 +2346,13 @@ def _stream_turn_response(
     state: str = "seed",
     location: Optional[dict] = None,
     turn_attachments: Optional[List[dict]] = None,
+    stream: Optional["streams.Stream"] = None,
 ):
     """Build the SSE generator that streams the reply and persists both turns.
+
+    `stream` (streams.register) lets the client stop it: the reply so far is
+    saved and the stream ends with a `done` marked `stopped`. A dropped
+    connection saves what it has too (serve it through streams.closing).
 
     When tools are enabled, the model drives retrieval/synthesis via the tool loop
     (emitting `status` / `tool_result` / `token` events); a `synthesize` result is
@@ -2361,151 +2379,83 @@ def _stream_turn_response(
         synthesis_block = None
         synthesis_sources = []
         tool_activity = []      # per-call records mirrored from status events
+        tool_state: Dict = {}
+        stopped = False         # the client asked to stop (streams.request_stop)
+        saved = None            # (user_turn, assistant_turn) once persisted
 
-        # Attachments on THIS turn: images go to the model as images when it
-        # reads them; everything else joins the message as extracted text
-        # (waiting, bounded, for text still being read). The stored turn
-        # keeps only the user's words + a snapshot of what was attached.
-        model_message, images = message, None
-        if turn_attachments:
-            waited = []
+        def stop_requested() -> bool:
+            return stream is not None and stream.stopped()
 
-            def _on_wait(att):
-                waited.append(att)
-
-            sees = vision.chat_model_sees()
-            pending = [a for a in turn_attachments
-                       if a["text_status"] in ("pending", "working")
-                       and not (a["kind"] == "image" and sees)]
-            for a in pending:
-                yield f"data: {json.dumps({'type': 'status', 'tool': 'read_attachment', 'label': 'Reading ' + a['filename'], 'title': a['filename']})}\n\n"
-            block, images = attachments.for_current_turn(
-                db_path, turn_attachments, sees, on_wait=_on_wait)
-            for a in pending:
-                yield f"data: {json.dumps({'type': 'status', 'tool': 'read_attachment', 'label': 'Read ' + a['filename'], 'title': a['filename'], 'outcome': 'ok'})}\n\n"
-            if block:
-                model_message = f"{message}\n\n{block}" if message.strip() else block
-            images = images or None
-
-        if tools_enabled:
-            # Turns already in the context window are excluded from recall searches
-            # (the model is seeing them anyway).
-            context_ids = [t["id"] for t in (context_list or []) if t.get("id") is not None]
-            schemas, execute, tool_state = _build_tools(db_path, exclude_ids=context_ids)
-            tcfg = _tools_settings()
+        def persist():
+            """Save the exchange as it stands (also what a stop or a dropped
+            connection keeps). Returns (user_turn, assistant_turn)."""
+            nonlocal saved
+            reply = full_response
+            if not reply.strip():
+                reply = ("[Stopped before replying.]" if stopped or saved is False
+                         else EMPTY_REPLY_PLACEHOLDER)
             try:
-                for ev in generate_with_tools(
-                    model_message, context_list, mode,
-                    tool_schemas=schemas, execute_tool=execute,
-                    max_rounds=tcfg.get("max_rounds", 5),
-                    emit_status=tcfg.get("status_notes", True),
-                    emit_results=tcfg.get("show_step_results", False),
-                    extra_system=dynamic_context,
-                    images=images,
-                    on_tool_call=tool_log.recorder(
-                        db_path, "call" if mode == "voice" else "chat",
-                        tool_state["chat_run_id"], trigger=message),
-                ):
-                    if ev.get("type") == "token":
-                        full_response += ev["content"]
-                    elif ev.get("type") == "status" and ev.get("tool"):
-                        # Persisted "Sources": start events open a record, outcome
-                        # events complete the newest open record for that tool.
-                        if "outcome" in ev:
-                            for entry in reversed(tool_activity):
-                                if entry["tool"] == ev["tool"] and "outcome" not in entry:
-                                    entry.update({k: ev[k] for k in
-                                                  ("outcome", "count", "error", "urls")
-                                                  if k in ev})
-                                    break
-                        else:
-                            tool_activity.append({k: ev[k] for k in
-                                                  ("tool", "query", "url", "title")
-                                                  if k in ev})
-                    yield f"data: {json.dumps(ev)}\n\n"
-                    if ev.get("type") == "error":
-                        return
-            except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
-                return
-            synthesis_block = tool_state.get("synthesis") or None
-            if synthesis_block:
-                synthesis_sources = _recall_sources(tool_state.get("last_matches") or [])
-            else:
-                # Semantic recall fired but the model skipped synthesize: still
-                # produce a recall block (rendered from the raw matches, no LLM
-                # call) so the GUI's debug view can show what memory surfaced.
-                sem = tool_state.get("semantic_matches") or []
-                if sem:
-                    synthesis_block = _render_recall_block(sem)
-                    synthesis_sources = _recall_sources(sem)
-            # Stream the block so the frontend can render it live (display is
-            # gated client-side by the debug-tools setting).
-            if synthesis_block:
-                yield f"data: {json.dumps({'type': 'recall_block', 'content': synthesis_block, 'sources': synthesis_sources})}\n\n"
-            # Surface any propose_note results so the UI can offer "review drafts".
-            proposed = tool_state.get("proposed_drafts") or []
-            if proposed:
-                yield f"data: {json.dumps({'type': 'drafts_proposed', 'drafts': proposed})}\n\n"
-            # Links the model wanted but couldn't fetch (budget) — so the UI can
-            # offer one-tap "continue with these" follow-ups.
-            denied = list(dict.fromkeys(tool_state.get("denied_fetches") or []))
-            if denied:
-                yield f"data: {json.dumps({'type': 'unfollowed_links', 'links': denied})}\n\n"
-        else:
-            try:
-                for ev in stream_llm_tokens(model_message, context_list, mode=mode,
-                                            extra_system=dynamic_context,
-                                            include_reasoning=True,
-                                            images=images):
-                    if isinstance(ev, str):          # legacy/simple producers
-                        ev = {"type": "token", "content": ev}
-                    if ev["type"] == "token":
-                        full_response += ev["content"]
-                    # 'reasoning' events stream to the UI but are NEVER part of
-                    # the saved response.
-                    yield f"data: {json.dumps(ev)}\n\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
-                return
+                conn = sqlite3.connect(db_path)
+                try:
+                    user_turn = create_turn(
+                        conn, user_id=user_id, role="user", content=message,
+                        context_turns=context_turns, committed=commit,
+                        parent_turn_id=user_parent_id, paragraph_index=paragraph_index,
+                        branched=branched, state=state,
+                        location=location if (location and store_location) else None,
+                        attachments=[attachments.snapshot(a)
+                                     for a in (turn_attachments or [])] or None,
+                    )
+                    assistant_turn = create_turn(
+                        conn, user_id=user_id, role="assistant", content=reply,
+                        context_turns=context_turns, committed=commit,
+                        parent_turn_id=user_turn["id"], paragraph_index=None,
+                        state=state,
+                    )
+                    # Persist the recall block on the user turn (per-branch), and as
+                    # the current block (GET /api/recall/current — dead since the
+                    # tool-loop migration, revived here).
+                    if synthesis_block:
+                        set_turn_recall(conn, user_turn["id"], synthesis_block, synthesis_sources)
+                        set_current_recall(conn, synthesis_block, synthesis_sources,
+                                           query=message)
+                    # Now that the turns exist: stamp chat-proposed drafts with their
+                    # provenance, and persist this turn's tool activity ("Sources").
+                    if tools_enabled:
+                        root_id = _find_root_id(conn, user_turn["id"])
+                        for p in (tool_state.get("proposed_drafts") or []):
+                            try:
+                                stamp_note_draft_provenance(
+                                    conn, p["id"], [assistant_turn["id"]], root_id)
+                            except Exception:
+                                pass
+                        if tool_activity:
+                            try:
+                                set_turn_tool_activity(
+                                    conn, assistant_turn["id"], tool_activity)
+                            except Exception:
+                                pass
+                        try:
+                            tool_log.attach_turn(conn, tool_state.get("chat_run_id"),
+                                                 assistant_turn["id"], root_id)
+                        except Exception as e:
+                            print(f"Warning: tool log turn link failed: {e}")
+                finally:
+                    conn.close()
+                saved = (user_turn, assistant_turn)
+                return saved
+            finally:
+                if stream is not None:
+                    stream.mark_saved(
+                        user_turn_id=saved[0]["id"] if saved else None,
+                        assistant_turn_id=saved[1]["id"] if saved else None)
 
-        if not full_response.strip():
-            # A silently-empty generation must never persist an empty assistant
-            # turn: some chat templates then fail on EVERY later request in the
-            # conversation — the poisoned-history death spiral of issue #2.
-            fallback = ("[The model returned an empty response — the server "
-                        "logs may show why. This placeholder keeps the "
-                        "conversation usable.]")
-            yield f"data: {json.dumps({'type': 'token', 'content': fallback})}\n\n"
-            full_response = fallback
-
-        try:
-            conn = sqlite3.connect(db_path)
-            try:
-                user_turn = create_turn(
-                    conn, user_id=user_id, role="user", content=message,
-                    context_turns=context_turns, committed=commit,
-                    parent_turn_id=user_parent_id, paragraph_index=paragraph_index,
-                    branched=branched, state=state,
-                    location=location if (location and store_location) else None,
-                    attachments=[attachments.snapshot(a)
-                                 for a in (turn_attachments or [])] or None,
-                )
-                assistant_turn = create_turn(
-                    conn, user_id=user_id, role="assistant", content=full_response,
-                    context_turns=context_turns, committed=commit,
-                    parent_turn_id=user_turn["id"], paragraph_index=None,
-                    state=state,
-                )
-                # Persist the recall block on the user turn (per-branch), and as
-                # the current block (GET /api/recall/current — dead since the
-                # tool-loop migration, revived here).
-                if synthesis_block:
-                    set_turn_recall(conn, user_turn["id"], synthesis_block, synthesis_sources)
-                    set_current_recall(conn, synthesis_block, synthesis_sources,
-                                       query=message)
-                # Embed both turns (best-effort) so they're searchable by recall tools.
-                if tools_enabled:
+        def after_done(user_turn, assistant_turn):
+            """Bookkeeping once the reply is out (never delays it)."""
+            # Embed both turns (best-effort) so they're searchable by recall tools.
+            if tools_enabled:
+                conn = sqlite3.connect(db_path)
+                try:
                     for t in (user_turn, assistant_turn):
                         try:
                             vec = get_embedding(t["content"])
@@ -2513,62 +2463,180 @@ def _stream_turn_response(
                                 set_turn_embedding(conn, t["id"], vec)
                         except Exception:
                             pass
-                # Now that the turns exist: stamp chat-proposed drafts with their
-                # provenance, and persist this turn's tool activity ("Sources").
-                if tools_enabled:
-                    root_id = _find_root_id(conn, user_turn["id"])
-                    for p in (tool_state.get("proposed_drafts") or []):
-                        try:
-                            stamp_note_draft_provenance(
-                                conn, p["id"], [assistant_turn["id"]], root_id)
-                        except Exception:
-                            pass
-                    if tool_activity:
-                        try:
-                            set_turn_tool_activity(
-                                conn, assistant_turn["id"], tool_activity)
-                        except Exception:
-                            pass
-                    try:
-                        tool_log.attach_turn(conn, tool_state["chat_run_id"],
-                                             assistant_turn["id"], root_id)
-                    except Exception as e:
-                        print(f"Warning: tool log turn link failed: {e}")
-            finally:
-                conn.close()
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
-            return
+                finally:
+                    conn.close()
+            # After done: the attachments now belong to this turn, and images the
+            # model just read inline get their text extracted (for history, search
+            # and read_attachment) now that the model is free.
+            if turn_attachments:
+                try:
+                    ids = [a["id"] for a in turn_attachments]
+                    attachments.mark_sent(db_path, ids, user_turn["id"])
+                    for a in turn_attachments:
+                        if a["text_status"] == "pending":
+                            attachments.enqueue(db_path, a["id"])
+                except Exception as e:
+                    print(f"Warning: attachment bookkeeping failed: {e}")
 
-        done = {
-            "type": "done",
-            "id": assistant_turn["id"],
-            "user_turn_id": user_turn["id"],
-            "parent_turn_id": user_parent_id,
-            "paragraph_index": paragraph_index,
-            "context_turns_used": context_turns,
-        }
-        yield f"data: {json.dumps(done)}\n\n"
-
-        # After done: the attachments now belong to this turn, and images the
-        # model just read inline get their text extracted (for history, search
-        # and read_attachment) now that the model is free.
-        if turn_attachments:
+            # After done (so it never delays the reply): keep the root's generated
+            # conversation title fresh. Best-effort; the next GET /api/tree shows it.
             try:
-                ids = [a["id"] for a in turn_attachments]
-                attachments.mark_sent(db_path, ids, user_turn["id"])
-                for a in turn_attachments:
-                    if a["text_status"] == "pending":
-                        attachments.enqueue(db_path, a["id"])
-            except Exception as e:
-                print(f"Warning: attachment bookkeeping failed: {e}")
+                _maybe_update_title(db_path, assistant_turn["id"])
+            except Exception:
+                pass
 
-        # After done (so it never delays the reply): keep the root's generated
-        # conversation title fresh. Best-effort; the next GET /api/tree shows it.
         try:
-            _maybe_update_title(db_path, assistant_turn["id"])
-        except Exception:
-            pass
+            model_message, images = message, None
+            if turn_attachments:
+                waited = []
+
+                def _on_wait(att):
+                    waited.append(att)
+
+                sees = vision.chat_model_sees()
+                pending = [a for a in turn_attachments
+                           if a["text_status"] in ("pending", "working")
+                           and not (a["kind"] == "image" and sees)]
+                for a in pending:
+                    yield f"data: {json.dumps({'type': 'status', 'tool': 'read_attachment', 'label': 'Reading ' + a['filename'], 'title': a['filename']})}\n\n"
+                block, images = attachments.for_current_turn(
+                    db_path, turn_attachments, sees, on_wait=_on_wait)
+                for a in pending:
+                    yield f"data: {json.dumps({'type': 'status', 'tool': 'read_attachment', 'label': 'Read ' + a['filename'], 'title': a['filename'], 'outcome': 'ok'})}\n\n"
+                if block:
+                    model_message = f"{message}\n\n{block}" if message.strip() else block
+                images = images or None
+
+            if tools_enabled:
+                # Turns already in the context window are excluded from recall searches
+                # (the model is seeing them anyway).
+                context_ids = [t["id"] for t in (context_list or []) if t.get("id") is not None]
+                schemas, execute, tool_state = _build_tools(db_path, exclude_ids=context_ids)
+                tcfg = _tools_settings()
+                try:
+                    for ev in generate_with_tools(
+                        model_message, context_list, mode,
+                        tool_schemas=schemas, execute_tool=execute,
+                        max_rounds=tcfg.get("max_rounds", 5),
+                        emit_status=tcfg.get("status_notes", True),
+                        emit_results=tcfg.get("show_step_results", False),
+                        extra_system=dynamic_context,
+                        images=images,
+                        on_tool_call=tool_log.recorder(
+                            db_path, "call" if mode == "voice" else "chat",
+                            tool_state["chat_run_id"], trigger=message),
+                    ):
+                        if stop_requested():
+                            stopped = True
+                            break
+                        if ev.get("type") == "token":
+                            full_response += ev["content"]
+                        elif ev.get("type") == "status" and ev.get("tool"):
+                            # Persisted "Sources": start events open a record, outcome
+                            # events complete the newest open record for that tool.
+                            if "outcome" in ev:
+                                for entry in reversed(tool_activity):
+                                    if entry["tool"] == ev["tool"] and "outcome" not in entry:
+                                        entry.update({k: ev[k] for k in
+                                                      ("outcome", "count", "error", "urls")
+                                                      if k in ev})
+                                        break
+                            else:
+                                tool_activity.append({k: ev[k] for k in
+                                                      ("tool", "query", "url", "title")
+                                                      if k in ev})
+                        yield f"data: {json.dumps(ev)}\n\n"
+                        if ev.get("type") == "error":
+                            return
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+                    return
+                synthesis_block = tool_state.get("synthesis") or None
+                if synthesis_block:
+                    synthesis_sources = _recall_sources(tool_state.get("last_matches") or [])
+                else:
+                    # Semantic recall fired but the model skipped synthesize: still
+                    # produce a recall block (rendered from the raw matches, no LLM
+                    # call) so the GUI's debug view can show what memory surfaced.
+                    sem = tool_state.get("semantic_matches") or []
+                    if sem:
+                        synthesis_block = _render_recall_block(sem)
+                        synthesis_sources = _recall_sources(sem)
+                # Stream the block so the frontend can render it live (display is
+                # gated client-side by the debug-tools setting).
+                if synthesis_block:
+                    yield f"data: {json.dumps({'type': 'recall_block', 'content': synthesis_block, 'sources': synthesis_sources})}\n\n"
+                # Surface any propose_note results so the UI can offer "review drafts".
+                proposed = tool_state.get("proposed_drafts") or []
+                if proposed:
+                    yield f"data: {json.dumps({'type': 'drafts_proposed', 'drafts': proposed})}\n\n"
+                # Links the model wanted but couldn't fetch (budget) — so the UI can
+                # offer one-tap "continue with these" follow-ups.
+                denied = list(dict.fromkeys(tool_state.get("denied_fetches") or []))
+                if denied:
+                    yield f"data: {json.dumps({'type': 'unfollowed_links', 'links': denied})}\n\n"
+            else:
+                try:
+                    for ev in stream_llm_tokens(model_message, context_list, mode=mode,
+                                                extra_system=dynamic_context,
+                                                include_reasoning=True,
+                                                images=images):
+                        if stop_requested():
+                            stopped = True
+                            break
+                        if isinstance(ev, str):          # legacy/simple producers
+                            ev = {"type": "token", "content": ev}
+                        if ev["type"] == "token":
+                            full_response += ev["content"]
+                        # 'reasoning' events stream to the UI but are NEVER part of
+                        # the saved response.
+                        yield f"data: {json.dumps(ev)}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+                    return
+
+            if not full_response.strip() and not stopped:
+                # A silently-empty generation must never persist an empty assistant
+                # turn: some chat templates then fail on EVERY later request in the
+                # conversation — the poisoned-history death spiral of issue #2.
+                fallback = EMPTY_REPLY_PLACEHOLDER
+                yield f"data: {json.dumps({'type': 'token', 'content': fallback})}\n\n"
+                full_response = fallback
+
+            try:
+                user_turn, assistant_turn = persist()
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+                return
+
+            done = {
+                "type": "done",
+                "id": assistant_turn["id"],
+                "user_turn_id": user_turn["id"],
+                "parent_turn_id": user_parent_id,
+                "paragraph_index": paragraph_index,
+                "context_turns_used": context_turns,
+            }
+            if stopped:
+                done["stopped"] = True
+            yield f"data: {json.dumps(done)}\n\n"
+            after_done(user_turn, assistant_turn)
+        except GeneratorExit:
+            # The client went away mid-reply (see streams.closing): keep the
+            # exchange as far as it got, unless it's already saved.
+            if saved is None:
+                saved = False   # marks the reply as stopped for persist()
+                try:
+                    persist()
+                except Exception as e:
+                    print(f"Warning: saving a dropped reply failed: {e}")
+            if saved:
+                after_done(*saved)
+            raise
+        finally:
+            # Ended without saving (an error): release anyone waiting to stop it.
+            if stream is not None and not stream.saved.is_set():
+                stream.mark_saved()
 
     return event_generator
 
@@ -2674,13 +2742,25 @@ async def send_message(
             state=turn_state,
             location=request.location,
             turn_attachments=turn_atts,
+            stream=streams.register(request.stream_id, db_path),
         )
-        return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
+        return StreamingResponse(streams.closing(generator()),
+                                 media_type="text/event-stream", headers=SSE_HEADERS)
 
     except HTTPException:
         raise
     except Exception as e:
         return _sse_error(str(e))
+
+
+@app.post("/api/streams/{stream_id}/stop")
+async def stop_stream(stream_id: str,
+                      passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    """Stop a streamed reply (send or branch) by the id the client gave it.
+    The reply so far is saved and its stream ends with `done` (stopped: true).
+    Returns once it's saved: {saved, user_turn_id, assistant_turn_id}."""
+    _require_auth(passkey)
+    return await streams.request_stop(stream_id, _resolve_db_path(passkey))
 
 
 @app.post("/api/branches/{parent_turn_id}")
@@ -2743,8 +2823,10 @@ async def create_branch(
             state=branch_state,
             location=request.location,
             turn_attachments=turn_atts,
+            stream=streams.register(request.stream_id, db_path),
         )
-        return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
+        return StreamingResponse(streams.closing(generator()),
+                                 media_type="text/event-stream", headers=SSE_HEADERS)
 
     except HTTPException:
         raise

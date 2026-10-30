@@ -188,11 +188,26 @@ export function FeedView({
     void load();
   }, [load]);
 
+  // Optimistic: the item moves at once (pinned on top, or back into the
+  // stream); the server's order lands with the reload, a failure puts it back.
   const togglePin = (item: FeedItem) => {
+    const prev = feed;
+    const next = { ...item, pinned: !item.pinned };
+    setFeed((f) => {
+      if (!f) return f;
+      const pinned = f.pinned.filter((i) => i.key !== item.key);
+      const items = f.items.filter((i) => i.key !== item.key);
+      return next.pinned
+        ? { pinned: [next, ...pinned], items }
+        : { pinned, items: [next, ...items] };
+    });
     api
-      .pinFeedItem(item.key, !item.pinned)
+      .pinFeedItem(item.key, next.pinned)
       .then(load)
-      .catch((err) => setError(errMessage(err)));
+      .catch((err) => {
+        setFeed(prev);
+        setError(errMessage(err));
+      });
   };
 
   const all = feed ? [...feed.pinned, ...feed.items] : [];

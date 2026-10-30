@@ -49,10 +49,14 @@ const FREQS: { value: RepeatFreq | ''; label: string }[] = [
  * The calendar's create step: the slot set the time, so the title is the
  * only thing typed (repeat is optional and one tap).
  */
-export function CreateEventSheet({ range, onClose, onCreated }: {
+export function CreateEventSheet({ range, onClose, onCreated, onSaving, onFailed }: {
   range: { start: Date; end: Date; allDay: boolean } | null;
   onClose: () => void;
   onCreated: () => void;
+  /** The sheet closed and the event is being saved (show it as pending). */
+  onSaving?: (title: string) => void;
+  /** Saving failed after the sheet closed. */
+  onFailed?: (title: string, error: string) => void;
 }) {
   const [title, setTitle] = useState('');
   const [freq, setFreq] = useState<RepeatFreq | ''>('');
@@ -74,24 +78,26 @@ export function CreateEventSheet({ range, onClose, onCreated }: {
 
   const save = () => {
     if (!title.trim()) return;
+    // Optimistic: the sheet closes at once; the calendar shows the event as
+    // being added and picks it up when it's saved.
+    const name = title.trim();
     setSaving(true);
     setError(null);
+    onSaving?.(name);
+    onClose();
     const repeat: RepeatRule | null = freq
       ? { freq, ...(freq === 'weekly' ? { byDay: [weekdayCode(range.start)] } : {}) }
       : null;
     api
       .createEvent({
-        title: title.trim(),
+        title: name,
         start: range.allDay ? isoDay(range.start) : isoLocal(range.start),
         end: range.allDay ? null : isoLocal(range.end),
         allDay: range.allDay,
         repeat,
       })
-      .then(() => {
-        onCreated();
-        onClose();
-      })
-      .catch((err) => setError(errMessage(err)))
+      .then(() => onCreated())
+      .catch((err) => onFailed?.(name, errMessage(err)))
       .finally(() => setSaving(false));
   };
 

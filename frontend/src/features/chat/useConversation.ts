@@ -59,6 +59,16 @@ export interface Streaming {
 }
 
 /** The optimistic bubble's text for a message that is only attachments. */
+/** How long a stopped reply may take to end before the connection is cut. */
+export const STOP_GRACE_MS = 8000;
+
+/** An id for one streamed reply (randomUUID needs a secure context). */
+export function newStreamId(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto && window.isSecureContext
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 function attachedLabel(ids: number[]): string {
   return ids.length === 1 ? '📎 1 attachment' : `📎 ${ids.length} attachments`;
 }
@@ -114,8 +124,14 @@ export function useConversation(reloadSignal: number) {
   });
   const [version, setVersion] = useState(0);
   const leafRef = useRef<number | null>(null);
-  // Abort controller for the in-flight send/branch stream (stop generation).
+  // Abort controller for the in-flight send/branch stream (the fallback
+  // when a stop request can't get through).
   const abortRef = useRef<AbortController | null>(null);
+  // The in-flight stream's id (api.stopStream) and whether it's been stopped:
+  // once stopped, the reply on screen freezes where it was.
+  const streamIdRef = useRef<string | null>(null);
+  const stoppingRef = useRef(false);
+  const [stopping, setStopping] = useState(false);
 
   // Swap in a fresh tree synchronously so callers can batch further state
   // updates (e.g. clearing the streaming overlay) into the same render.
@@ -219,6 +235,7 @@ export function useConversation(reloadSignal: number) {
       stream: (
         handlers: StreamHandlers,
         signal: AbortSignal,
+        streamId: string,
       ) => Promise<{
         id: number | null;
         contextWindow: number | null;
@@ -226,6 +243,10 @@ export function useConversation(reloadSignal: number) {
     ): Promise<'ok' | 'stopped' | 'failed'> => {
       const abort = new AbortController();
       abortRef.current = abort;
+      const streamId = newStreamId();
+      streamIdRef.current = streamId;
+      stoppingRef.current = false;
+      setStopping(false);
       setSending(true);
       setError(null);
       setRecall(null);
@@ -240,8 +261,10 @@ export function useConversation(reloadSignal: number) {
       try {
         const res = await stream(
           {
-            onToken: (c) =>
-              setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s)),
+            onToken: (c) => {
+              if (stoppingRef.current) return; // stopped: the reply stays as shown
+              setStreaming((s) => (s ? { ...s, reply: s.reply + c } : s));
+            },
             onRecall: (block) => setRecall(block),
             onReasoning: (c) => {
               reasoningRef.current += c;
@@ -253,6 +276,7 @@ export function useConversation(reloadSignal: number) {
             onUnfollowedLinks: (links) => setUnfollowedLinks(links),
           },
           abort.signal,
+          streamId,
         );
         // Fetch first, THEN apply + clear the overlay in one synchronous block
         // (single render) — an await between the two briefly shows the new
@@ -272,7 +296,8 @@ export function useConversation(reloadSignal: number) {
         return 'ok';
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') {
-          // Deliberate stop: sync whatever the backend persisted, no error.
+          // The stop request couldn't get through, so the connection was cut;
+          // the backend saves what it had on its side. Sync, no error.
           try {
             applyTree(await api.getTree());
           } catch {
@@ -284,6 +309,9 @@ export function useConversation(reloadSignal: number) {
         return 'failed';
       } finally {
         abortRef.current = null;
+        streamIdRef.current = null;
+        stoppingRef.current = false;
+        setStopping(false);
         setSending(false);
         setStreaming(null);
         setActivity([]);
@@ -295,9 +323,23 @@ export function useConversation(reloadSignal: number) {
     [applyTree, selectPathTo, applyToolEvent],
   );
 
-  /** Abort the in-flight send/branch stream (the reply so far is kept server-side). */
+  /**
+   * Stop the in-flight reply. It freezes on screen at once; the backend ends
+   * the model call, saves the exchange so far and closes the stream normally,
+   * so the turn stays (it doesn't vanish and come back). If the stop request
+   * fails or the stream doesn't end soon, the connection is cut instead (the
+   * backend saves on that too).
+   */
   const stopGeneration = useCallback(() => {
-    abortRef.current?.abort();
+    const id = streamIdRef.current;
+    const abort = abortRef.current;
+    if (!id || stoppingRef.current) return;
+    stoppingRef.current = true;
+    setStopping(true);
+    void api.stopStream(id).catch(() => abort?.abort());
+    setTimeout(() => {
+      if (streamIdRef.current === id) abort?.abort();
+    }, STOP_GRACE_MS);
   }, []);
 
   const clearProposedDrafts = useCallback(() => setProposedDrafts([]), []);
@@ -306,7 +348,7 @@ export function useConversation(reloadSignal: number) {
     async (message: string, attachmentIds: number[] = []): Promise<boolean> => {
       const trimmed = message.trim();
       if (!trimmed && attachmentIds.length === 0) return true;
-      const outcome = await runStream(trimmed || attachedLabel(attachmentIds), async (handlers, signal) =>
+      const outcome = await runStream(trimmed || attachedLabel(attachmentIds), async (handlers, signal, streamId) =>
         api.sendMessageStream(
           // Active leaf to continue from (omit for a brand-new conversation).
           {
@@ -315,12 +357,14 @@ export function useConversation(reloadSignal: number) {
             tools: getToolsEnabled(),
             location: await currentLocation(),
             attachmentIds,
+            streamId,
           },
           handlers,
           signal,
         ),
       );
-      // false restores the composer draft — on stop too, for tweak-and-resend.
+      // false restores the composer draft (the send failed). A stopped reply
+      // is kept, so the message isn't handed back.
       return outcome === 'ok';
     },
     [runStream],
@@ -352,7 +396,7 @@ export function useConversation(reloadSignal: number) {
       // stream (the reload inside runStream rebuilds the index).
       const root = rootOfTurn(parentTurnId);
       const seedRootId = root?.state === 'seed' ? root.id : null;
-      const outcome = await runStream(trimmed || attachedLabel(attachmentIds), async (handlers, signal) =>
+      const outcome = await runStream(trimmed || attachedLabel(attachmentIds), async (handlers, signal, streamId) =>
         api.branchMessage(
           {
             parentTurnId,
@@ -361,6 +405,7 @@ export function useConversation(reloadSignal: number) {
             tools: getToolsEnabled(),
             location: await currentLocation(),
             attachmentIds,
+            streamId,
           },
           handlers,
           signal,
@@ -420,7 +465,7 @@ export function useConversation(reloadSignal: number) {
         return false;
       }
 
-      const outcome = await runStream(trimmed || attachedLabel(attachmentIds), async (handlers, signal) =>
+      const outcome = await runStream(trimmed || attachedLabel(attachmentIds), async (handlers, signal, streamId) =>
         u.branched && parentId != null && parentId !== VIRTUAL_ROOT
           ? api.branchMessage(
               {
@@ -430,6 +475,7 @@ export function useConversation(reloadSignal: number) {
                 tools: getToolsEnabled(),
                 location: await currentLocation(),
                 attachmentIds,
+                streamId,
               },
               handlers,
               signal,
@@ -441,6 +487,7 @@ export function useConversation(reloadSignal: number) {
                 tools: getToolsEnabled(),
                 location: await currentLocation(),
                 attachmentIds,
+                streamId,
                 ...(keepState ? { state: keepState } : {}),
               },
               handlers,
@@ -573,6 +620,7 @@ export function useConversation(reloadSignal: number) {
     branch,
     editResend,
     stopGeneration,
+    stopping,
     cycleFork,
     selectPathTo,
     startNewChat,

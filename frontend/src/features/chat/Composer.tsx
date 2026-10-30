@@ -47,6 +47,8 @@ interface ComposerProps {
   onSend: (message: string, attachments: Attachment[]) => Promise<boolean>;
   /** Abort the in-flight response stream (shown as a stop button). */
   onStop?: () => void;
+  /** A stop was asked for and the reply is winding down. */
+  stopping?: boolean;
   /**
    * Start a voice call (the call button lives here, not the header). Any
    * current draft is passed along — it becomes the call's first turn, so the
@@ -81,6 +83,7 @@ export function Composer({
   disabled,
   onSend,
   onStop,
+  stopping = false,
   onStartCall,
   branchLabel = null,
   onCancelBranch,
@@ -440,11 +443,12 @@ export function Composer({
                   size="icon"
                   variant="secondary"
                   onClick={onStop}
-                  aria-label="Stop generating"
-                  title="Stop generating"
+                  disabled={stopping}
+                  aria-label={stopping ? 'Stopping' : 'Stop generating'}
+                  title={stopping ? 'Stopping' : 'Stop generating'}
                   className="h-9 w-9 rounded-full"
                 >
-                  <Square className="h-4 w-4" />
+                  {stopping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
                 </Button>
               ) : hasDraft ? (
                 <Button

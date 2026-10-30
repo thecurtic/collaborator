@@ -32,7 +32,8 @@ import { useWakeLock } from './useWakeLock';
 
 interface CallScreenProps {
   open: boolean;
-  onClose: () => void;
+  /** `saving` settles once a reply cut off by the hang-up is saved. */
+  onClose: (saving?: Promise<void>) => void;
   /** If set, the first spoken turn forks from this branch point. */
   branchTarget?: BranchTarget | null;
   /** Active branch leaf to continue from when not branching. */

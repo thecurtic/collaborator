@@ -125,6 +125,18 @@ X-Passkey: <your-passkey>
   id. See §22. While the backend waits for an attachment's text it streams
   `{"type":"status","tool":"read_attachment","label":"Reading plan.pdf",...}`
   and then an `"outcome":"ok"` event, before any tokens.
+- `stream_id` (optional, also on `POST /api/branches/{id}`): a client-chosen id
+  for this streamed reply, so it can be stopped (below).
+
+**Stopping a reply:** `POST /api/streams/{stream_id}/stop` ends the reply where
+it is: the model call stops, the exchange so far is saved (an assistant turn of
+`"[Stopped before replying.]"` if nothing was said yet), and the stream ends
+normally with `done` carrying `"stopped": true`. The request returns once the
+turns are saved: `{"saved": true, "known": true, "user_turn_id": 50,
+"assistant_turn_id": 51}`. An id that's already finished and gone returns
+`{"saved": true, "known": false}`; another user's stream is left alone
+(`"known": false`). A client that drops the connection
+instead gets the same save on the server side, without the confirmation.
 
 **Tool SSE events** (when tools are on and the model uses them; interleaved before the
 final answer tokens):

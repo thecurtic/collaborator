@@ -92,6 +92,8 @@ export interface BranchStreamResult {
   paragraphIndex: number | null;
   contextWindow: number | null;
   text: string;
+  /** The reply was stopped (api.stopStream); `text` is what was said. */
+  stopped: boolean;
 }
 
 /** Final result of a streamed send, after the `done` event. */
@@ -102,6 +104,8 @@ export interface SendStreamResult {
   contextWindow: number | null;
   /** The full assembled response text. */
   text: string;
+  /** The reply was stopped (api.stopStream); `text` is what was said. */
+  stopped: boolean;
 }
 
 /** Parse one SSE line ("data: {...}") into its JSON payload, or null. */
@@ -333,6 +337,11 @@ export interface CollaboratorApi {
     handlers: StreamHandlers,
     signal?: AbortSignal,
   ): Promise<BranchStreamResult>;
+  /**
+   * Stop a streamed reply by its streamId. The backend saves the reply so far,
+   * ends the stream with `done`, and answers once the turns are saved.
+   */
+  stopStream(streamId: string): Promise<{ saved: boolean }>;
   /** Full conversation tree (for branch navigation / metro map). */
   getTree(): Promise<ConversationTree>;
   /**
@@ -620,6 +629,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
         location: input.location,
         state: input.state,
         attachment_ids: input.attachmentIds?.length ? input.attachmentIds : undefined,
+        stream_id: input.streamId,
       }),
       signal,
     });
@@ -628,6 +638,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
       id: numOrNull(done.id),
       contextWindow: numOrNull(done.context_turns_used),
       text,
+      stopped: done.stopped === true,
     };
   }
 
@@ -649,6 +660,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
         // b23d8ea: opt-in per-turn location (absent = no placeholder).
         location: input.location,
         attachment_ids: input.attachmentIds?.length ? input.attachmentIds : undefined,
+        stream_id: input.streamId,
       }),
       signal,
     });
@@ -660,7 +672,15 @@ class HttpCollaboratorApi implements CollaboratorApi {
       paragraphIndex: numOrNull(done.paragraph_index),
       contextWindow: numOrNull(done.context_turns_used),
       text,
+      stopped: done.stopped === true,
     };
+  }
+
+  async stopStream(streamId: string): Promise<{ saved: boolean }> {
+    return request<{ saved: boolean }>(
+      `/api/streams/${encodeURIComponent(streamId)}/stop`,
+      { method: 'POST' },
+    );
   }
 
   async getTree(): Promise<ConversationTree> {

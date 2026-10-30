@@ -620,6 +620,20 @@ function ActionResult({
   }
 }
 
+let pendingSeq = 0;
+
+/** A text capture shown before the server has stored it (negative id). */
+function pendingScratchItem(text: string): ScratchItem {
+  return {
+    id: -(++pendingSeq), createdAt: new Date().toISOString(),
+    kind: /^https?:\/\/\S+$/i.test(text) ? 'url' : 'text',
+    content: text, mediaMime: null, mediaHash: null, transcript: null,
+    status: 'inert', llmReadable: false, actionResult: null, draftId: null,
+    transcriptId: null, pinned: false, transcriptJob: null, mediaName: null,
+    mediaSize: null, preview: null,
+  };
+}
+
 /**
  * Scratch — notes to self (7444138). Tap send = inert capture (zero model
  * contact, ever); HOLD send = capture + one-shot agent action, mirroring the
@@ -883,16 +897,23 @@ export function ScratchView({
 
     if (!text) return;
     setValue('');
-    setSending(true);
+    // Optimistic: the capture shows at once (inert until saved), then is
+    // swapped for the stored item; a failure takes it back out and hands
+    // the text back to the composer.
+    const temp = pendingScratchItem(text);
+    addItem(temp);
     try {
       const item = await api.addScratch(text);
-      addItem(item);
+      // (A reload in between may have dropped the placeholder already.)
+      setItems((prev) =>
+        !prev ? [item]
+          : prev.some((i) => i.id === temp.id) ? prev.map((i) => (i.id === temp.id ? item : i))
+          : prev.some((i) => i.id === item.id) ? prev : [item, ...prev]);
       if (act) await runAct(item);
     } catch (err) {
+      setItems((prev) => prev?.filter((i) => i.id !== temp.id) ?? prev);
       setError(errMessage(err));
       setValue((v) => (v ? v : text)); // capture failed — restore the draft
-    } finally {
-      setSending(false);
     }
   };
 
@@ -1028,7 +1049,21 @@ export function ScratchView({
     }
   };
 
-  const card = (item: ScratchItem) => (
+  const card = (item: ScratchItem) => item.id < 0 ? (
+    // Still saving: shown, but nothing to act on yet.
+    <div className="pointer-events-none opacity-60" aria-busy="true">
+      <ScratchCard
+        item={item}
+        acting={false}
+        onToggleReadable={() => {}}
+        onTogglePin={() => {}}
+        onRemove={() => {}}
+        onDecided={() => {}}
+        onStartChat={onStartChat}
+        onOpenTranscripts={onOpenTranscripts}
+      />
+    </div>
+  ) : (
     <ScratchCard
       item={item}
       acting={acting.has(item.id)}

@@ -378,30 +378,27 @@ function AppShell() {
     [refreshDrafts],
   );
 
-  // Closing a call refreshes the tree so the spoken exchange (persisted with
-  // commit:true) shows up in the text history — then lands the chat on the
-  // call's conversation (a call started from "New chat" would otherwise dump
-  // the user back on an empty chat instead of what they just talked about).
-  const closeCall = useCallback(() => {
-    const leaf = callLeafRef.current;
-    callLeafRef.current = null;
+  // Hanging up closes the call at once. In the background the chat catches
+  // up: once a reply the hang-up cut off is saved (`saving`), the tree
+  // reloads and the chat lands on the call's latest turn (a call started from
+  // "New chat" would otherwise leave the user on an empty chat).
+  const closeCall = useCallback((saving?: Promise<void>) => {
+    setCallOpen(false);
+    setCallIntro(null);
+    if (introBranchRef.current) {
+      introBranchRef.current = false;
+      setBranchTarget(null); // never-spoken call-button fork must not linger
+    }
     // Catch-all: drafts proposed in aborted voice turns never emit an event
     // the client sees — recount on hang-up so the badge can't go stale.
     void refreshDrafts();
-    // Land the chat BEFORE lifting the call screen: reload + select while
-    // still covered, so the transcript is already sitting at the bottom the
-    // moment the call closes (no visible jump-then-scroll).
-    void reload()
+    void (saving ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => reload())
       .then(() => {
+        const leaf = callLeafRef.current;
+        callLeafRef.current = null;
         if (leaf != null) selectPathTo(leaf);
-      })
-      .finally(() => {
-        setCallOpen(false);
-        setCallIntro(null);
-        if (introBranchRef.current) {
-          introBranchRef.current = false;
-          setBranchTarget(null); // never-spoken call-button fork must not linger
-        }
       });
   }, [reload, selectPathTo, refreshDrafts]);
 
