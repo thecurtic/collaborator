@@ -398,6 +398,8 @@ def read_transcript(db_path: str, transcript_id, chunk: int = 1,
     conn = sqlite3.connect(db_path)
     try:
         row = _db.get_transcript(conn, tid)
+        if row is not None and tid in _db.transcripts_hidden_from_model(conn):
+            row = None          # a private Scratch capture's: not there for the model
     finally:
         conn.close()
     if row is None:
@@ -425,10 +427,12 @@ def list_transcripts(db_path: str, query: str = None,
     conn = sqlite3.connect(db_path)
     try:
         rows = _db.search_transcripts(conn, query, channel=channel, limit=200,
-                                       tag=tag)
+                                       tag=tag,
+                                       exclude=_db.transcripts_hidden_from_model(conn))
     finally:
         conn.close()
     for r in rows:
+        r.pop("source_ref", None)
         if r.get("status") == "error":
             r["error_kind"] = classify_video_error(r.get("error") or "")
             r["error"] = (r.get("error") or "")[:160]

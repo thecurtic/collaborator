@@ -125,6 +125,9 @@ X-Passkey: <your-passkey>
   id. See §22. While the backend waits for an attachment's text it streams
   `{"type":"status","tool":"read_attachment","label":"Reading plan.pdf",...}`
   and then an `"outcome":"ok"` event, before any tokens.
+- `transcribe` (optional, default false, also on `POST /api/branches/{id}`):
+  transcribe the audio and video among `attachment_ids` (the app sends it when
+  send is held). Without it they go untranscribed (`text_status: "idle"`). §22.
 - `stream_id` (optional, also on `POST /api/branches/{id}`): a client-chosen id
   for this streamed reply, so it can be stopped (below).
 
@@ -937,20 +940,36 @@ never touches conversations, recall, or the LLM.
 
 ---
 
-### 16. Video Transcripts
+### 16. Transcripts
 
-Videos transcribed from their audio (the model's `transcribe_video` tool, or a
-YouTube link sent to Scratch). Short ones finish in the turn; long ones run in
-the background and surface here.
+Speech transcribed from its audio, from any source:
+- `link`: a video or audio URL (the model's `transcribe_video` tool, or a
+  YouTube link held-sent in Scratch);
+- `attachment`: a recording or video sent in a chat with send held (§22);
+- `scratch`: a recording or video captured in Scratch and held-sent (§23).
 
-**`GET /api/transcripts`** → `{ "transcripts": [...], "count": N, "vocabulary": [...] }`,
+Short ones finish quickly; long ones run in the background, surface here, and
+send a `transcript_ready` notification. Files are transcribed one at a time,
+from their audio track (squeezed to 16 kHz mono Opus with ffmpeg first, when
+it's installed), up to `tools.transcribe_video.max_minutes` long. The same
+bytes from the same source reuse one transcript. A restart re-queues file
+transcripts that were still processing.
+
+**`GET /api/transcripts`** → `{ "transcripts": [...], "count": N, "vocabulary": [...], "sources": [...] }`,
 newest first, metadata only (no text):
 ```json
 { "id": 7, "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
   "title": "Raised beds", "channel": "Garden Answers", "duration_s": 912,
   "status": "done", "error": null, "chars": 14210, "tags": ["project", "garden"],
+  "source": "link", "source_ref": null,
   "created_at": "2026-10-12 21:00:00", "finished_at": "2026-10-12 21:04:10" }
 ```
+- `source`: `link` | `attachment` | `scratch` (more may come); `source_ref`
+  names the item a file came from (`"attachment:12"`, `"scratch:40"`). File
+  transcripts have `url: null` and no channel; their title is the file name
+  (or a Scratch capture's caption).
+- `sources`: the sources in use with their counts, most first
+  (`[{ "source": "link", "count": 9 }, …]`), for filter chips.
 - `tags`: optional, like everything else; `[]` when none. A transcript tagged
   `project` plus a name belongs to that project.
 - `vocabulary`: every tag in use across notes, chats and transcripts, most
@@ -964,7 +983,8 @@ newest first, metadata only (no text):
   in another form reads the stored transcript instead of downloading again.
 - Optional filters: `?channel=` (case-insensitive substring), `?q=`
   (keywords, all of which must appear in title, channel, tags or text;
-  matching rows add a `snippet`) and `?tag=` (exact tag, normalized).
+  matching rows add a `snippet`), `?tag=` (exact tag, normalized) and
+  `?source=` (one source).
 
 **`GET /api/transcripts/{id}`** → `{ "transcript": {…, "text": "…"} }` with the
 full text when done. `404` if unknown.
@@ -979,7 +999,11 @@ most 12); type tags (`event`, `social-graph`, `user-profile`) are `422`.
 
 The model reads the same table through two tools: `list_transcripts` (this
 catalogue, freely browsable, with the same query/channel/tag filters) and `read_transcript(id, chunk?, query?)` (paged
-by id, never downloads). `transcribe_video` takes a new URL only.
+by id, never downloads). `transcribe_video` takes a new URL only. A Scratch
+transcript is the exception: the model can see it only while its capture is
+model-readable (`llm_readable`, which holding send turns on); otherwise it
+isn't listed and reading it is "no transcript with id N". Scratch stays
+agent-blind unless the item says otherwise.
 
 
 ### 17. Notifications
@@ -1183,26 +1207,37 @@ sees it. Its text is extracted ONCE in the background and stored with it:
 | `document` | markitdown: DOCX, PPTX, XLSX, HTML, EPUB, CSV, JSON, … (`markitdown`) |
 | `pdf` | pypdfium2's text layer; pages without one (scans) go to the vision model (`pdf-text`, `pdf-text+vision`) |
 | `image` | the vision model transcribes the text and describes the rest (`vision`) |
-| `audio`, `video` | speech-to-text (`speech-to-text`) |
+| `audio`, `video` | speech-to-text (`speech-to-text`), only when asked: see below |
 | `file` | nothing (`text_status: "none"`) |
 
 The vision model is the chat model (§14, `inference.vision`). An image's text is
 read once the turn that carried it has been answered (the model reads the image
 itself on that turn); when the chat model can't see, it's read at upload instead.
 
+**Audio and video are transcribed only when asked**: a message sent with
+`transcribe: true` (the app's hold on send), or `POST …/extract`. Until then
+they're `idle`, and the model sees `(Not transcribed …)` under their header.
+The transcript is a row on the Transcripts page (§16, source `attachment`,
+`transcript_id` here), and its text is copied onto the attachment so turns,
+history and `read_attachment` read it like any other. A turn waits for it up
+to `attachments.wait_seconds`; past that the model is told it's still being
+read, and `read_attachment` fetches it later.
+
 **`POST /api/attachments`** (multipart, field `file`) → `{ "attachment": {...} }`,
-at once, with `text_status` `pending` (or `done` when the same bytes were
-uploaded before: identical content is one attachment). `413` over
-`attachments.max_mb`.
+at once, with `text_status` `pending` (`idle` for audio and video, `done` when
+the same bytes were uploaded before: identical content is one attachment).
+The upload streams to disk, never held in memory whole. `413` over
+`attachments.max_mb` (default 1024), `422` for an empty file.
 
 ```json
 { "id": 7, "created_at": "2026-10-15T10:02:11", "filename": "plan.pdf",
   "mime": "application/pdf", "size": 48211, "kind": "pdf",
   "text_status": "done", "text_error": null, "text_via": "pdf-text",
-  "pages": 3, "chars": 5120, "first_turn_id": 88 }
+  "pages": 3, "chars": 5120, "first_turn_id": 88, "transcript_id": null }
 ```
 `text_status`: `pending` | `working` | `done` | `failed` (see `text_error`) |
-`none` (nothing to read, or an image with no model that reads images).
+`none` (nothing to read, or an image with no model that reads images) |
+`idle` (audio or video nobody asked to transcribe).
 `first_turn_id` is the user turn that first carried it (null = not sent yet).
 
 **`GET /api/attachments`** `?q=&kind=&limit=` → `{ "items": [...] }`, newest first;
@@ -1215,7 +1250,8 @@ plain text render inline; anything else (HTML, SVG, ...) downloads as
 `application/octet-stream`, always with `Content-Security-Policy: sandbox`.
 
 **`POST /api/attachments/{id}/extract`** → read it again (after a failure, or once
-a model that reads images is loaded); returns at once, poll for the result.
+a model that reads images is loaded); for audio and video, transcribe it.
+Returns at once; poll for the result.
 
 **`DELETE /api/attachments/{id}`** → `{ "deleted": id }` for an upload that was never
 sent; `409` once a chat carries it.
@@ -1237,6 +1273,7 @@ Capture is inert; only the act (hold-send) gesture shows an item to a model.
 **`POST /api/scratch`** `{ "content": "…" }` → `{ "item": ScratchItem }` (kind
 `text` or `url`). **`POST /api/scratch/media`** multipart `file` + optional
 `content` (caption) → `{ "item" }` (kind `image` | `audio` | `video` | `file`).
+Streamed to disk; `413` over `scratch.max_media_mb` (default 1024).
 
 **`GET /api/scratch?limit=50&before=<id>&q=<text>&type=<filters>`** → the
 stream, newest first, unpinned items only: `{ "items": [...], "count": N,
@@ -1255,6 +1292,12 @@ else as a download). **`GET /api/scratch/{id}/preview/icon`** and
 **`/preview/image`** → a link item's stored favicon or YouTube thumbnail
 (`404` when there is none). **`DELETE /api/scratch/{id}`** → `{ "deleted": id }`.
 **`POST /api/scratch/{id}/act`** → `{ "item" }` after the one-shot action.
+For an attached recording or video it's a transcription instead (like a held
+YouTube link): `action_result.kind` `transcript`, `transcript_id` set, the
+transcript on the Transcripts page (§16, source `scratch`) and the job running
+in the background. A voice note recorded in the app (`media_name`
+`voice-note.*`) keeps the one-shot action: what was said is transcribed and
+the agent acts on it.
 
 ScratchItem: `{ id, created_at, kind, content, media_path, media_mime,
 media_size, media_hash, transcript, status, llm_readable, action_result,

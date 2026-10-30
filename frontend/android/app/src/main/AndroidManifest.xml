@@ -74,6 +74,10 @@
     <!-- WebView getUserMedia (calls + dictation). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- WebView getUserMedia for the in-app camera (photos to attach).
+         Not required: a device without one still installs. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Mic foreground service: screen-off call capture (Android 14+ needs
          the typed permission alongside the base one). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

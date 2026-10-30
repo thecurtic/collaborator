@@ -46,7 +46,7 @@ import {
   toTree,
   toTurnsPage,
 } from '@/domain/adapters';
-import { ApiRequestError, request, requestStream } from './http';
+import { ApiRequestError, request, requestStream, uploadForm } from './http';
 import type {
   ApiApproveResponse,
   ApiDraftsResponse,
@@ -540,7 +540,12 @@ export interface CollaboratorApi {
   /** Capture text/URL. Inert forever — zero model contact. */
   addScratch(content: string): Promise<ScratchItem>;
   /** Capture a file (photo/audio/anything) with an optional caption. */
-  addScratchMedia(file: File | Blob, filename: string, content?: string): Promise<ScratchItem>;
+  addScratchMedia(
+    file: File | Blob,
+    filename: string,
+    content?: string,
+    opts?: { signal?: AbortSignal; onProgress?: (fraction: number) => void },
+  ): Promise<ScratchItem>;
   /** Authenticated media bytes for an item (thumbnails, audio playback). */
   getScratchMedia(id: number): Promise<Blob>;
   /** A link item's stored favicon or YouTube thumbnail. */
@@ -566,7 +571,12 @@ export interface CollaboratorApi {
    * and full text; matches carry a snippet) and `tag` (exact). Comes with
    * the tag vocabulary in use, for the tag editor.
    */
-  listTranscripts(filter?: { channel?: string; q?: string; tag?: string }): Promise<TranscriptList>;
+  listTranscripts(filter?: {
+    channel?: string;
+    q?: string;
+    tag?: string;
+    source?: string;
+  }): Promise<TranscriptList>;
   /** Replace a transcript's tags ([] clears); returns it (no text). */
   setTranscriptTags(id: number, tags: string[]): Promise<Transcript>;
   /** One job including its full text. */
@@ -629,6 +639,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
         location: input.location,
         state: input.state,
         attachment_ids: input.attachmentIds?.length ? input.attachmentIds : undefined,
+        transcribe: input.transcribe || undefined,
         stream_id: input.streamId,
       }),
       signal,
@@ -660,6 +671,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
         // b23d8ea: opt-in per-turn location (absent = no placeholder).
         location: input.location,
         attachment_ids: input.attachmentIds?.length ? input.attachmentIds : undefined,
+        transcribe: input.transcribe || undefined,
         stream_id: input.streamId,
       }),
       signal,
@@ -1061,16 +1073,12 @@ class HttpCollaboratorApi implements CollaboratorApi {
     file: File | Blob,
     filename: string,
     content?: string,
+    opts?: { signal?: AbortSignal; onProgress?: (fraction: number) => void },
   ): Promise<ScratchItem> {
     const form = new FormData();
     form.append('file', file, filename);
     if (content) form.append('content', content);
-    // http.ts skips the JSON Content-Type for FormData (browser sets the
-    // multipart boundary itself).
-    const res = await request<{ item: ApiScratchItem }>('/api/scratch/media', {
-      method: 'POST',
-      body: form,
-    });
+    const res = await uploadForm<{ item: ApiScratchItem }>('/api/scratch/media', form, opts);
     return toScratchItem(res.item);
   }
 
@@ -1141,9 +1149,11 @@ class HttpCollaboratorApi implements CollaboratorApi {
     channel?: string;
     q?: string;
     tag?: string;
+    source?: string;
   }): Promise<TranscriptList> {
     const params = new URLSearchParams();
     if (filter?.channel) params.set('channel', filter.channel);
+    if (filter?.source) params.set('source', filter.source);
     if (filter?.q?.trim()) params.set('q', filter.q.trim());
     if (filter?.tag) params.set('tag', filter.tag);
     const qs = params.toString();
@@ -1153,6 +1163,7 @@ class HttpCollaboratorApi implements CollaboratorApi {
     return {
       items: (res.transcripts ?? []).map(toTranscript),
       vocabulary: res.vocabulary ?? [],
+      sources: res.sources ?? [],
     };
   }
 

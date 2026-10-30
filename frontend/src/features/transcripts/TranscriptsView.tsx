@@ -3,6 +3,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  FileAudio,
   FileVideo,
   Loader2,
   RefreshCw,
@@ -24,6 +25,21 @@ import { useLive } from '@/lib/live';
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
 }
+
+/** Filter-chip names for where a transcript's audio came from. */
+const SOURCE_LABEL: Record<string, string> = {
+  link: 'Links',
+  attachment: 'Chat files',
+  scratch: 'Scratch',
+};
+function sourceLabel(source: string): string {
+  return SOURCE_LABEL[source] ?? source.charAt(0).toUpperCase() + source.slice(1);
+}
+/** The detail page's line where a link transcript shows its URL. */
+const SOURCE_FROM: Record<string, string> = {
+  attachment: 'From a file sent in a chat',
+  scratch: 'From a Scratch capture',
+};
 
 function fmtDuration(s: number | null): string | null {
   if (s == null) return null;
@@ -162,14 +178,18 @@ function TranscriptDetail({
           {item && (
             <>
               <p className="mb-3 break-all text-xs text-muted-foreground">
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline-offset-2 hover:underline"
-                >
-                  {item.url}
-                </a>
+                {item.url ? (
+                  <a
+                    href={item.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline-offset-2 hover:underline"
+                  >
+                    {item.url}
+                  </a>
+                ) : (
+                  <span>{SOURCE_FROM[item.source] ?? `From ${item.source}`}</span>
+                )}
                 {fmtDuration(item.durationS) && (
                   <span> · {fmtDuration(item.durationS)}</span>
                 )}
@@ -245,6 +265,8 @@ export function TranscriptsView({
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
   const [channel, setChannel] = useState<string | null>(null);
+  const [source, setSource] = useState<string | null>(null);
+  const [sources, setSources] = useState<{ source: string; count: number }[]>([]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query), 300);
@@ -257,14 +279,16 @@ export function TranscriptsView({
       const list = await api.listTranscripts({
         channel: channel ?? undefined,
         q: debounced,
+        source: source ?? undefined,
       });
       setItems(list.items);
       setVocabulary(list.vocabulary);
+      setSources(list.sources);
     } catch (err) {
       setError(errMessage(err));
       setItems([]);
     }
-  }, [channel, debounced]);
+  }, [channel, debounced, source]);
   useLive(['transcripts'], () => void load());
 
   // Optimistic delete (house style): remove, restore in place on failure.
@@ -353,6 +377,27 @@ export function TranscriptsView({
           )}
         </label>
         {onSearchEverywhere && <SearchEverywhere q={query} onSearch={onSearchEverywhere} />}
+        {(sources.length > 1 || source) && (
+          <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5">
+            {[{ source: null as string | null, count: 0 }, ...sources].map((s) => (
+              <button
+                key={s.source ?? 'all'}
+                type="button"
+                aria-pressed={source === s.source}
+                onClick={() => setSource(s.source)}
+                className={cn(
+                  'shrink-0 rounded-full border px-2.5 py-0.5 text-xs',
+                  source === s.source
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border text-muted-foreground hover:bg-muted',
+                )}
+              >
+                {s.source == null ? 'All' : sourceLabel(s.source)}
+                {s.source != null && <span className="ml-1 opacity-70">{s.count}</span>}
+              </button>
+            ))}
+          </div>
+        )}
         {channel && (
           <button
             type="button"
@@ -370,7 +415,7 @@ export function TranscriptsView({
           <p className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
           </p>
-        ) : items.length === 0 && (channel || debounced.trim()) ? (
+        ) : items.length === 0 && (channel || source || debounced.trim()) ? (
           <p className="px-4 py-10 text-center text-sm text-muted-foreground">
             No transcripts match.
           </p>
@@ -381,8 +426,9 @@ export function TranscriptsView({
               No transcripts yet
             </p>
             <p className="mt-1 px-8 text-sm">
-              Ask the agent to transcribe a video — long ones run in the
-              background and land here.
+              Ask the agent to transcribe a video, or hold send on a
+              recording or video you attach — long ones run in the background
+              and land here.
             </p>
           </div>
         ) : (
@@ -394,7 +440,11 @@ export function TranscriptsView({
                   onClick={() => setSelectedId(t.id)}
                   className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/60 active:bg-muted"
                 >
-                  <FileVideo className="h-4 w-4 shrink-0 text-primary/70" />
+                  {t.source === 'link' ? (
+                    <FileVideo className="h-4 w-4 shrink-0 text-primary/70" />
+                  ) : (
+                    <FileAudio className="h-4 w-4 shrink-0 text-primary/70" />
+                  )}
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-foreground">
                       {t.title ?? t.url}
@@ -424,6 +474,7 @@ export function TranscriptsView({
                         {[
                           // Leading dot only when a channel precedes it.
                           ...(t.channel ? [''] : []),
+                          t.source !== 'link' && !source ? sourceLabel(t.source) : null,
                           fmtDuration(t.durationS),
                           fmtDate(t.createdAt),
                         ]

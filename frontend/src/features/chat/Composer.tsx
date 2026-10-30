@@ -1,8 +1,10 @@
 import {
   AlertCircle,
+  Camera,
   GitBranch,
   Loader2,
   Mic,
+  Paperclip,
   Phone,
   Plus,
   SendHorizontal,
@@ -19,10 +21,12 @@ import {
   useRef,
   useState,
 } from 'react';
+import { ActionSheet } from '@/components/ActionSheet';
 import { Button } from '@/components/ui/button';
 import type { Attachment } from '@/domain/models';
-import { attachmentsApi, formatSize } from '@/features/attachments/attachmentsApi';
+import { attachmentsApi, formatSize, isMediaFile } from '@/features/attachments/attachmentsApi';
 import { kindIcon } from '@/features/attachments/AttachmentViews';
+import { CameraSheet } from '@/features/attachments/CameraSheet';
 import { useDictation } from '@/features/voice/useDictation';
 import { useWakeLock } from '@/features/voice/useWakeLock';
 import { useLongPress } from '@/lib/useLongPress';
@@ -43,8 +47,9 @@ interface ComposerProps {
   /**
    * Resolves false if the send failed OR was stopped mid-response — the
    * draft (and its attachments) is then restored for tweak-and-resend.
+   * `transcribe`: sent with a hold, so its audio and video get transcribed.
    */
-  onSend: (message: string, attachments: Attachment[]) => Promise<boolean>;
+  onSend: (message: string, attachments: Attachment[], transcribe?: boolean) => Promise<boolean>;
   /** Abort the in-flight response stream (shown as a stop button). */
   onStop?: () => void;
   /** A stop was asked for and the reply is winding down. */
@@ -72,12 +77,17 @@ interface PendingFile {
   /** Local preview for images (revoked when the chip goes). */
   previewUrl: string | null;
   status: 'uploading' | 'ready' | 'error';
+  /** 0–1 while uploading. */
+  progress: number;
+  /** Audio or video (sending it with a hold transcribes it). */
+  media: boolean;
   attachment?: Attachment;
   error?: string;
   abort?: AbortController;
 }
 
 let pendingSeq = 0;
+
 
 export function Composer({
   disabled,
@@ -95,6 +105,8 @@ export function Composer({
   // device sees them); the message only carries their ids.
   const [files, setFiles] = useState<PendingFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [addMenu, setAddMenu] = useState(false);
+  const [camera, setCamera] = useState(false);
   // Streaming dictation: transcribes WHILE you speak (live partial below the
   // input), so the final text lands near-instantly when you tap stop.
   const {
@@ -143,7 +155,9 @@ export function Composer({
         const key = `f${++pendingSeq}`;
         const name = file.name || 'pasted-file';
         void attachmentsApi
-          .upload(file, name, abort.signal)
+          .upload(file, name, abort.signal, (progress) =>
+            setFiles((cur) => cur.map((f) => (f.key === key ? { ...f, progress } : f))),
+          )
           .then((attachment) =>
             setFiles((cur) =>
               cur.map((f) => (f.key === key ? { ...f, status: 'ready', attachment } : f)),
@@ -165,6 +179,8 @@ export function Composer({
           size: file.size,
           previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
           status: 'uploading',
+          progress: 0,
+          media: isMediaFile(file.type, name),
           abort,
         };
       });
@@ -188,7 +204,7 @@ export function Composer({
   const uploading = files.some((f) => f.status === 'uploading');
   const ready = files.filter((f) => f.status === 'ready' && f.attachment);
 
-  async function submit() {
+  async function submit(transcribe = false) {
     const trimmed = value.trim();
     if ((!trimmed && ready.length === 0) || disabled || uploading) return;
     // Clear optimistically (the streaming bubble shows the text); restore the
@@ -199,6 +215,7 @@ export function Composer({
     const ok = await onSend(
       trimmed,
       ready.map((f) => f.attachment as Attachment),
+      transcribe,
     );
     if (!ok) {
       setValue((v) => (v ? v : trimmed));
@@ -258,12 +275,19 @@ export function Composer({
 
   const error = dictationError ?? voiceNotice;
   const hasDraft = value.trim().length > 0 || files.length > 0;
+  const hasMedia = files.some((f) => f.media);
 
   // Hold send → the draft becomes a call's opening turn (the call button is
-  // hidden while a draft exists, so the hold IS the entry point). A normal
-  // tap falls through to the form submit; useLongPress swallows the click
-  // that follows a hold, so holding never also sends.
+  // hidden while a draft exists, so the hold IS the entry point). With a
+  // recording or video attached, the hold means "transcribe it" instead
+  // (as holding send does in Scratch); a tap sends it untranscribed. A
+  // normal tap falls through to the form submit; useLongPress swallows the
+  // click that follows a hold, so holding never also sends.
   const sendHold = useLongPress(() => {
+    if (hasMedia) {
+      void submit(true);
+      return;
+    }
     const draft = value.trim();
     // Files go along as a hand-over; wait for them to finish uploading.
     if ((!draft && ready.length === 0) || disabled || !onStartCall || uploading)
@@ -335,7 +359,7 @@ export function Composer({
                     key={f.key}
                     className={cn(
                       'relative flex shrink-0 items-center gap-1.5 rounded-lg border bg-muted/60 text-xs',
-                      f.previewUrl ? 'p-0' : 'max-w-[13rem] py-1.5 pl-2 pr-7',
+                      f.previewUrl ? 'p-0' : 'max-w-[15rem] py-1.5 pl-2 pr-7',
                       f.status === 'error' ? 'border-destructive/60' : 'border-border',
                     )}
                     title={f.error ?? f.name}
@@ -347,13 +371,22 @@ export function Composer({
                         <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
                         <span className="min-w-0">
                           <span className="block truncate font-medium text-foreground">{f.name}</span>
-                          <span className="block text-muted-foreground">
-                            {f.status === 'error' ? 'Upload failed' : formatSize(f.size)}
+                          <span
+                            className={cn(
+                              'block',
+                              f.status === 'error' ? 'text-destructive' : 'text-muted-foreground',
+                            )}
+                          >
+                            {f.status === 'error'
+                              ? (f.error ?? 'Upload failed')
+                              : f.status === 'uploading' && f.size > 2_000_000
+                                ? `${Math.round(f.progress * 100)}% of ${formatSize(f.size)}`
+                                : formatSize(f.size)}
                           </span>
                         </span>
                       </>
                     )}
-                    {f.status === 'uploading' && (
+                    {f.status === 'uploading' && (f.previewUrl || f.size <= 2_000_000) && (
                       <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/50">
                         <Loader2 className="h-4 w-4 animate-spin text-foreground" />
                       </span>
@@ -375,6 +408,11 @@ export function Composer({
                 );
               })}
             </div>
+          )}
+          {hasMedia && (
+            <p className="mb-1 px-1 text-[11px] text-muted-foreground">
+              Tap send to send it as is · hold send to transcribe it
+            </p>
           )}
           <textarea
             ref={textareaRef}
@@ -407,9 +445,9 @@ export function Composer({
               variant="ghost"
               size="icon"
               disabled={files.length >= MAX_ATTACHMENTS}
-              onClick={() => fileInputRef.current?.click()}
-              aria-label="Attach files"
-              title="Attach photos or files"
+              onClick={() => setAddMenu(true)}
+              aria-label="Add photos or files"
+              title="Camera, photos or files"
               className="h-9 w-9 rounded-full text-muted-foreground"
             >
               <Plus className="h-5 w-5" />
@@ -455,9 +493,17 @@ export function Composer({
                   type="submit"
                   size="icon"
                   disabled={disabled || uploading}
-                  {...(onStartCall ? sendHold : {})}
-                  aria-label="Send message (hold to continue in a call)"
-                  title="Send · hold to talk it out in a call instead"
+                  {...(onStartCall || hasMedia ? sendHold : {})}
+                  aria-label={
+                    hasMedia
+                      ? 'Send (hold to transcribe the recording)'
+                      : 'Send message (hold to continue in a call)'
+                  }
+                  title={
+                    hasMedia
+                      ? 'Tap: send the file as is · Hold: transcribe it'
+                      : 'Send · hold to talk it out in a call instead'
+                  }
                   className="h-9 w-9 select-none rounded-full"
                 >
                   <SendHorizontal className="h-4 w-4" />
@@ -481,6 +527,19 @@ export function Composer({
           </div>
         </div>
       </form>
+      <ActionSheet
+        open={addMenu}
+        actions={[
+          { label: 'Camera', icon: Camera, onSelect: () => setCamera(true) },
+          {
+            label: 'Photos and files',
+            icon: Paperclip,
+            onSelect: () => fileInputRef.current?.click(),
+          },
+        ]}
+        onClose={() => setAddMenu(false)}
+      />
+      <CameraSheet open={camera} onClose={() => setCamera(false)} onDone={addFiles} />
     </div>
   );
 }

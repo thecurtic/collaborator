@@ -146,7 +146,7 @@ export function toTurnAttachment(api: ApiTurnAttachment): TurnAttachment {
   };
 }
 
-const TEXT_STATUSES = ['pending', 'working', 'done', 'failed', 'none'] as const;
+const TEXT_STATUSES = ['pending', 'working', 'done', 'failed', 'none', 'idle'] as const;
 
 export function toAttachment(api: ApiAttachment): Attachment {
   return {
@@ -160,6 +160,7 @@ export function toAttachment(api: ApiAttachment): Attachment {
     pages: api.pages ?? null,
     chars: api.chars ?? 0,
     firstTurnId: api.first_turn_id ?? null,
+    transcriptId: api.transcript_id ?? null,
     text: api.text,
   };
 }
@@ -321,6 +322,7 @@ export function toTranscript(api: ApiTranscript): Transcript {
   return {
     id: api.id,
     url: typeof api.url === 'string' ? api.url : '',
+    source: typeof api.source === 'string' && api.source ? api.source : 'link',
     title: api.title ?? null,
     channel: typeof api.channel === 'string' && api.channel ? api.channel : null,
     durationS: typeof api.duration_s === 'number' ? api.duration_s : null,

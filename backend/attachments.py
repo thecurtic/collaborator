@@ -12,7 +12,10 @@ Extraction, per kind (stored in the row's `text`, `text_via` says how):
 - pdf       pypdfium2's text layer page by page; a page with no text layer
             (a scan) is rendered and read by the vision model;
 - image     the vision model transcribes any text and describes the rest;
-- audio / video  the speech-to-text stack (voice.transcribe_batch).
+- audio / video  the speech-to-text stack, ONLY when the user asks (holding
+            send); until then they stay 'idle'. The transcript is a row in
+            the transcripts table (media_transcripts, source 'attachment')
+            and its text is copied back here.
 There is no separate OCR engine and no second model: anything that needs
 eyes goes through vision.py, i.e. the chat model.
 
@@ -35,6 +38,7 @@ import os
 import queue
 import re
 import sqlite3
+import tempfile
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
@@ -42,6 +46,8 @@ from typing import Dict, List, Optional, Tuple
 from config import get_config
 
 KINDS = ("image", "pdf", "document", "text", "audio", "video", "file")
+# Transcribed only on request (the hold gesture), never on upload.
+MEDIA_KINDS = ("audio", "video")
 
 _TEXT_EXTS = {
     ".txt", ".md", ".markdown", ".rst", ".log", ".ini", ".cfg", ".conf",
@@ -92,6 +98,7 @@ def ensure_schema(conn) -> None:
             text TEXT,
             text_status TEXT NOT NULL DEFAULT 'pending',
                 -- pending | working | done | failed | none
+                -- | idle (audio/video not asked to be transcribed)
             text_error TEXT,
             text_via TEXT,
             pages INTEGER,
@@ -99,12 +106,16 @@ def ensure_schema(conn) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_attachments_sha ON attachments(sha256);
     """)
+    # transcript_id: an audio/video file's transcript (media_transcripts).
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(attachments)")}
+    if "transcript_id" not in cols:
+        conn.execute("ALTER TABLE attachments ADD COLUMN transcript_id INTEGER")
     conn.commit()
 
 
 _COLS = ("id", "created_at", "filename", "mime", "size", "sha256", "path",
          "kind", "text", "text_status", "text_error", "text_via", "pages",
-         "first_turn_id")
+         "first_turn_id", "transcript_id")
 
 
 def _row(r) -> Optional[dict]:
@@ -121,6 +132,7 @@ def public(att: dict, with_text: bool = False) -> dict:
                                "kind", "text_status", "text_error", "text_via",
                                "pages", "chars")}
     out["first_turn_id"] = att.get("first_turn_id")
+    out["transcript_id"] = att.get("transcript_id")
     if with_text:
         out["text"] = att.get("text")
     return out
@@ -208,16 +220,33 @@ def _safe_filename(name: Optional[str]) -> str:
     return name or "attachment"
 
 
+def max_mb() -> float:
+    return float(_cfg().get("max_mb", 1024))
+
+
 def save(db_path: str, data: bytes, filename: Optional[str],
          mime: Optional[str]) -> dict:
-    """Store an upload and queue its extraction. Identical bytes reuse the
-    existing attachment (and its extracted text). Raises ValueError when the
-    file is too large."""
-    max_mb = _cfg().get("max_mb", 50)
-    if len(data) > max_mb * 1024 * 1024:
-        raise ValueError(f"attachments are limited to {max_mb} MB")
+    """Store an upload held in memory (see save_received). Raises ValueError
+    when the file is too large."""
+    if len(data) > max_mb() * 1024 * 1024:
+        raise ValueError(f"attachments are limited to {max_mb():g} MB")
+    directory = store_dir(db_path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".upload-", dir=directory)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    return save_received(db_path, tmp, hashlib.sha256(data).hexdigest(),
+                         len(data), filename, mime)
+
+
+def save_received(db_path: str, tmp: str, digest: str, size: int,
+                  filename: Optional[str], mime: Optional[str]) -> dict:
+    """Store a file already written to `tmp` in the store directory
+    (uploads.receive) and queue its extraction. Identical bytes reuse the
+    existing attachment (and its extracted text). Audio and video wait to be
+    asked: they're transcribed only when sent with a hold (transcribe)."""
+    import uploads
     filename = _safe_filename(filename)
-    digest = hashlib.sha256(data).hexdigest()
     conn = sqlite3.connect(db_path)
     try:
         ensure_schema(conn)
@@ -225,8 +254,9 @@ def save(db_path: str, data: bytes, filename: Optional[str],
             f"SELECT {', '.join(_COLS)} FROM attachments WHERE sha256 = ? "
             "ORDER BY id LIMIT 1", (digest,)).fetchone()
         if existing:
+            uploads.discard(tmp)
             att = _row(existing)
-            if att["text_status"] == "failed":
+            if att["text_status"] == "failed" and att["kind"] not in MEDIA_KINDS:
                 conn.execute("UPDATE attachments SET text_status = 'pending', "
                              "text_error = NULL WHERE id = ?", (att["id"],))
                 conn.commit()
@@ -236,19 +266,15 @@ def save(db_path: str, data: bytes, filename: Optional[str],
         ext = os.path.splitext(filename)[1].lower()
         ext = ext if re.match(r"^\.[a-z0-9]{1,8}$", ext) else ""
         name = f"{digest}{ext}"
-        directory = store_dir(db_path)
-        os.makedirs(directory, exist_ok=True)
-        path = os.path.join(directory, name)
-        if not os.path.exists(path):
-            with open(path, "wb") as f:
-                f.write(data)
+        uploads.place(tmp, os.path.join(store_dir(db_path), name))
         kind = detect_kind(filename, mime)
-        status = "none" if kind == "file" else "pending"
+        status = ("none" if kind == "file" else
+                  "idle" if kind in MEDIA_KINDS else "pending")
         cur = conn.execute(
             "INSERT INTO attachments (created_at, filename, mime, size, sha256, "
             "path, kind, text_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (time.strftime("%Y-%m-%dT%H:%M:%S"), filename,
-             (mime or "").split(";")[0].strip() or None, len(data), digest,
+             (mime or "").split(";")[0].strip() or None, size, digest,
              name, kind, status))
         conn.commit()
         att = get(conn, cur.lastrowid)
@@ -256,6 +282,40 @@ def save(db_path: str, data: bytes, filename: Optional[str],
         conn.close()
     _queue_unless_waiting(db_path, att)
     return att
+
+
+def transcribe(db_path: str, att_id: int) -> Optional[dict]:
+    """Start (or reuse) the transcript of an audio/video attachment; the text
+    comes back onto the attachment when it's in, so the turn that carries
+    it, history and read_attachment read it like any extracted text. The
+    transcript itself lives on the Transcripts page (source 'attachment')."""
+    import media_transcripts
+    att = _reload(db_path, att_id)
+    if att is None or att["kind"] not in MEDIA_KINDS:
+        return att
+    if att["text_status"] == "done":
+        return att
+
+    def on_done(text, error):
+        if error:
+            _set(db_path, att_id, text_status="failed", text_error=error[:500])
+        else:
+            _set(db_path, att_id, text=text, text_status="done",
+                 text_error=None, text_via="speech-to-text")
+        with _done:
+            _done.notify_all()
+
+    _set(db_path, att_id, text_status="working", text_error=None)
+    try:
+        row = media_transcripts.start(
+            db_path, file_path(db_path, att), sha256=att["sha256"],
+            title=att["filename"], source="attachment",
+            source_ref=f"attachment:{att_id}", on_done=on_done)
+    except Exception as e:
+        _set(db_path, att_id, text_status="failed", text_error=str(e)[:500])
+        return _reload(db_path, att_id)
+    _set(db_path, att_id, transcript_id=row["id"])
+    return _reload(db_path, att_id)
 
 
 def _queue_unless_waiting(db_path: str, att: dict) -> None:
@@ -433,10 +493,12 @@ def extract(db_path: str, att_id: int) -> dict:
         att = get(conn, att_id)
     finally:
         conn.close()
-    if att is None or att["text_status"] in ("done", "none"):
+    if att is None or att["text_status"] in ("done", "none", "idle"):
         return att
-    _set(db_path, att_id, text_status="working")
     kind = att["kind"]
+    if kind in MEDIA_KINDS:
+        return transcribe(db_path, att_id)    # its own worker; returns at once
+    _set(db_path, att_id, text_status="working")
     try:
         text, via, pages = extract_file(file_path(db_path, att), kind, att.get("mime"))
         _set(db_path, att_id, text=text, text_status="done",
@@ -506,7 +568,7 @@ def resume_pending(db_path: str) -> int:
         conn.close()
     n = 0
     for att_id, kind, turn in rows:
-        if kind == "image" and turn is None:
+        if kind in ("image",) + MEDIA_KINDS and turn is None:
             continue                 # not sent yet: its turn will start it
         enqueue(db_path, att_id)
         n += 1
@@ -523,6 +585,8 @@ def resume_once(db_path: str) -> None:
             return
         _resumed.add(db_path)
     try:
+        import media_transcripts
+        media_transcripts.resume_once(db_path)
         resume_pending(db_path)
     except Exception as e:
         print(f"Warning: resuming attachment extraction failed: {e}")
@@ -582,6 +646,10 @@ def render_text(att: dict, budget: int, inline_image: bool = False) -> str:
         return head + f"\n(Still being read — read_attachment(id={att['id']}) fetches the text once it's ready.)"
     if status == "failed":
         return head + f"\n(Its contents couldn't be read: {att.get('text_error') or 'unknown error'}.)"
+    if status == "idle":
+        return head + ("\n(Not transcribed: the user sent it without asking for a "
+                       "transcript. Sending a file with a long press on send "
+                       "transcribes it.)")
     if att["kind"] == "image":
         return head + "\n(An image. No model here reads images, so only its name is known.)"
     return head + "\n(No text could be taken from this kind of file.)"
@@ -692,6 +760,10 @@ def read_tool(db_path: str, att_id, part: int = 1) -> dict:
                 "note": "still being read — try again on a later turn"}
     if att["text_status"] == "failed":
         return {**base, "status": "failed", "error": att.get("text_error")}
+    if att["text_status"] == "idle":
+        return {**base, "status": "not_transcribed",
+                "note": "the user didn't ask for this recording to be transcribed; "
+                        "they can send it again with a long press on send"}
     text = att.get("text") or ""
     if not text:
         return {**base, "status": "none",

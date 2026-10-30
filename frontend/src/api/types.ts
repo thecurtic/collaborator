@@ -181,6 +181,7 @@ export interface ApiAttachment extends ApiTurnAttachment {
   pages: number | null;
   chars: number;
   first_turn_id: number | null;
+  transcript_id?: number | null;
   text?: string | null;
   snippet?: string;
 }
@@ -437,7 +438,10 @@ export interface ApiModelsResponse {
 /** One video-transcription job (b23d8ea). */
 export interface ApiTranscript {
   id: number;
-  url: string;
+  /** null for a file of the user's own (source attachment | scratch). */
+  url: string | null;
+  /** link | attachment | scratch (absent on old servers = link). */
+  source?: string;
   title?: string | null;
   channel?: string | null;
   duration_s?: number | null;
@@ -458,6 +462,8 @@ export interface ApiTranscriptsResponse {
   count: number;
   /** Every tag in use (notes, chats, transcripts), most used first. */
   vocabulary?: string[];
+  /** The sources in use, with counts (the page's filter chips). */
+  sources?: { source: string; count: number }[];
 }
 
 /** GET /api/transcripts/{id} */

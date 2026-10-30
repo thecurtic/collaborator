@@ -271,7 +271,7 @@ def load_config() -> dict:
         "scratch": {
             # Notes-to-self capture pipe. Inert by default; the LLM touches an
             # item only via POST /api/scratch/{id}/act (the hold-send gesture).
-            "max_media_mb": 50,
+            "max_media_mb": 1024,       # per file (streamed to disk)
             "max_rounds": 4,             # tool rounds for the one-shot action
             "action_prompt_file": "scratch-action-prompt.md",  # editable layer
             # Links show their page title + favicon, YouTube links their
@@ -334,7 +334,7 @@ def load_config() -> dict:
             # content-addressed under the user's data directory; text is
             # extracted once (markitdown, pypdfium2, the chat model's vision,
             # speech-to-text) and stored with the attachment.
-            "max_mb": 50,             # per file
+            "max_mb": 1024,           # per file (streamed to disk)
             "inline_chars": 12000,    # extracted text sent with the turn it's attached to
             "history_chars": 3000,    # ...and with later turns (read_attachment has the rest)
             "return_chars": 15000,    # per read_attachment part

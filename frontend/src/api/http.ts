@@ -108,3 +108,60 @@ export async function requestStream(
 ): Promise<Response> {
   return send(path, init);
 }
+
+/**
+ * POST a form with upload progress (fetch can't report it): big recordings
+ * and videos take a while on a phone, so the chip shows how far along it is.
+ * Same auth, errors and abort behaviour as request().
+ */
+export function uploadForm<T>(
+  path: string,
+  form: FormData,
+  opts: { signal?: AbortSignal; onProgress?: (fraction: number) => void } = {},
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE_URL}${path}`);
+    const token = getSessionToken();
+    if (token) xhr.setRequestHeader('X-Session', token);
+    xhr.setRequestHeader('X-Client-Id', CLIENT_ID);
+    if (opts.onProgress) {
+      const report = opts.onProgress;
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && e.total > 0) report(e.loaded / e.total);
+      };
+    }
+    const abort = () => xhr.abort();
+    opts.signal?.addEventListener('abort', abort);
+    const done = () => opts.signal?.removeEventListener('abort', abort);
+    xhr.onabort = () => {
+      done();
+      reject(new DOMException('Upload cancelled', 'AbortError'));
+    };
+    xhr.onerror = () => {
+      done();
+      reject(new ApiRequestError('Network error — the upload didn’t go through.', 0));
+    };
+    xhr.onload = () => {
+      done();
+      const res = new Response(xhr.responseText, { status: xhr.status });
+      if (xhr.status >= 200 && xhr.status < 300) {
+        res.json().then((body) => resolve(body as T), reject);
+        return;
+      }
+      if (xhr.status === 403 || xhr.status === 401) notifyForbidden();
+      const fallback =
+        xhr.status === 413 ? 'That file is too large to upload.' : xhr.statusText;
+      parseError(res).then(
+        (msg) =>
+          reject(new ApiRequestError(msg === '' || /^Request failed/.test(msg) ? fallback || msg : msg, xhr.status)),
+        () => reject(new ApiRequestError(fallback, xhr.status)),
+      );
+    };
+    if (opts.signal?.aborted) {
+      reject(new DOMException('Upload cancelled', 'AbortError'));
+      return;
+    }
+    xhr.send(form);
+  });
+}

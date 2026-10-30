@@ -1,4 +1,5 @@
 import {
+  Camera,
   Check,
   Loader2,
   Mic,
@@ -19,6 +20,7 @@ import { ActivityRow } from '@/components/ActivityRow';
 import { JumpToLatest } from '@/components/JumpToLatest';
 import { Thinking } from '@/components/Thinking';
 import { Button } from '@/components/ui/button';
+import { CameraSheet } from '@/features/attachments/CameraSheet';
 import { useDebugEnabled } from '@/features/settings/uiPrefs';
 import { useModalA11y } from '@/lib/useModalA11y';
 import { useScrollHold } from '@/lib/useScrollHold';
@@ -257,6 +259,7 @@ export function CallScreen({
   const dialogRef = useModalA11y<HTMLDivElement>(open);
   const fileRef = useRef<HTMLInputElement>(null);
   const [handMenu, setHandMenu] = useState(false);
+  const [camera, setCamera] = useState(false);
   const [textSheet, setTextSheet] = useState(false);
 
   // Paragraph currently being read — scrolling keys off this (not every
@@ -531,11 +534,13 @@ export function CallScreen({
         open={handMenu}
         title="Show it something — it goes with what you say next"
         actions={[
+          { label: 'Camera', icon: Camera, onSelect: () => setCamera(true) },
           { label: 'Photo or file', icon: Paperclip, onSelect: () => fileRef.current?.click() },
           { label: 'Text or a link', icon: Link2, onSelect: () => setTextSheet(true) },
         ]}
         onClose={() => setHandMenu(false)}
       />
+      <CameraSheet open={camera} onClose={() => setCamera(false)} onDone={addFiles} />
       <HandTextSheet
         open={textSheet}
         onClose={() => setTextSheet(false)}

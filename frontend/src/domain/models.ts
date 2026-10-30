@@ -102,13 +102,16 @@ export interface TurnAttachment {
 /** An uploaded file (POST /api/attachments) and the state of its text. */
 export interface Attachment extends TurnAttachment {
   createdAt: string;
-  textStatus: 'pending' | 'working' | 'done' | 'failed' | 'none';
+  /** idle: audio/video sent without asking for a transcript. */
+  textStatus: 'pending' | 'working' | 'done' | 'failed' | 'none' | 'idle';
   textError: string | null;
   textVia: string | null;
   pages: number | null;
   chars: number;
   /** The user turn that first carried it; null = not sent yet. */
   firstTurnId: number | null;
+  /** Audio/video: its transcript on the Transcripts page, once asked for. */
+  transcriptId: number | null;
   /** Only on GET /api/attachments/{id}. */
   text?: string | null;
 }
@@ -156,6 +159,8 @@ export interface BranchInput {
   location?: TurnLocation;
   /** Uploaded attachments this message carries. */
   attachmentIds?: number[];
+  /** Transcribe the audio/video among them (the hold-send gesture). */
+  transcribe?: boolean;
   /**
    * Client-chosen id for the streamed reply, so it can be stopped with the
    * reply so far kept (api.stopStream).
@@ -273,11 +278,17 @@ export type ScratchFilter = 'links' | 'photos' | 'documents' | 'text' | 'voice';
 export interface TranscriptList {
   items: Transcript[];
   vocabulary: string[];
+  /** Sources in use with their counts (filter chips). */
+  sources: { source: string; count: number }[];
 }
 
 export interface Transcript {
   id: number;
+  /** '' for a file of the user's own (no URL). */
   url: string;
+  /** Where the audio came from: link (a video URL), attachment (a file sent
+   *  in a chat), scratch (a Scratch capture); future sources pass through. */
+  source: string;
   title: string | null;
   /** The video's channel/uploader (null for pre-2026-10-12 transcripts). */
   channel: string | null;
@@ -550,6 +561,8 @@ export interface SendMessageInput {
   state?: ConversationState;
   /** Uploaded attachments this message carries. */
   attachmentIds?: number[];
+  /** Transcribe the audio/video among them (the hold-send gesture). */
+  transcribe?: boolean;
   /**
    * Client-chosen id for the streamed reply, so it can be stopped with the
    * reply so far kept (api.stopStream).

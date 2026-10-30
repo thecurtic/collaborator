@@ -85,22 +85,28 @@ _EXT_BY_MIME = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"
                 "text/calendar": ".ics"}
 
 
-def save_media(db_path: str, data: bytes, mime: Optional[str],
-               filename: Optional[str] = None) -> Tuple[str, str, int]:
-    """Store bytes content-addressed. Returns (relative_path, sha256, size).
+def max_media_mb() -> float:
+    return float(_cfg().get("max_media_mb", 1024))
 
-    Filename = <sha256><ext>: identical content dedupes to one file, and the
-    hash column makes future sync a set-difference instead of a crawl.
-    """
-    max_mb = _cfg().get("max_media_mb", 50)
-    if len(data) > max_mb * 1024 * 1024:
-        raise ValueError(f"media exceeds the {max_mb}MB limit")
-    digest = hashlib.sha256(data).hexdigest()
+
+def _media_name(digest: str, mime: Optional[str], filename: Optional[str]) -> str:
+    """<sha256><ext>: identical content dedupes to one file, and the hash
+    column makes future sync a set-difference instead of a crawl."""
     ext = _EXT_BY_MIME.get((mime or "").split(";")[0].strip().lower())
     if not ext and filename and "." in filename:
         candidate = "." + filename.rsplit(".", 1)[1].lower()
         ext = candidate if re.match(r"^\.[a-z0-9]{1,8}$", candidate) else ""
-    name = f"{digest}{ext or ''}"
+    return f"{digest}{ext or ''}"
+
+
+def save_media(db_path: str, data: bytes, mime: Optional[str],
+               filename: Optional[str] = None) -> Tuple[str, str, int]:
+    """Store bytes content-addressed. Returns (relative_path, sha256, size)."""
+    max_mb = max_media_mb()
+    if len(data) > max_mb * 1024 * 1024:
+        raise ValueError(f"media exceeds the {max_mb:g} MB limit")
+    digest = hashlib.sha256(data).hexdigest()
+    name = _media_name(digest, mime, filename)
     directory = media_dir(db_path)
     os.makedirs(directory, exist_ok=True)
     path = os.path.join(directory, name)
@@ -108,6 +114,26 @@ def save_media(db_path: str, data: bytes, mime: Optional[str],
         with open(path, "wb") as f:
             f.write(data)
     return name, digest, len(data)
+
+
+def place_media(db_path: str, tmp: str, digest: str, mime: Optional[str],
+                filename: Optional[str] = None) -> str:
+    """Move an upload streamed to disk (uploads.receive, into media_dir)
+    to its content-addressed name; returns that name."""
+    import uploads
+    name = _media_name(digest, mime, filename)
+    uploads.place(tmp, os.path.join(media_dir(db_path), name))
+    return name
+
+
+VOICE_NOTE_PREFIX = "voice-note."
+
+
+def is_voice_note(row: dict) -> bool:
+    """Recorded in the app (the mic's swipe-up), not an attached file: a
+    hold on it lets the agent act on what was said, while an attached
+    recording's hold makes a transcript."""
+    return (row.get("media_name") or "").startswith(VOICE_NOTE_PREFIX)
 
 
 def delete_media_if_unshared(db_path: str, row: dict) -> None:

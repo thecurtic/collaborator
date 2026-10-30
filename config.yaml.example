@@ -237,7 +237,7 @@ notifications:
 
 # Scratch (notes to self). Capture never touches a model; hold-send does.
 scratch:
-  max_media_mb: 50
+  max_media_mb: 1024
   max_rounds: 4                # tool rounds for the hold-send action
   link_previews: true          # links show title + favicon, YouTube links title +
                                # thumbnail: fetched once on capture, same exit and
@@ -249,7 +249,7 @@ scratch:
 # (markitdown, PDF text layers, the chat model's vision for images and scans,
 # speech-to-text for audio/video) and kept with the attachment.
 attachments:
-  max_mb: 50                  # per file
+  max_mb: 1024                # per file; uploads stream to disk, so size costs no memory
   inline_chars: 12000         # extracted text sent with the turn it's attached to
   history_chars: 3000         # ...and with later turns (read_attachment has the rest)
   return_chars: 15000         # per read_attachment part

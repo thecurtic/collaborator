@@ -375,7 +375,7 @@ export function useConversation(reloadSignal: number) {
   const clearProposedDrafts = useCallback(() => setProposedDrafts([]), []);
 
   const send = useCallback(
-    async (message: string, attachmentIds: number[] = []): Promise<boolean> => {
+    async (message: string, attachmentIds: number[] = [], transcribe = false): Promise<boolean> => {
       const trimmed = message.trim();
       if (!trimmed && attachmentIds.length === 0) return true;
       const outcome = await runStream(trimmed || attachedLabel(attachmentIds), async (handlers, signal, streamId) =>
@@ -387,6 +387,7 @@ export function useConversation(reloadSignal: number) {
             tools: getToolsEnabled(),
             location: await currentLocation(),
             attachmentIds,
+            transcribe,
             streamId,
           },
           handlers,
@@ -419,6 +420,7 @@ export function useConversation(reloadSignal: number) {
       message: string,
       paragraphIndex?: number,
       attachmentIds: number[] = [],
+      transcribe = false,
     ): Promise<boolean> => {
       const trimmed = message.trim();
       if (!trimmed && attachmentIds.length === 0) return true;
@@ -435,6 +437,7 @@ export function useConversation(reloadSignal: number) {
             tools: getToolsEnabled(),
             location: await currentLocation(),
             attachmentIds,
+            transcribe,
             streamId,
           },
           handlers,
@@ -460,7 +463,12 @@ export function useConversation(reloadSignal: number) {
    * UI must only offer it on a leaf exchange.
    */
   const editResend = useCallback(
-    async (assistantId: number, message: string, addedIds: number[] = []): Promise<boolean> => {
+    async (
+      assistantId: number,
+      message: string,
+      addedIds: number[] = [],
+      transcribe = false,
+    ): Promise<boolean> => {
       const trimmed = message.trim();
       const { byId, parentOf } = indexRef.current;
       const a = byId.get(assistantId);
@@ -505,6 +513,7 @@ export function useConversation(reloadSignal: number) {
                 tools: getToolsEnabled(),
                 location: await currentLocation(),
                 attachmentIds,
+                transcribe,
                 streamId,
               },
               handlers,
@@ -517,6 +526,7 @@ export function useConversation(reloadSignal: number) {
                 tools: getToolsEnabled(),
                 location: await currentLocation(),
                 attachmentIds,
+                transcribe,
                 streamId,
                 ...(keepState ? { state: keepState } : {}),
               },

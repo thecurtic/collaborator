@@ -257,12 +257,16 @@ export function ChatView({
   };
 
   // Resolves false on failure so the composer can restore the lost draft.
-  const handleSend = (message: string, files: Attachment[] = []): Promise<boolean> => {
+  const handleSend = (
+    message: string,
+    files: Attachment[] = [],
+    transcribe = false,
+  ): Promise<boolean> => {
     const ids = files.map((f) => f.id);
     if (editTarget != null) {
       const target = editTarget;
       setEditTarget(null);
-      return editResend(target, message, ids);
+      return editResend(target, message, ids, transcribe);
     }
     if (branchTarget) {
       const result = branch(
@@ -270,11 +274,12 @@ export function ChatView({
         message,
         branchTarget.paragraphIndex,
         ids,
+        transcribe,
       );
       onBranchTargetChange(null);
       return result;
     }
-    return send(message, ids);
+    return send(message, ids, transcribe);
   };
 
   // Tapping a branch button arms the next send to fork from here. Every

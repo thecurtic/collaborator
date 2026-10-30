@@ -606,6 +606,9 @@ export function useCall(
               parentTurnId: pb.turnId,
               message,
               attachmentIds,
+              // A call has no tap-or-hold: a recording handed over is
+              // there to be heard, so it's transcribed.
+              transcribe: true,
               paragraphIndex: pb.paragraphIndex,
               commit: true,
               mode: 'voice',
@@ -629,6 +632,7 @@ export function useCall(
             {
               message,
               attachmentIds,
+              transcribe: true,
               parentTurnId: leafId ?? undefined, // continue the in-view branch
               commit: true,
               mode: 'voice',

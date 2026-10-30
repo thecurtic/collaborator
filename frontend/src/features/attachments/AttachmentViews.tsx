@@ -120,11 +120,15 @@ export function AttachmentStrip({
   );
 }
 
+const MEDIA = new Set(['audio', 'video']);
+
 function statusLine(a: Attachment): string {
   switch (a.textStatus) {
     case 'pending':
     case 'working':
-      return 'Being read…';
+      return MEDIA.has(a.kind) ? 'Being transcribed…' : 'Being read…';
+    case 'idle':
+      return 'Not transcribed.';
     case 'failed':
       return `Couldn’t be read: ${a.textError ?? 'unknown error'}`;
     case 'none':
@@ -283,11 +287,12 @@ export function AttachmentSheet({
               Save file
             </a>
           )}
-          {detail && (detail.textStatus === 'failed' || detail.textStatus === 'none') &&
+          {detail && (detail.textStatus === 'failed' || detail.textStatus === 'none' ||
+            detail.textStatus === 'idle') &&
             detail.kind !== 'file' && (
               <Button variant="secondary" className="flex-1" onClick={retry}>
                 <RefreshCw className="mr-1.5 h-4 w-4" />
-                Read again
+                {MEDIA.has(detail.kind) ? 'Transcribe' : 'Read again'}
               </Button>
             )}
         </div>

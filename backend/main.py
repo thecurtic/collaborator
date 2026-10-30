@@ -49,6 +49,8 @@ import recurrence
 import ditta
 import nwc
 import attachments
+import media_transcripts
+import uploads
 import vision
 import wallet
 import scratch
@@ -168,6 +170,9 @@ class UserMessage(BaseModel):
     location: Optional[dict] = None
     # Uploaded attachments (POST /api/attachments) carried by this turn.
     attachment_ids: Optional[List[int]] = None
+    # Transcribe the audio/video among them (the hold-send gesture); without
+    # it they go untranscribed.
+    transcribe: Optional[bool] = False
     # Client-chosen id for this streamed reply, so it can be stopped
     # (POST /api/streams/{stream_id}/stop) with the reply so far kept.
     stream_id: Optional[str] = None
@@ -212,6 +217,7 @@ class BranchRequest(BaseModel):
     recall: Optional[bool] = None
     location: Optional[dict] = None
     attachment_ids: Optional[List[int]] = None
+    transcribe: Optional[bool] = False
     # Client-chosen id for this streamed reply, so it can be stopped
     # (POST /api/streams/{stream_id}/stop) with the reply so far kept.
     stream_id: Optional[str] = None
@@ -674,8 +680,10 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                          "in the background — tell the user. Every result has "
                          "an id; read further with read_transcript."),
     "list_transcripts": ("The catalogue of transcripts the user already has: "
-                         "id, title, channel, length, date, status, tags. "
-                         "Cheap — call it freely when a video might be "
+                         "id, title, channel, length, date, status, tags, and "
+                         "source (link = a video URL; attachment or scratch = "
+                         "a recording or video of the user's own). Cheap — "
+                         "call it freely when a video or recording might be "
                          "relevant; optional query/channel/tag filters."),
     "read_transcript": ("Read a stored transcript by id (from list_transcripts "
                         "or transcribe_video), paged with chunk; query jumps "
@@ -2694,10 +2702,12 @@ async def health_check():
 _MAX_TURN_ATTACHMENTS = 10
 
 
-def _turn_attachments(db_path: str, ids: Optional[List[int]]):
+def _turn_attachments(db_path: str, ids: Optional[List[int]],
+                      transcribe: bool = False):
     """(attachment rows, history-budget reserve) for a turn's attachment_ids.
     404 for an unknown id. The reserve stands in for the text those
-    attachments will add, so history is trimmed to leave room for it."""
+    attachments will add, so history is trimmed to leave room for it.
+    `transcribe` starts the transcripts of audio and video among them."""
     ids = list(dict.fromkeys(ids or []))
     if not ids:
         return [], ""
@@ -2713,6 +2723,9 @@ def _turn_attachments(db_path: str, ids: Optional[List[int]]):
     if missing:
         raise HTTPException(status_code=404, detail=(
             f"no attachment {', '.join('#' + str(i) for i in sorted(missing))}"))
+    if transcribe:
+        rows = [attachments.transcribe(db_path, a["id"]) or a
+                if a["kind"] in attachments.MEDIA_KINDS else a for a in rows]
     budget = int((config.get("attachments") or {}).get("inline_chars", 12_000))
     reserve = sum(min(budget, max(a["chars"], a["size"] // 2)) + 200
                   for a in rows if a["kind"] != "image")
@@ -2743,7 +2756,8 @@ async def send_message(
         db_path = _resolve_db_path(passkey)
         ctx_turns = _effective_context_turns(request.context_turns)
         parent_id = request.parent_turn_id
-        turn_atts, turn_reserve = _turn_attachments(db_path, request.attachment_ids)
+        turn_atts, turn_reserve = _turn_attachments(
+            db_path, request.attachment_ids, bool(request.transcribe))
 
         # Build context from the active leaf's ancestor chain (the client tells us
         # which branch is active via parent_turn_id). Omitted -> fresh root.
@@ -2821,7 +2835,8 @@ async def create_branch(
     try:
         db_path = _resolve_db_path(passkey)
         ctx_turns = _effective_context_turns(request.context_turns)
-        turn_atts, turn_reserve = _turn_attachments(db_path, request.attachment_ids)
+        turn_atts, turn_reserve = _turn_attachments(
+            db_path, request.attachment_ids, bool(request.transcribe))
 
         conn = sqlite3.connect(db_path)
         try:
@@ -3874,14 +3889,14 @@ async def create_scratch_media(
     sync integrations."""
     _require_auth(passkey)
     db_path = _resolve_db_path(passkey)
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=422, detail="empty file")
     try:
-        name, digest, size = scratch.save_media(
-            db_path, data, file.content_type, file.filename)
+        tmp, digest, size = await uploads.receive(
+            file, scratch.media_dir(db_path), scratch.max_media_mb())
     except ValueError as e:
-        raise HTTPException(status_code=413, detail=str(e))
+        raise HTTPException(status_code=422 if "empty" in str(e) else 413,
+                            detail=str(e))
+    name = scratch.place_media(db_path, tmp, digest, file.content_type,
+                               file.filename)
     kind = scratch.detect_kind(None, file.content_type)
     conn = sqlite3.connect(db_path)
     try:
@@ -4128,6 +4143,31 @@ async def act_on_scratch(
         return {"item": _finish("pending", result, draft_id=result["draft_id"],
                                 llm_readable=False)}
 
+    if kind in ("audio", "video") and row.get("media_path") \
+            and not scratch.is_voice_note(row):
+        # An attached recording or video: holding send transcribes it onto
+        # the Transcripts page (source 'scratch'), as a held link does. The
+        # transcript is model-readable only while this item is.
+        path = os.path.join(scratch.media_dir(db_path), row["media_path"])
+        if not os.path.exists(path):
+            raise HTTPException(status_code=404, detail="media file missing")
+
+        try:
+            tr = await asyncio.to_thread(
+                media_transcripts.start, db_path, path,
+                sha256=row.get("media_hash") or "", source="scratch",
+                source_ref=f"scratch:{scratch_id}",
+                title=(row.get("content") or "").strip()[:200] or row.get("media_name")
+                or "Recording")
+        except ValueError as e:
+            return {"item": _finish("done", {"kind": "error", "note": str(e)})}
+        done = tr["status"] == "done"
+        return {"item": _finish("done", {
+            "kind": "transcript", "status": tr["status"], "title": tr.get("title"),
+            "note": ("Transcript ready." if done
+                     else "Transcribing in the background — check transcripts.")},
+            transcript_id=tr["id"], llm_readable=True)}
+
     if kind in ("image", "video", "file") and row.get("media_path"):
         # The same pipeline as chat attachments: text out of documents and
         # PDFs, the chat model's eyes on photos and scans, speech-to-text
@@ -4236,14 +4276,15 @@ async def upload_attachment(
     when identical bytes were uploaded before). Attach it to a message with
     attachment_ids."""
     db_path = _attachments_db(passkey)
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=422, detail="empty file")
     try:
-        att = await asyncio.to_thread(
-            attachments.save, db_path, data, file.filename, file.content_type)
+        tmp, digest, size = await uploads.receive(
+            file, attachments.store_dir(db_path), attachments.max_mb())
     except ValueError as e:
-        raise HTTPException(status_code=413, detail=str(e))
+        raise HTTPException(status_code=422 if "empty" in str(e) else 413,
+                            detail=str(e))
+    att = await asyncio.to_thread(
+        attachments.save_received, db_path, tmp, digest, size,
+        file.filename, file.content_type)
     return {"attachment": attachments.public(att)}
 
 
@@ -4321,14 +4362,19 @@ def retry_attachment_extract(
         att = attachments.get(conn, attachment_id)
         if att is None:
             raise HTTPException(status_code=404, detail=f"No attachment {attachment_id}")
-        if att["text_status"] in ("failed", "none", "done") and att["kind"] != "file":
+        if att["kind"] in attachments.MEDIA_KINDS:
+            pass                                   # transcribed below
+        elif att["text_status"] in ("failed", "none", "done") and att["kind"] != "file":
             conn.execute("UPDATE attachments SET text_status = 'pending', "
                          "text_error = NULL WHERE id = ?", (attachment_id,))
             conn.commit()
         att = attachments.get(conn, attachment_id)
     finally:
         conn.close()
-    if att["text_status"] == "pending":
+    if att["kind"] in attachments.MEDIA_KINDS:
+        # Audio and video: this is the explicit "transcribe it" request.
+        att = attachments.transcribe(db_path, attachment_id)
+    elif att["text_status"] == "pending":
         attachments.enqueue(db_path, attachment_id)
     return {"attachment": attachments.public(att)}
 
@@ -4431,30 +4477,34 @@ async def list_video_transcripts(
     channel: Optional[str] = None,
     q: Optional[str] = None,
     tag: Optional[str] = None,
+    source: Optional[str] = None,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
 ):
-    """Video transcription jobs (status + metadata; text via /api/transcripts/{id}).
-    Long videos transcribe in the background — this is where they surface.
+    """Transcription jobs (status + metadata; text via /api/transcripts/{id}):
+    links, and the user's own recordings and videos (attachments, Scratch).
+    Long ones transcribe in the background — this is where they surface.
     Optional ?channel= (substring, case-insensitive), ?q= (keywords over
-    title, channel, tags and text; matches carry a snippet) and ?tag= (exact
-    tag). `vocabulary` is every tag in use anywhere, for tag completion."""
+    title, channel, tags and text; matches carry a snippet), ?tag= (exact
+    tag) and ?source= (link | attachment | scratch). `vocabulary` is every
+    tag in use anywhere, for tag completion; `sources` the sources in use
+    with their counts."""
     _require_auth(passkey)
     try:
-        conn = sqlite3.connect(_resolve_db_path(passkey))
+        db_path = _resolve_db_path(passkey)
+        media_transcripts.resume_once(db_path)
+        conn = sqlite3.connect(db_path)
         try:
-            if channel or q or tag:
-                from db import search_transcripts
-                transcripts = search_transcripts(
-                    conn, q, channel=channel,
-                    tag=_normalize_tag(tag) if tag else None)
-            else:
-                from db import list_transcripts
-                transcripts = list_transcripts(conn)
+            from db import search_transcripts, transcript_sources
+            transcripts = search_transcripts(
+                conn, q, channel=channel,
+                tag=_normalize_tag(tag) if tag else None,
+                source=source or None)
             vocabulary = _tag_vocabulary(conn)
+            sources = transcript_sources(conn)
         finally:
             conn.close()
         return {"transcripts": transcripts, "count": len(transcripts),
-                "vocabulary": vocabulary}
+                "vocabulary": vocabulary, "sources": sources}
     except HTTPException:
         raise
     except Exception as e:

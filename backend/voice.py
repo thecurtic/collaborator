@@ -120,7 +120,8 @@ def pcm_to_wav(pcm: bytes, sample_rate: int = SAMPLE_RATE) -> bytes:
 
 def _remote_transcribe(base: str, wav_bytes: bytes, model: str,
                        language: Optional[str], timeout: float,
-                       want_segments: bool = False):
+                       want_segments: bool = False,
+                       filename: str = "audio.wav"):
     """POST /audio/transcriptions -> (text, [(start_s, end_s, text)])."""
     import requests
     data = {"model": model,
@@ -129,7 +130,9 @@ def _remote_transcribe(base: str, wav_bytes: bytes, model: str,
         data["language"] = language
     r = requests.post(
         f"{base}/audio/transcriptions",
-        files={"file": ("audio.wav", wav_bytes, "audio/wav")},
+        files={"file": (filename, wav_bytes,
+                        "audio/wav" if filename.endswith(".wav")
+                        else "application/octet-stream")},
         data=data, headers=_auth_headers(stt_config()), timeout=timeout,
     )
     r.raise_for_status()
@@ -192,14 +195,19 @@ def decode_final_pcm(pcm: bytes, language: Optional[str] = None) -> str:
     return _decode(pcm, language, "final")[0]
 
 
-def transcribe_batch(audio, language: Optional[str] = None) -> str:
+def transcribe_batch(audio, language: Optional[str] = None,
+                     duration_s: Optional[float] = None) -> str:
     """One-shot transcription (file path or float32 array) with the final model.
-    Used by POST /api/transcribe and transcribe_video."""
+    Used by POST /api/transcribe, transcribe_video and file transcripts
+    (`duration_s`, when known, sizes the remote timeout)."""
     base = _stt_remote()
     if base:
+        filename = "audio.wav"
         if isinstance(audio, (str, os.PathLike)):
             with open(audio, "rb") as f:
                 wav = f.read()
+            if wav[:4] != b"RIFF":
+                filename = "audio" + (os.path.splitext(str(audio))[1] or ".bin")
         else:
             import numpy as np
             arr = np.clip(np.asarray(audio, dtype="float32"), -1.0, 1.0)
@@ -207,11 +215,19 @@ def transcribe_batch(audio, language: Optional[str] = None) -> str:
         # Scale the timeout with audio length (a 42-minute video is not a
         # tap-to-record utterance): assume 16k mono PCM16 (~32 KB/s) and allow
         # half of real-time on top of the configured floor.
-        audio_seconds = max(0, (len(wav) - 44)) / (SAMPLE_RATE * BYTES_PER_SAMPLE)
+        # A compressed file (not RIFF/WAV) of unknown length is assumed to
+        # be as dense as 24 kbit/s speech, so the timeout errs long.
+        if duration_s:
+            audio_seconds = float(duration_s)
+        elif wav[:4] == b"RIFF":
+            audio_seconds = max(0, (len(wav) - 44)) / (SAMPLE_RATE * BYTES_PER_SAMPLE)
+        else:
+            audio_seconds = len(wav) / 3000
         timeout = max(stt_config().get("remote_final_timeout", 120),
                       60 + audio_seconds / 2)
         return _remote_transcribe(
-            base, wav, _model_key("final")[0], language, timeout)[0]
+            base, wav, _model_key("final")[0], language, timeout,
+            filename=filename)[0]
     model, lock = _get_stt_model(*_model_key("final"))
     with lock:
         segments, _info = model.transcribe(audio, language=language or "en")

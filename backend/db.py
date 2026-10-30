@@ -260,9 +260,40 @@ def ensure_conversation_schema(conn) -> None:
         cursor.execute("ALTER TABLE transcripts ADD COLUMN tags TEXT")
     from video_urls import canonical_video
     for (tid, url) in cursor.execute(
-            "SELECT id, url FROM transcripts WHERE video_key IS NULL").fetchall():
+            "SELECT id, url FROM transcripts WHERE video_key IS NULL "
+            "AND url IS NOT NULL").fetchall():
         cursor.execute("UPDATE transcripts SET video_key = ? WHERE id = ?",
                        (canonical_video(url)[0], tid))
+    # source: where the audio came from — 'link' (a video/audio URL, the
+    # original kind), 'attachment' (a file sent in a chat) or 'scratch' (a
+    # Scratch capture); source_ref names the item ("attachment:12"). Files
+    # have no URL, so url became optional: SQLite can't drop NOT NULL in
+    # place, hence the one-time rebuild.
+    tr_info = cursor.execute("PRAGMA table_info(transcripts)").fetchall()
+    if any(r[1] == "url" and r[3] for r in tr_info):
+        keep = [r[1] for r in tr_info]
+        cursor.executescript(f"""
+            CREATE TABLE transcripts_rebuilt (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT,
+                title TEXT,
+                duration_s INTEGER,
+                status TEXT NOT NULL DEFAULT 'processing',
+                text TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                finished_at TEXT,
+                channel TEXT,
+                video_key TEXT,
+                tags TEXT,
+                source TEXT NOT NULL DEFAULT 'link',
+                source_ref TEXT
+            );
+            INSERT INTO transcripts_rebuilt ({', '.join(keep)})
+                SELECT {', '.join(keep)} FROM transcripts;
+            DROP TABLE transcripts;
+            ALTER TABLE transcripts_rebuilt RENAME TO transcripts;
+        """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_transcripts_key "
                    "ON transcripts(video_key)")
 
@@ -1336,7 +1367,8 @@ def delete_scratch(db, scratch_id: int) -> Optional[dict]:
 
 TRANSCRIPT_COLUMNS = ["id", "url", "title", "duration_s", "status", "text",
                       "error", "created_at", "finished_at", "channel",
-                      "video_key", "tags"]
+                      "video_key", "tags", "source", "source_ref"]
+TRANSCRIPT_SOURCES = ("link", "attachment", "scratch")
 _TRANSCRIPT_COLS = ", ".join(TRANSCRIPT_COLUMNS)
 
 
@@ -1360,6 +1392,55 @@ def create_transcript(db, url: str, title: Optional[str],
     db.commit()
     live.publish_conn(db, ["transcripts"])
     return get_transcript(db, cursor.lastrowid)
+
+
+def create_file_transcript(db, key: str, title: Optional[str],
+                           duration_s: Optional[int], source: str,
+                           source_ref: str) -> dict:
+    """New job row for a file of the user's own (media_transcripts). `key`
+    ("file:<sha256>") lets the same bytes reuse one transcript."""
+    cursor = db.cursor()
+    cursor.execute(
+        "INSERT INTO transcripts (url, title, duration_s, video_key, source, "
+        "source_ref) VALUES (NULL, ?, ?, ?, ?, ?)",
+        (title, duration_s, key, source, source_ref))
+    db.commit()
+    live.publish_conn(db, ["transcripts"])
+    return get_transcript(db, cursor.lastrowid)
+
+
+def get_transcript_by_key(db, key: str, source: str) -> Optional[dict]:
+    """Most recent transcript of these bytes from this source."""
+    row = db.cursor().execute(
+        f"SELECT {_TRANSCRIPT_COLS} FROM transcripts WHERE video_key = ? "
+        "AND source = ? ORDER BY id DESC LIMIT 1", (key, source)).fetchone()
+    return _transcript_row(row) if row else None
+
+
+def restart_transcript(db, transcript_id: int) -> None:
+    """Back to processing (a retry after a failure)."""
+    db.cursor().execute(
+        "UPDATE transcripts SET status = 'processing', error = NULL, "
+        "finished_at = NULL WHERE id = ?", (transcript_id,))
+    db.commit()
+    live.publish_conn(db, ["transcripts"])
+
+
+def transcripts_hidden_from_model(db) -> set:
+    """Ids of transcripts the model must not see: those of Scratch captures
+    the user hasn't made model-readable (Scratch is agent-blind unless the
+    item says otherwise; a deleted capture keeps its transcript private)."""
+    return {r[0] for r in db.cursor().execute(
+        "SELECT t.id FROM transcripts t WHERE t.source = 'scratch' AND NOT EXISTS "
+        "(SELECT 1 FROM scratch s WHERE s.transcript_id = t.id "
+        "AND s.llm_readable = 1)").fetchall()}
+
+
+def transcript_sources(db) -> List[dict]:
+    """[{source, count}] for the sources in use (the page's filter chips)."""
+    return [{"source": s, "count": n} for s, n in db.cursor().execute(
+        "SELECT source, COUNT(*) FROM transcripts GROUP BY source "
+        "ORDER BY COUNT(*) DESC").fetchall()]
 
 
 def set_transcript_result(db, transcript_id: int, text: Optional[str] = None,
@@ -1393,12 +1474,15 @@ def get_transcript_by_url(db, url: str) -> Optional[dict]:
 def search_transcripts(db, query: Optional[str] = None,
                        channel: Optional[str] = None,
                        limit: Optional[int] = None,
-                       tag: Optional[str] = None) -> List[dict]:
+                       tag: Optional[str] = None,
+                       source: Optional[str] = None,
+                       exclude: Optional[set] = None) -> List[dict]:
     """The transcript catalogue, newest first: metadata only, never the full
     text (read_transcript pages that by id). `query` keyword-matches title,
     channel, tags and full text (all terms) and adds a snippet around the
     first hit; `channel` keeps only that channel (case-insensitive
-    substring); `tag` keeps only transcripts wearing that exact tag.
+    substring); `tag` keeps only transcripts wearing that exact tag;
+    `source` only that source; `exclude` drops those ids.
     Errored rows are included with their error, so failures are visible."""
     rows = db.cursor().execute(
         f"SELECT {_TRANSCRIPT_COLS} FROM transcripts ORDER BY id DESC").fetchall()
@@ -1413,6 +1497,10 @@ def search_transcripts(db, query: Optional[str] = None,
         if want_channel and want_channel not in (d.get("channel") or "").lower():
             continue
         if want_tag and want_tag not in d["tags"]:
+            continue
+        if source and d.get("source") != source:
+            continue
+        if exclude and d["id"] in exclude:
             continue
         haystack = (f"{d.get('title') or ''}\n{d.get('channel') or ''}\n"
                     f"{' '.join(d['tags'])}\n{text}").lower()
