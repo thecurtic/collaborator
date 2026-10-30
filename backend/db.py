@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import live
 from typing import Optional, List, Dict
 from contextlib import contextmanager
 
@@ -1357,6 +1358,7 @@ def create_transcript(db, url: str, title: Optional[str],
         "VALUES (?, ?, ?, ?, ?)",
         (url, title, duration_s, channel, canonical_video(url)[0]))
     db.commit()
+    live.publish_conn(db, ["transcripts"])
     return get_transcript(db, cursor.lastrowid)
 
 
@@ -1367,6 +1369,7 @@ def set_transcript_result(db, transcript_id: int, text: Optional[str] = None,
         "finished_at = datetime('now') WHERE id = ?",
         ("error" if error else "done", text, error, transcript_id))
     db.commit()
+    live.publish_conn(db, ["transcripts"])
 
 
 def get_transcript(db, transcript_id: int) -> Optional[dict]:

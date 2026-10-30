@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/api/collaborator';
+import { useLive } from '@/lib/live';
 
 /**
  * App-level badge state: how many note drafts await review. Refreshed on
@@ -26,6 +27,8 @@ export function usePendingDrafts(enabled: boolean) {
   useEffect(() => {
     if (enabled) void refresh();
   }, [enabled, refresh]);
+
+  useLive(['drafts'], () => void refresh(), enabled);
 
   // Recount whenever the app returns to the foreground: drafts can appear
   // with no client-side event (aborted voice turns, other devices, backend

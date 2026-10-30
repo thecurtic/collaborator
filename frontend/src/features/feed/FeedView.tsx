@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 import { formatEventRange } from '@/features/notes/eventFields';
 import { QuestionCard } from '@/features/agents/QuestionCard';
 import { Linked } from '@/components/Linked';
+import { useLive } from '@/lib/live';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
@@ -187,6 +188,8 @@ export function FeedView({
   useEffect(() => {
     void load();
   }, [load]);
+  // The feed gathers from everything: any change elsewhere refreshes it.
+  useLive('*', () => void load());
 
   // Optimistic: the item moves at once (pinned on top, or back into the
   // stream); the server's order lands with the reload, a failure puts it back.

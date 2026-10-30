@@ -21,6 +21,7 @@ import { AgentArea } from '@/features/agents/AgentArea';
 import { TeamStrip } from '@/features/agents/ProjectTeam';
 import { useLongPress } from '@/lib/useLongPress';
 import { time, useProjectInference, type Member } from './useProjectInference';
+import { useLive } from '@/lib/live';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
@@ -157,6 +158,7 @@ export function ProjectsView({
   }, [reloadProjects]);
 
   useEffect(() => load(), [load]);
+  useLive(['chats', 'notes', 'transcripts', 'projects'], load);
 
   // Badges follow the agents live: a new question or flagged message, an
   // answer, a channel read. Coalesced, since a busy team is chatty.

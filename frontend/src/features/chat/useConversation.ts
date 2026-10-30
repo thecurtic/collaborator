@@ -33,6 +33,7 @@ import {
   type NodeIndex,
   type PathStep,
 } from './treePath';
+import { subscribeLive, useLive, type LiveReply } from '@/lib/live';
 
 /** The branch switcher shown on a node that has branch children. */
 export interface ForkInfo {
@@ -168,6 +169,35 @@ export function useConversation(reloadSignal: number) {
   useEffect(() => {
     void load();
   }, [load, reloadSignal]);
+
+  // Another device changed a chat (a turn, a name, a summary): reload the
+  // tree; the view stays where it is and follows new turns at its tip. Held
+  // while a reply streams here (that ends in a reload anyway).
+  useLive(['chats'], () => void load(), !sending);
+
+  // A reply streaming on another device, in the chat open here (it answers
+  // the turn at our tip): shown as it arrives, until the saved turns land.
+  const [remoteReply, setRemoteReply] = useState<LiveReply | null>(null);
+  useEffect(
+    () =>
+      subscribeLive(['reply'], (msg) => {
+        const r = msg?.reply;
+        if (!r) {
+          setRemoteReply(null); // resync after a gap: the reload has it
+          return;
+        }
+        if (r.done) {
+          setRemoteReply((cur) => (cur && cur.id === r.id ? r : cur));
+        } else if (r.parent != null && r.parent === leafRef.current) {
+          setRemoteReply(r);
+        }
+      }),
+    [],
+  );
+  // Gone once its turns are in the tree (or the view moved elsewhere).
+  useEffect(() => {
+    setRemoteReply((cur) => (cur?.done ? null : cur));
+  }, [tree]);
 
   /**
    * Background confirm for an optimistic mutation (treeEdits.ts prediction
@@ -598,10 +628,14 @@ export function useConversation(reloadSignal: number) {
   }, [version, selection]);
   // Kept in a ref so `send` (a stable callback) always reads the current leaf.
   leafRef.current = activeLeafId;
+  useEffect(() => {
+    setRemoteReply((cur) => (cur && cur.parent === activeLeafId ? cur : null));
+  }, [activeLeafId]);
 
   return {
     path,
     tree,
+    remoteReply,
     activeIds,
     activeLeafId,
     loading,

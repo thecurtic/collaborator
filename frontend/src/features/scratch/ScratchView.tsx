@@ -55,6 +55,7 @@ import {
 } from '@/features/notes/FieldsEditor';
 import { useDictation } from '@/features/voice/useDictation';
 import { scratchMediaUrl, scratchPreviewUrl } from './mediaCache';
+import { useLive } from '@/lib/live';
 
 const PAGE = 50;
 
@@ -704,6 +705,7 @@ export function ScratchView({
       setItems([]);
     }
   }, []);
+  useLive(['scratch'], () => void load(query.trim(), filter));
 
   // Full list immediately; searches debounced.
   useEffect(() => {

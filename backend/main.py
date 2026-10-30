@@ -57,6 +57,7 @@ import link_preview
 import gate_client
 import summaries
 import streams
+import live
 import search_context
 import unified_search
 import agents
@@ -119,7 +120,20 @@ async def session_middleware(request: Request, call_next):
     client_reset = auth.current_client.set(auth.client_key(
         request.client.host if request.client else None, request.headers))
     try:
-        return await call_next(request)
+        response = await call_next(request)
+        # A successful write: tell the user's other open apps (live.py).
+        # (A streamed reply announces itself when it's saved, not here.)
+        if (request.method in ("POST", "PUT", "PATCH", "DELETE")
+                and response.status_code < 400
+                and not response.headers.get("content-type", "").startswith("text/event-stream")):
+            areas = live.areas_for(request.url.path)
+            if areas:
+                try:
+                    live.publish(_resolve_db_path(request.headers.get("X-Passkey")), areas,
+                                 origin=request.headers.get("X-Client-Id"))
+                except Exception:
+                    pass   # unauthenticated / no user: nothing to tell
+        return response
     finally:
         auth.current_session.reset(reset)
         auth.current_client.reset(client_reset)
@@ -342,6 +356,7 @@ def _maybe_update_title(db_path: str, leaf_turn_id: int, force: bool = False):
         title = generate_title(chain)
         if title:
             set_turn_title(conn, root_id, title, count)
+            live.publish(db_path, ["chats"])
             return root_id, title
         return root_id, None
     finally:
@@ -2347,12 +2362,17 @@ def _stream_turn_response(
     location: Optional[dict] = None,
     turn_attachments: Optional[List[dict]] = None,
     stream: Optional["streams.Stream"] = None,
+    origin: Optional[str] = None,
 ):
     """Build the SSE generator that streams the reply and persists both turns.
 
     `stream` (streams.register) lets the client stop it: the reply so far is
     saved and the stream ends with a `done` marked `stopped`. A dropped
     connection saves what it has too (serve it through streams.closing).
+
+    While it streams, the user's other open apps get the reply so far
+    (live.publish_reply, at most twice a second), so a device with the same
+    chat open watches it arrive; `origin` is the sending app, which skips it.
 
     When tools are enabled, the model drives retrieval/synthesis via the tool loop
     (emitting `status` / `tool_result` / `token` events); a `synthesize` result is
@@ -2385,6 +2405,19 @@ def _stream_turn_response(
 
         def stop_requested() -> bool:
             return stream is not None and stream.stopped()
+
+        mirror = {"id": secrets.token_hex(6), "at": 0.0}
+
+        def mirror_reply(done: bool = False) -> None:
+            """Show the reply so far on the user's other devices."""
+            now = time.monotonic()
+            if not done and now - mirror["at"] < 0.5:
+                return
+            mirror["at"] = now
+            live.publish_reply(db_path, {
+                "id": mirror["id"], "parent": user_parent_id,
+                "paragraph": paragraph_index, "user": message,
+                "text": full_response, "done": done}, origin=origin)
 
         def persist():
             """Save the exchange as it stands (also what a stop or a dropped
@@ -2443,6 +2476,7 @@ def _stream_turn_response(
                 finally:
                     conn.close()
                 saved = (user_turn, assistant_turn)
+                live.publish(db_path, ["chats"])
                 return saved
             finally:
                 if stream is not None:
@@ -2486,6 +2520,7 @@ def _stream_turn_response(
                 pass
 
         try:
+            mirror_reply()
             model_message, images = message, None
             if turn_attachments:
                 waited = []
@@ -2531,6 +2566,7 @@ def _stream_turn_response(
                             break
                         if ev.get("type") == "token":
                             full_response += ev["content"]
+                            mirror_reply()
                         elif ev.get("type") == "status" and ev.get("tool"):
                             # Persisted "Sources": start events open a record, outcome
                             # events complete the newest open record for that tool.
@@ -2588,6 +2624,7 @@ def _stream_turn_response(
                             ev = {"type": "token", "content": ev}
                         if ev["type"] == "token":
                             full_response += ev["content"]
+                            mirror_reply()
                         # 'reasoning' events stream to the UI but are NEVER part of
                         # the saved response.
                         yield f"data: {json.dumps(ev)}\n\n"
@@ -2637,6 +2674,7 @@ def _stream_turn_response(
             # Ended without saving (an error): release anyone waiting to stop it.
             if stream is not None and not stream.saved.is_set():
                 stream.mark_saved()
+            mirror_reply(done=True)
 
     return event_generator
 
@@ -2685,7 +2723,8 @@ def _turn_attachments(db_path: str, ids: Optional[List[int]]):
 @app.post("/api/messages")
 async def send_message(
     request: UserMessage,
-    passkey: Optional[str] = Header(None, alias="X-Passkey")
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+    client_id: Optional[str] = Header(None, alias="X-Client-Id"),
 ):
     """
     Send a user message and get the model response (streaming).
@@ -2743,6 +2782,7 @@ async def send_message(
             location=request.location,
             turn_attachments=turn_atts,
             stream=streams.register(request.stream_id, db_path),
+            origin=client_id,
         )
         return StreamingResponse(streams.closing(generator()),
                                  media_type="text/event-stream", headers=SSE_HEADERS)
@@ -2768,6 +2808,7 @@ async def create_branch(
     parent_turn_id: int,
     request: BranchRequest,
     passkey: Optional[str] = Header(None, alias="X-Passkey"),
+    client_id: Optional[str] = Header(None, alias="X-Client-Id"),
 ):
     """Create a branch from a fork point and stream the reply.
 
@@ -2824,6 +2865,7 @@ async def create_branch(
             location=request.location,
             turn_attachments=turn_atts,
             stream=streams.register(request.stream_id, db_path),
+            origin=client_id,
         )
         return StreamingResponse(streams.closing(generator()),
                                  media_type="text/event-stream", headers=SSE_HEADERS)
@@ -6176,6 +6218,36 @@ async def create_ws_ticket(passkey: Optional[str] = Header(None, alias="X-Passke
     except ValueError:
         pass   # validated by some other means (test doubles); no per-user socket
     return {"ticket": ticket, "expires_in": WS_TICKET_TTL}
+
+
+@app.get("/api/live")
+async def live_updates(request: Request, ticket: Optional[str] = Query(None)):
+    """Server-sent events: which areas of this user's data just changed
+    (live.py), for every app they have open. `ticket` from
+    POST /api/auth/ws-ticket (EventSource can't send headers). Opens with a
+    `hello` event; a comment every 25s keeps proxies from closing it."""
+    if auth_enabled:
+        db_path = _consume_ws_ticket_db(ticket)
+        if not db_path:
+            raise HTTPException(status_code=403, detail="Invalid or missing ticket")
+    else:
+        db_path = _resolve_db_path(None)
+    q = live.subscribe(db_path)
+
+    async def gen():
+        try:
+            yield "event: hello\ndata: {}\n\n"
+            while not await request.is_disconnected():
+                try:
+                    msg = await asyncio.wait_for(q.get(), 25)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+                    continue
+                yield f"data: {json.dumps(msg)}\n\n"
+        finally:
+            live.unsubscribe(db_path, q)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
 @app.websocket("/api/transcribe/stream")

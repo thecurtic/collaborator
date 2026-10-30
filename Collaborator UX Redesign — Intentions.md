@@ -42,6 +42,8 @@ The bottom bar holds five destinations, left to right: Feed, Chats, Scratch, Eve
 
 - **Back always goes back one step, the same way everywhere.** The header arrow, the phone's back gesture and the Android back button all take the same step. A sheet closes, then a detail returns to its list, then the screen on top returns to the one it was opened from, as I left it. A tab other than Feed then goes to Feed, and only Feed leaves the app. Screens opened from other screens stack (a chat opened from a note comes back to that note), and the bottom bar stays on all of them except an open chat, where the composer sits. Each screen is titled once, in its own title row under the shared top bar.
 
+- **Every device is current.** Whatever I change on one device shows on the others without a refresh, and with the same chat open on two devices, a reply streaming on one arrives on the other as it's written. A device that slept catches up the moment it wakes.
+
 ### Feed
 
 Opening the app shows a single feed ordered by warmth, not a list of conversations. Warmth covers both what I was just doing and what moved while I was away.

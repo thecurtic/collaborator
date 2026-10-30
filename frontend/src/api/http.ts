@@ -19,7 +19,13 @@ export class ApiRequestError extends Error {
  * /api to the backend (see vite.config.ts). In other environments set
  * VITE_API_BASE_URL (e.g. the production host).
  */
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
+export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
+
+/**
+ * This running app's id, sent with every request (X-Client-Id), so live
+ * updates (lib/live.ts) can skip the echo of its own changes.
+ */
+export const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 async function parseError(res: Response): Promise<string> {
   try {
@@ -61,6 +67,7 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
   // same-origin); the Android shell attaches its session token instead.
   const token = getSessionToken();
   if (token) headers.set('X-Session', token);
+  headers.set('X-Client-Id', CLIENT_ID);
 
   let res: Response;
   try {

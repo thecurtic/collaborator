@@ -24,6 +24,7 @@ import os
 import queue
 import sqlite3
 import threading
+import live
 from html.parser import HTMLParser
 from typing import Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse
@@ -254,6 +255,7 @@ def refresh(db_path: str, url: str) -> None:
         conn.commit()
     finally:
         conn.close()
+    live.publish(db_path, ["scratch"])
 
 
 # --- The queue -------------------------------------------------------------------

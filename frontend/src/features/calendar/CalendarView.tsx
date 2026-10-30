@@ -18,6 +18,7 @@ import { formatEventRange, parseWallClock } from '@/features/notes/eventFields';
 import { addDays as addDaysW, eventKey, isoDay as isoDayW, startOfWeek } from './calendarDates';
 import { CreateEventSheet, OccurrenceSheet } from './EventSheets';
 import { WeekGrid } from './WeekGrid';
+import { useLive } from '@/lib/live';
 
 /**
  * The Calendar destination (UX doc, Events): a week time-grid that is the
@@ -578,6 +579,7 @@ export function CalendarView({
   const [creating, setCreating] = useState<{ start: Date; end: Date; allDay: boolean } | null>(null);
   const [occurrence, setOccurrence] = useState<NoteMeta | null>(null);
   const [reload, setReload] = useState(0);
+  useLive(['notes'], () => setReload((n) => n + 1));
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const openEvent = (e: NoteMeta) => {

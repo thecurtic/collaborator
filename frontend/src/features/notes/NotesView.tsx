@@ -41,6 +41,7 @@ import { PeopleView } from './PeopleView';
 import { invalidateTagVocabulary } from './tags';
 import { TagAssist } from './TagAssist';
 import { NoteBody } from './NoteBody';
+import { useLive } from '@/lib/live';
 
 /** Which screen the Notes tab is showing. */
 type Screen =
@@ -114,6 +115,11 @@ function NoteScreen({
   // screen without refetching (the PATCH response is fresher, and a refetch
   // would wipe the links-rewritten notice).
   const loadedTitle = useRef<string | null>(null);
+
+  // Changed on another device: refetch, unless it's being edited here.
+  useLive(['notes'], () => {
+    api.getNote(title).then(setNote).catch((err: unknown) => setError(errMessage(err)));
+  }, draft === null && note !== null);
 
   useEffect(() => {
     if (loadedTitle.current === title) return;
@@ -439,6 +445,9 @@ export function NotesView({
   const [reindexing, setReindexing] = useState(false);
   const [reindexNotice, setReindexNotice] = useState<string | null>(null);
   const searchSeq = useRef(0);
+  // Bumped when another device changes notes: re-runs the list or search.
+  const [liveTick, setLiveTick] = useState(0);
+  useLive(['notes'], () => setLiveTick((n) => n + 1));
 
   // Deep link from the app (synthesis banner / chat proposal chip).
   useEffect(() => {
@@ -477,7 +486,7 @@ export function NotesView({
     }
     const t = setTimeout(() => void run(), 300);
     return () => clearTimeout(t);
-  }, [query, mode, lens]);
+  }, [query, mode, lens, liveTick]);
 
   // Fresh full list (used after a reindex; also clears any active search).
   const reload = useCallback(() => {

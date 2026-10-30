@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { Transcript } from '@/domain/models';
 import { TagEditor } from '@/features/notes/TagEditor';
+import { useLive } from '@/lib/live';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.';
@@ -65,6 +66,10 @@ function TranscriptDetail({
   useEffect(() => {
     void api.touchFeedItem(`transcript:${id}`); // opened = touched (warm feed)
   }, [id]);
+
+  useLive(['transcripts'], () => {
+    api.getTranscript(id).then(setItem).catch(() => {});
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -260,6 +265,7 @@ export function TranscriptsView({
       setItems([]);
     }
   }, [channel, debounced]);
+  useLive(['transcripts'], () => void load());
 
   // Optimistic delete (house style): remove, restore in place on failure.
   const remove = (t: Transcript) => {

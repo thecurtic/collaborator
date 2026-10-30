@@ -26,6 +26,7 @@ tags (never applied), and the title. Nothing here touches the vault.
 import datetime
 import hashlib
 import json
+import live as live_updates
 import os
 import sqlite3
 import threading
@@ -522,6 +523,7 @@ def _reconcile(db_path: str, root_id: int, hooks: Hooks) -> Dict:
         conn.commit()
     finally:
         conn.close()
+    live_updates.publish(db_path, ["chats"])   # labels, card, title changed
     return {"branches": len(written), "overview": bool(new_overview),
             "title": bool(new_title), "card": bool(new_card)}
 

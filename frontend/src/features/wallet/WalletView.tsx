@@ -19,6 +19,7 @@ import {
   type WalletSummary,
 } from './walletApi';
 import { QrCode } from './QrCode';
+import { useLive } from '@/lib/live';
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
@@ -53,6 +54,7 @@ export function WalletView() {
       setRefreshing(false);
     }
   }, []);
+  useLive(['wallet'], () => void refresh());
 
   useEffect(() => {
     void refresh();

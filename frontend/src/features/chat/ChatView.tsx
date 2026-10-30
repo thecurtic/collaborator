@@ -117,6 +117,7 @@ export function ChatView({
     editResend,
     stopGeneration,
     stopping,
+    remoteReply,
     clearError,
     cycleFork,
     remove,
@@ -239,7 +240,8 @@ export function ChatView({
     // Instant during streaming: smooth animations pile up across rapid
     // tokens and were the main source of scroll fighting.
     scrollToBottom(!streaming);
-  }, [path.length, streaming?.reply, streaming, activity.length, sending, loading, reasoning]);
+  }, [path.length, streaming?.reply, streaming, activity.length, sending, loading, reasoning,
+      remoteReply?.text, remoteReply]);
 
   // Cycle a node's branch fork (keeps the tapped button under the finger).
   const switchFork = (parentId: number, dir: 1 | -1) => {
@@ -444,6 +446,33 @@ export function ChatView({
                   {stopping && (
                     <p className="mt-1 text-xs text-muted-foreground">Stopped</p>
                   )}
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* A reply streaming on another device, in this chat. */}
+          {!streaming && remoteReply && (
+            <>
+              <div className="flex w-full justify-end">
+                <div className="max-w-[85%] rounded-2xl bg-primary px-3.5 py-2.5 text-[15px] leading-relaxed text-primary-foreground sm:max-w-[80%] sm:text-sm">
+                  <UserText text={remoteReply.user} />
+                </div>
+              </div>
+              <div className="flex w-full justify-start">
+                <div className="w-full rounded-2xl border border-border bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-card-foreground sm:text-sm">
+                  {remoteReply.text ? (
+                    <Markdown>{remoteReply.text}</Markdown>
+                  ) : (
+                    <span className="flex gap-1 py-1" aria-label="Responding">
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.3s]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50 [animation-delay:-0.15s]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-50" />
+                    </span>
+                  )}
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {remoteReply.done ? 'Saving…' : 'Replying on another device'}
+                  </p>
                 </div>
               </div>
             </>

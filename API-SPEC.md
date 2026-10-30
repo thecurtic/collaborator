@@ -1635,6 +1635,42 @@ Usage totals are the endpoint's own running totals, so cost stays complete
 across gaps. The tool descriptions tell the model to report gaps plainly and
 never estimate or invent what's missing.
 
+---
+
+### 29. Live updates between devices
+```
+GET /api/live?ticket=<one-time-ticket>        (text/event-stream)
+```
+One stream per open app, so every device the user has open hears about
+changes made elsewhere and reloads what it shows. Take the ticket from
+`POST /api/auth/ws-ticket` (EventSource can't send headers); it's single-use,
+so reconnect with a fresh one. The stream opens with `event: hello` and sends
+a comment line every 25s to stay open.
+
+Messages say which area changed; the data still comes from the normal API:
+```
+data: {"areas": ["chats"], "origin": "k3x9..."}
+```
+Areas: `chats`, `notes` (events included), `drafts`, `scratch`,
+`transcripts`, `projects`, `feed`, `wallet`. They're sent after every
+successful write request (by its path) and by background work (a saved
+reply, a generated title, branch summaries, a transcription job, a link
+preview). `origin` is the `X-Client-Id` header of the request that made the
+change: clients send a per-app id on every request and skip messages
+carrying their own.
+
+A reply streaming on one device is mirrored to the others, at most twice a
+second, so a device with the same chat open can show it as it arrives:
+```
+data: {"areas": ["reply"], "origin": "...", "reply": {"id": "a1b2c3", "parent": 42,
+       "paragraph": null, "user": "the message", "text": "the reply so far", "done": false}}
+```
+`parent` is the turn it answers; the last message has `"done": true`, and the
+saved turns follow as a `chats` change.
+
+After a gap (a phone that slept, a dropped connection), a client can't know
+what it missed: on reconnecting it reloads everything it shows.
+
 ## Data Models
 
 ### Turn

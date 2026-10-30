@@ -29,6 +29,7 @@ import {
 } from './FieldsEditor';
 import { lineDiff } from './lineDiff';
 import { NoteBody } from './NoteBody';
+import { useLive } from '@/lib/live';
 
 interface InboxViewProps {
   /** Deep-link filter (one synthesis run / one chat turn), or null for all. */
@@ -416,6 +417,7 @@ export function InboxView({
       setDrafts([]);
     }
   }, [runId]);
+  useLive(['drafts'], () => void load());
 
   useEffect(() => {
     setDrafts(null);
