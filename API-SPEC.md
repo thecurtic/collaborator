@@ -1298,7 +1298,7 @@ transcript on the Transcripts page (§16, source `scratch`) and the job running
 in the background. A voice note recorded in the app (`media_name`
 `voice-note.*`) keeps the one-shot action: what was said is transcribed and
 the agent acts on it.
-With `spending.enabled`, a held photo is classified first; a receipt leaves
+With `spending.enabled` (the default), a held photo is classified first; a receipt leaves
 Scratch (§30): the response is `{ "diverted": true, "transaction_id",
 "evidence_id", "review": [...] }` instead of `{ "item" }`, and the item is
 deleted. A receipt that can't be read, or whose reading trips the secret
@@ -1722,8 +1722,8 @@ what it missed: on reconnecting it reloads everything it shows.
 ### 30. Spending (receipts)
 
 Receipts held in Scratch (§23) become rows in the user's `spending.db`, beside
-`conversations.db`. Off unless `spending.enabled`; needs a chat model that
-sees images. The receipt image is copied to `spending-evidence/` (Scratch's
+`conversations.db`. On by default (`spending.enabled`); needs a chat model
+that sees images. The receipt image is copied to `spending-evidence/` (Scratch's
 own copy goes only when no other item shares it). Amounts are integer cents.
 Every receipt lands `pending` with the reasons it needs review; nothing
 commits on its own yet.
@@ -1731,6 +1731,12 @@ commits on its own yet.
 **`GET /api/spending/transactions?status=pending|committed&limit=100`** →
 `{ "items": [Transaction], "count": N }`, newest purchase first; `422` for
 another status.
+
+**`GET /api/spending/total?period=week|month|year`** (default `month`) →
+`{ "period", "since": "YYYY-MM-DD", "totals": [{ currency, total_cents, count
+}] }`: committed transactions dated since this Monday, the 1st of the month
+or of the year (server-local), one entry per currency; pending ones don't
+count. `422` for another period.
 
 **`GET /api/spending/transactions/{id}`** → `{ "transaction": Transaction +
 { line_items, charges, payment, evidence } }`.

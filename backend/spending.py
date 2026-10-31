@@ -611,6 +611,31 @@ def get_transaction(db_path: str, tx_id: int) -> Optional[dict]:
         conn.close()
 
 
+_PERIOD_START = {
+    "week": "date('now', 'localtime', '-6 days', 'weekday 1')",   # this Monday
+    "month": "date('now', 'localtime', 'start of month')",
+    "year": "date('now', 'localtime', 'start of year')",
+}
+
+
+def period_total(db_path: str, period: str) -> dict:
+    """Committed spending since the start of this week (Monday), month or
+    year, per currency. Pending transactions don't count until approved."""
+    conn = connect(db_path)
+    try:
+        since = conn.execute(f"SELECT {_PERIOD_START[period]}").fetchone()[0]
+        rows = conn.execute(
+            "SELECT currency, SUM(amount_cents) AS total, COUNT(*) AS n "
+            "FROM transactions WHERE status = 'committed' "
+            "AND date(IFNULL(datetime, created_at)) >= ? "
+            "GROUP BY currency ORDER BY total DESC", (since,)).fetchall()
+    finally:
+        conn.close()
+    return {"period": period, "since": since,
+            "totals": [{"currency": r["currency"], "total_cents": r["total"],
+                        "count": r["n"]} for r in rows]}
+
+
 def evidence_file(db_path: str, evidence_id: int) -> Optional[Tuple[str, Optional[str]]]:
     conn = connect(db_path)
     try:

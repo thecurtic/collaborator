@@ -4301,6 +4301,17 @@ async def get_spending_transactions(
     return {"items": items, "count": len(items)}
 
 
+@app.get("/api/spending/total")
+async def get_spending_total(
+    period: str = "month",
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    _require_auth(passkey)
+    if period not in ("week", "month", "year"):
+        raise HTTPException(status_code=422, detail="period is week, month or year")
+    return spending.period_total(_resolve_db_path(passkey), period)
+
+
 @app.get("/api/spending/transactions/{tx_id}")
 async def get_spending_transaction(
     tx_id: int,

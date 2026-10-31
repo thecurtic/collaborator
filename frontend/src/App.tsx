@@ -34,6 +34,7 @@ import { RenameSheet } from '@/components/RenameSheet';
 import { ReferencesView } from '@/features/reference/ReferencesView';
 import { ProfileView } from '@/features/notes/ProfileView';
 import { WalletView } from '@/features/wallet/WalletView';
+import { SpendingView } from '@/features/spending/SpendingView';
 import { WebSearchView } from '@/features/search/WebSearchView';
 import { TranscriptsView } from '@/features/transcripts/TranscriptsView';
 import { ToolLogView } from '@/features/toollog/ToolLogView';
@@ -98,7 +99,8 @@ type Screen =
   | { kind: 'toolLog' }
   | { kind: 'profile' }
   | { kind: 'references' }
-  | { kind: 'wallet' };
+  | { kind: 'wallet' }
+  | { kind: 'spending' };
 
 let screenNonce = 0;
 
@@ -610,6 +612,15 @@ function AppShell() {
             </div>
           </>
         );
+      case 'spending':
+        return (
+          <>
+            <PageBar title="Spending" />
+            <div className="min-h-0 flex-1">
+              <SpendingView />
+            </div>
+          </>
+        );
       case 'profile':
         return (
           <>
@@ -864,6 +875,7 @@ function AppShell() {
         onOpenProfile={() => push({ kind: 'profile' })}
         onOpenReferences={() => push({ kind: 'references' })}
         onOpenWallet={() => push({ kind: 'wallet' })}
+        onOpenSpending={() => push({ kind: 'spending' })}
       />
 
       {/* Chat-title hold menu (+ its rename sheet). */}

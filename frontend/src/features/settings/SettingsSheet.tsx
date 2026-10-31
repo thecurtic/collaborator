@@ -3,6 +3,7 @@ import {
   ChevronRight,
   Loader2,
   LogOut,
+  Receipt,
   Smartphone,
   UserRound,
   Wallet,
@@ -62,6 +63,7 @@ interface SettingsSheetProps {
   onOpenReferences: () => void;
   /** Push the Wallet screen (Collaborator's own wallet: top up, take out). */
   onOpenWallet: () => void;
+  onOpenSpending: () => void;
 }
 
 /** A row that leaves the sheet for a pushed screen. */
@@ -532,6 +534,7 @@ export function SettingsSheet({
   onOpenProfile,
   onOpenReferences,
   onOpenWallet,
+  onOpenSpending,
 }: SettingsSheetProps) {
   const debug = useDebugEnabled();
   const tools = useToolsEnabled();
@@ -594,6 +597,9 @@ export function SettingsSheet({
           <PageRow icon={Wallet} label="Wallet"
                    hint="Top up Collaborator's wallet or take money out"
                    onClick={() => { onClose(); onOpenWallet(); }} />
+          <PageRow icon={Receipt} label="Spending"
+                   hint="Receipts from Scratch, and what you've spent"
+                   onClick={() => { onClose(); onOpenSpending(); }} />
         </div>
 
         {/* Chat model (server-backed; applies immediately). */}

@@ -254,3 +254,21 @@ def test_discard_removes_rows_and_image(monkeypatch):
     assert c.get(f"/api/spending/evidence/{out['evidence_id']}/image").status_code == 404
     assert c.delete(f"/api/spending/transactions/{out['transaction_id']}").status_code == 404
     assert c.get("/api/spending/transactions", params={"status": "x"}).status_code == 422
+
+
+def test_period_total_counts_committed_only(monkeypatch):
+    c, cfg, dbp = _fresh()
+    import datetime
+    today = datetime.date.today().isoformat()
+    receipt = json.loads(json.dumps(GROCERY))
+    receipt["datetime"] = today + "T12:00"
+    _fake_vision(monkeypatch, "receipt", receipt)
+    _, a = _hold(c)
+    _, b = _hold(c, _png() + b"x")
+    assert c.get("/api/spending/total").json()["totals"] == []    # all pending
+    c.post(f"/api/spending/transactions/{a['transaction_id']}/approve", json={})
+    for period in ("week", "month", "year"):
+        out = c.get("/api/spending/total", params={"period": period}).json()
+        assert out["since"] <= today
+        assert out["totals"] == [{"currency": "CAD", "total_cents": 2909, "count": 1}]
+    assert c.get("/api/spending/total", params={"period": "day"}).status_code == 422
