@@ -288,6 +288,7 @@ def load_config() -> dict:
             "classify_max_tokens": 2048,  # reasoning models think before the label
             "extract_max_tokens": 8192,   # thinking + a long receipt's JSON
             "timeout": 300,               # seconds, the text-only structuring call
+            "match_interval_seconds": 3600,  # the sweep for approved lines still unlabelled
         },
         "decision": {
             # A decision model (typed questions, a probability per option;
@@ -297,6 +298,7 @@ def load_config() -> dict:
             "timeout": 30,            # seconds per request
             "image_max_side": 896,    # px; servers refuse inputs past their batch
             "classify_threshold": 0.8,  # below it, the chat model classifies
+            "match_threshold": 0.8,     # below it, the chat model labels the line
         },
         "location": {
             # Per-turn location context (frontend sends {lat, lon, accuracy, ts}

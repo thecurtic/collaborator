@@ -14,9 +14,9 @@ const TX: SpendingDetail = {
   review: ['new charge: GST'],
   createdAt: '2026-10-28 17:50:00',
   lineItems: [
-    { rawText: 'CLASSICO TOM BASIL', qty: 1, unitPriceCents: 499, lineTotalCents: 499 },
-    { rawText: 'KICKING HORSE 454G', qty: 1, unitPriceCents: 1549, lineTotalCents: 1549 },
-    { rawText: 'SPARKLING WTR 12PK', qty: 1, unitPriceCents: 699, lineTotalCents: 699 },
+    { id: 1, rawText: 'CLASSICO TOM BASIL', qty: 1, unitPriceCents: 499, lineTotalCents: 499, match: null, product: null },
+    { id: 2, rawText: 'KICKING HORSE 454G', qty: 1, unitPriceCents: 1549, lineTotalCents: 1549, match: null, product: null },
+    { id: 3, rawText: 'SPARKLING WTR 12PK', qty: 1, unitPriceCents: 699, lineTotalCents: 699, match: null, product: null },
   ],
   charges: [
     { kind: 'deposit', name: 'Bottle deposit', rawText: 'DEP', amountCents: 120, rate: null, known: false, lineIndex: 2 },

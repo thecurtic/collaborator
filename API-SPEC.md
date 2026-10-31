@@ -1755,7 +1755,34 @@ unit_price, line_total}]`, `charges [{kind, name, raw_text, amount, rate,
 line_index}]`, `subtotal`, `total`, `payment {method, card_brand, last_four,
 tendered, change}`, `unmapped`); `422` when it has no total or no lines, `404`
 when the transaction isn't pending. Its charge types become known, so they
-stop being flagged on later receipts.
+stop being flagged on later receipts. Approval starts product matching for
+its lines in the background (below); an hourly sweep
+(`spending.match_interval_seconds`) catches whatever is still unlabelled.
+
+**Product matching.** Each approved line gets a product (`name`, `brand`,
+`category`): an alias first (this store printed this text before), else the
+decision model's pick among ~10 retrieved candidates, asked with the list in
+two orders and accepted only when both agree above `decision.match_threshold`,
+else the chat model, which picks a candidate or writes a new product. Its
+unsure labels are applied and marked `unsure`. Only confident and corrected
+labels become aliases. Unapproved and discarded receipts are never matched.
+
+**`PUT /api/spending/lines/{id}/product`** `{ "product_id" }` or `{ "new": {
+name, brand?, category? } }` → `{ "product_id", "lines": [ids] }`: the user's
+label. Every approved line the store printed the same way takes it, it
+becomes that store's alias, and the decisions that labelled them are marked
+corrected in the log. `422` with neither, `404` for no approved line.
+
+**`GET /api/spending/labels/unsure`** → `{ "lines": [{ id, raw_text,
+line_total_cents, transaction_id, datetime, store, product_id, product,
+brand, category }] }`: the "check these labels" list (clearing it is
+optional).
+
+**`GET /api/spending/products?q=`** → `{ "products": [{ id, name, brand,
+category }] }`: name, brand or category containing `q` (all when empty).
+
+**`GET /api/spending/categories`** → `{ "categories": [{ id, name, parent_id
+}] }`: a seeded flat list to start; new ones are added as labels need them.
 
 **`DELETE /api/spending/transactions/{id}`** → `{ "deleted": id }`: the
 transaction and the evidence only it held, image included.
@@ -1767,8 +1794,9 @@ store, store_address, review, created_at, committed_at }`. `review` lists why
 it awaits the user: `the numbers don't add up to the total` (lines and
 charges vs. subtotal and total, within `spending.rounding_tolerance`),
 `something on the receipt fits no field`, `new charge: <name>`, `payment
-method unclear`, `no store name`, `no date`. A line item: `{ raw_text, qty,
-unit_price_cents, line_total_cents, product_id }`; a charge: `{ kind (tax |
+method unclear`, `no store name`, `no date`. A line item: `{ id, raw_text, qty,
+unit_price_cents, line_total_cents, product_id, match (alias | model | chat |
+unsure | user | null), product: { id, name, brand, category } | null }`; a charge: `{ kind (tax |
 fee | deposit | discount | rounding | tip | other), name, raw_text,
 amount_cents, rate, known, line_index }`; payment: `{ method (cash | card |
 bitcoin | other), card_brand, last_four, tendered_cents, change_cents }`;

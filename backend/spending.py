@@ -147,18 +147,52 @@ CREATE TABLE IF NOT EXISTS decision_log (
     used INTEGER NOT NULL DEFAULT 1,          -- 0: below threshold, fallback decided
     corrected_to TEXT                         -- set when the user corrects it
 );
+CREATE TABLE IF NOT EXISTS product_vectors (
+    product_id INTEGER PRIMARY KEY REFERENCES products(id),
+    text TEXT NOT NULL,                       -- what was embedded (brand + name)
+    vector TEXT NOT NULL                      -- JSON list of floats
+);
 CREATE INDEX IF NOT EXISTS idx_tx_status ON transactions(status, datetime);
 CREATE INDEX IF NOT EXISTS idx_lines_tx ON line_items(transaction_id);
 CREATE INDEX IF NOT EXISTS idx_charges_tx ON charges(transaction_id);
 """
 
 
+# Columns added after the first schema: (table, column, definition).
+_ADDED = (
+    ("categories", "parent_id", "INTEGER REFERENCES categories(id)"),  # a tree, one level at first
+    ("aliases", "source", "TEXT"),                    # model | user
+    ("line_items", "match", "TEXT"),                  # alias | model | chat | unsure | user
+    ("line_items", "matched_at", "TEXT"),
+    ("line_items", "match_tries", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+# The starting categories: fine-grained, flat, and short enough for one
+# question. New ones are added only when nothing here fits.
+SEED_CATEGORIES = (
+    "fruit", "vegetables", "meat", "seafood", "eggs", "milk", "cheese", "yogurt",
+    "bread", "baked goods", "cereal", "pasta", "rice and grains", "pasta sauce",
+    "canned goods", "condiments", "baking supplies", "snacks", "frozen food",
+    "coffee", "tea", "soft drinks", "water", "juice", "alcohol",
+    "cleaning supplies", "paper products", "personal care", "pet supplies",
+    "prepared food",
+)
+
+
 def connect(db_path: str) -> sqlite3.Connection:
     """The user's spending.db, schema ensured."""
-    conn = sqlite3.connect(db_path_for(db_path))
+    conn = sqlite3.connect(db_path_for(db_path), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_SCHEMA)
+    for table, column, definition in _ADDED:
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    if not conn.execute("SELECT 1 FROM categories LIMIT 1").fetchone():
+        conn.executemany("INSERT OR IGNORE INTO categories (name) VALUES (?)",
+                         [(c,) for c in SEED_CATEGORIES])
+    conn.commit()
     return conn
 
 
@@ -746,10 +780,17 @@ def get_transaction(db_path: str, tx_id: int) -> Optional[dict]:
         lines = conn.execute("SELECT * FROM line_items WHERE transaction_id = ? "
                              "ORDER BY position", (tx_id,)).fetchall()
         pos = {l["id"]: l["position"] for l in lines}
-        out["line_items"] = [{"raw_text": l["raw_text"], "qty": l["qty"],
+        products = {p["id"]: p for p in conn.execute(
+            "SELECT p.id, p.name, p.brand, c.name AS category FROM products p "
+            "LEFT JOIN categories c ON c.id = p.category_id WHERE p.id IN "
+            "(SELECT product_id FROM line_items WHERE transaction_id = ?)", (tx_id,))}
+        out["line_items"] = [{"id": l["id"], "raw_text": l["raw_text"], "qty": l["qty"],
                               "unit_price_cents": l["unit_price_cents"],
                               "line_total_cents": l["line_total_cents"],
-                              "product_id": l["product_id"]} for l in lines]
+                              "product_id": l["product_id"], "match": l["match"],
+                              "product": (dict(products[l["product_id"]])
+                                          if l["product_id"] in products else None)}
+                             for l in lines]
         out["charges"] = [{"kind": c["kind"], "name": c["name"],
                            "raw_text": c["raw_text"], "amount_cents": c["amount_cents"],
                            "rate": c["rate"], "known": c["type_id"] is not None,

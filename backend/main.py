@@ -55,6 +55,7 @@ import vision
 import wallet
 import scratch
 import spending
+import spending_match
 import tool_log
 import link_preview
 import gate_client
@@ -4337,7 +4338,60 @@ async def approve_spending_transaction(
         raise HTTPException(status_code=422, detail=str(e))
     if tx is None:
         raise HTTPException(status_code=404, detail=f"No pending transaction {tx_id}")
+    # Product matching starts only now that the receipt is approved.
+    spending_match.kick(_resolve_db_path(passkey))
     return {"transaction": tx}
+
+
+class LineLabel(BaseModel):
+    product_id: Optional[int] = None
+    new: Optional[dict] = None       # {name, brand, category}
+
+
+@app.put("/api/spending/lines/{line_id}/product")
+async def correct_spending_line(
+    line_id: int,
+    request: LineLabel,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """The user's label for a line; every line its store printed the same
+    way follows, and it becomes that store's alias for the printed text."""
+    _require_auth(passkey)
+    db_path = _resolve_db_path(passkey)
+    try:
+        out = spending_match.correct(db_path, line_id, request.product_id, request.new)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if out is None:
+        raise HTTPException(status_code=404, detail=f"No approved line {line_id}")
+    live.publish(db_path, ["spending"])
+    return out
+
+
+@app.get("/api/spending/labels/unsure")
+async def get_unsure_spending_labels(passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    _require_auth(passkey)
+    return {"lines": spending_match.unsure_lines(_resolve_db_path(passkey))}
+
+
+@app.get("/api/spending/products")
+async def search_spending_products(
+    q: str = "",
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    _require_auth(passkey)
+    return {"products": spending_match.search_products(_resolve_db_path(passkey), q)}
+
+
+@app.get("/api/spending/categories")
+async def get_spending_categories(passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    _require_auth(passkey)
+    conn = spending.connect(_resolve_db_path(passkey))
+    try:
+        rows = conn.execute("SELECT id, name, parent_id FROM categories ORDER BY name").fetchall()
+    finally:
+        conn.close()
+    return {"categories": [dict(r) for r in rows]}
 
 
 @app.delete("/api/spending/transactions/{tx_id}")
@@ -5692,10 +5746,18 @@ async def _start_summaries():
         print("Summaries job started")
 
 
+@app.on_event("startup")
+async def _start_spending_match():
+    # Labels approved receipt lines in the background (spending_match.py).
+    if spending_match.start():
+        print("Spending match job started")
+
+
 @app.on_event("shutdown")
 async def _stop_agent_listener():
     await agents.hub().stop()
     summaries.stop()
+    spending_match.stop()
 
 
 def _agents_user(passkey: Optional[str]) -> tuple:

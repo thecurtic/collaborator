@@ -254,6 +254,7 @@ spending:
   classify_max_tokens: 2048    # the label call (reasoning models think first)
   extract_max_tokens: 8192     # reading the receipt, and structuring what was read
   timeout: 300                 # seconds, the structuring call
+  match_interval_seconds: 3600 # approved lines are labelled on approval; this sweep catches the rest
 
 # A decision model: answers typed questions (yes/no, one of several) with a
 # probability per option and no generated text, over a decisions endpoint
@@ -266,6 +267,7 @@ decision:
   timeout: 30                  # seconds per request
   image_max_side: 896          # px; images are shrunk to fit the server's batch
   classify_threshold: 0.8      # below it, the chat model classifies the photo
+  match_threshold: 0.8         # below it, the chat model labels the receipt line
 
 # Files attached to chats: stored on this server, text extracted once
 # (markitdown, PDF text layers, the chat model's vision for images and scans,

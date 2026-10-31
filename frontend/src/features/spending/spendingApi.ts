@@ -15,12 +15,48 @@ export interface SpendingTransaction {
   createdAt: string;
 }
 
+/** A product a line is labelled with (matched in the background). */
+export interface SpendingProduct {
+  id: number;
+  name: string;
+  brand: string | null;
+  category: string | null;
+}
+
+/** How a line got its label; null = not labelled yet. */
+export type LineMatch = 'alias' | 'model' | 'chat' | 'unsure' | 'user' | null;
+
 export interface SpendingLine {
+  id: number;
   rawText: string;
   qty: number | null;
   unitPriceCents: number | null;
   lineTotalCents: number;
+  match: LineMatch;
+  product: SpendingProduct | null;
 }
+
+/** A label worth a second look (the "check these labels" list). */
+export interface UnsureLine {
+  id: number;
+  rawText: string;
+  lineTotalCents: number;
+  transactionId: number;
+  datetime: string | null;
+  store: string | null;
+  product: SpendingProduct | null;
+}
+
+export interface SpendingCategory {
+  id: number;
+  name: string;
+  parentId: number | null;
+}
+
+/** A correction: an existing product, or a new one. */
+export type LineLabel =
+  | { productId: number }
+  | { new: { name: string; brand: string | null; category: string | null } };
 
 export const CHARGE_KINDS = [
   'tax', 'fee', 'deposit', 'discount', 'rounding', 'tip', 'other',
@@ -115,10 +151,13 @@ interface ApiTransaction {
 
 interface ApiDetail extends ApiTransaction {
   line_items: {
+    id: number;
     raw_text: string;
     qty: number | null;
     unit_price_cents: number | null;
     line_total_cents: number;
+    match: LineMatch;
+    product: SpendingProduct | null;
   }[];
   charges: {
     kind: ChargeKind;
@@ -162,10 +201,13 @@ const toTransaction = (t: ApiTransaction): SpendingTransaction => ({
 const toDetail = (t: ApiDetail): SpendingDetail => ({
   ...toTransaction(t),
   lineItems: t.line_items.map((l) => ({
+    id: l.id,
     rawText: l.raw_text,
     qty: l.qty,
     unitPriceCents: l.unit_price_cents,
     lineTotalCents: l.line_total_cents,
+    match: l.match ?? null,
+    product: l.product ?? null,
   })),
   charges: t.charges.map((c) => ({
     kind: c.kind,
@@ -233,6 +275,55 @@ export const spendingApi = {
 
   async discard(id: number): Promise<void> {
     await request(`/api/spending/transactions/${id}`, { method: 'DELETE' });
+  },
+
+  async unsureLabels(): Promise<UnsureLine[]> {
+    const r = await request<{
+      lines: {
+        id: number;
+        raw_text: string;
+        line_total_cents: number;
+        transaction_id: number;
+        datetime: string | null;
+        store: string | null;
+        product_id: number | null;
+        product: string | null;
+        brand: string | null;
+        category: string | null;
+      }[];
+    }>('/api/spending/labels/unsure');
+    return r.lines.map((l) => ({
+      id: l.id,
+      rawText: l.raw_text,
+      lineTotalCents: l.line_total_cents,
+      transactionId: l.transaction_id,
+      datetime: l.datetime,
+      store: l.store,
+      product: l.product_id == null ? null
+        : { id: l.product_id, name: l.product ?? '', brand: l.brand, category: l.category },
+    }));
+  },
+
+  async searchProducts(q: string): Promise<SpendingProduct[]> {
+    const r = await request<{ products: SpendingProduct[] }>(
+      `/api/spending/products?q=${encodeURIComponent(q)}`,
+    );
+    return r.products;
+  },
+
+  async categories(): Promise<SpendingCategory[]> {
+    const r = await request<{ categories: { id: number; name: string; parent_id: number | null }[] }>(
+      '/api/spending/categories',
+    );
+    return r.categories.map((c) => ({ id: c.id, name: c.name, parentId: c.parent_id }));
+  },
+
+  /** The user's label for a line; lines printed the same way follow. */
+  async correctLine(id: number, label: LineLabel): Promise<void> {
+    await request(`/api/spending/lines/${id}/product`, {
+      method: 'PUT',
+      body: JSON.stringify('productId' in label ? { product_id: label.productId } : { new: label.new }),
+    });
   },
 
   async evidenceImage(id: number): Promise<Blob> {

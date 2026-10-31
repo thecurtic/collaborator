@@ -6,10 +6,15 @@ import {
   CHARGE_KINDS,
   PAYMENT_METHODS,
   spendingApi,
+  type LineLabel,
+  type SpendingCategory,
   type SpendingDetail,
+  type SpendingLine,
+  type SpendingProduct,
   type SpendingPeriod,
   type SpendingTotal,
   type SpendingTransaction,
+  type UnsureLine,
 } from './spendingApi';
 import {
   draftChanged,
@@ -50,15 +55,18 @@ export function SpendingView() {
   const [period, setPeriod] = useState<SpendingPeriod>('month');
   const [total, setTotal] = useState<SpendingTotal | null>(null);
   const [open, setOpen] = useState<number | null>(null);
+  const [unsure, setUnsure] = useState<UnsureLine[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [p, c, t] = await Promise.all([
+      const [p, c, t, u] = await Promise.all([
         spendingApi.list('pending'),
         spendingApi.list('committed'),
         spendingApi.total(period),
+        spendingApi.unsureLabels(),
       ]);
+      setUnsure(u);
       setPending(p);
       setCommitted(c);
       setTotal(t);
@@ -124,6 +132,8 @@ export function SpendingView() {
           </section>
         )}
 
+        {unsure.length > 0 && <CheckLabels lines={unsure} onChanged={() => void refresh()} />}
+
         {!empty && (
           <section className="mb-6 rounded-xl border border-border bg-card p-4">
             <div className="flex items-center justify-between gap-2">
@@ -181,6 +191,50 @@ export function SpendingView() {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Labels the models weren't sure of. Optional: they already count; fixing
+ * one fixes every line the store printed the same way.
+ */
+function CheckLabels({ lines, onChanged }: { lines: UnsureLine[]; onChanged: () => void }) {
+  const [editing, setEditing] = useState<number | null>(null);
+  const [shown, setShown] = useState(false);
+  return (
+    <section className="mb-6">
+      <button type="button" onClick={() => setShown((v) => !v)}
+              className="mb-2 flex items-center gap-1 text-sm font-medium text-foreground">
+        {shown ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        Check these labels ({lines.length})
+      </button>
+      {shown && (
+        <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+          {lines.map((l) => (
+            <li key={l.id} className="px-3 py-2 text-sm">
+              <div className="flex justify-between gap-2">
+                <span className="min-w-0 truncate text-foreground">{l.rawText}</span>
+                <span className="flex-none tabular-nums text-muted-foreground">
+                  {formatMoney(l.lineTotalCents)}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {[l.store, formatDay(l.datetime)].filter(Boolean).join(' · ')}
+              </p>
+              <button type="button"
+                      className="text-left text-xs text-muted-foreground hover:text-foreground"
+                      onClick={() => setEditing((cur) => (cur === l.id ? null : l.id))}>
+                <LabelText line={{ match: 'unsure', product: l.product }} />
+              </button>
+              {editing === l.id && (
+                <LabelEditor lineId={l.id} onCancel={() => setEditing(null)}
+                             onDone={() => { setEditing(null); onChanged(); }} />
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -267,7 +321,7 @@ function EvidenceImage({ id }: { id: number }) {
   );
 }
 
-function useDetail(id: number, onError: (e: string) => void) {
+function useDetail(id: number, onError: (e: string) => void, version = 0) {
   const [tx, setTx] = useState<SpendingDetail | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -278,7 +332,7 @@ function useDetail(id: number, onError: (e: string) => void) {
     return () => {
       cancelled = true;
     };
-  }, [id, onError]);
+  }, [id, onError, version]);
   return tx;
 }
 
@@ -300,9 +354,140 @@ function Evidence({ tx }: { tx: SpendingDetail }) {
   );
 }
 
-/** A committed purchase, read-only: the image, its lines, charges, payment. */
+/** What a line is labelled as, or that it isn't yet. */
+function LabelText({ line }: { line: Pick<SpendingLine, 'match' | 'product'> }) {
+  if (!line.product) return <span className="italic">not labelled yet</span>;
+  const p = line.product;
+  return (
+    <>
+      {[p.name, p.brand, p.category].filter(Boolean).join(' · ')}
+      {line.match === 'unsure' && (
+        <span className="ml-1.5 rounded bg-amber-500/15 px-1 py-px text-[11px] text-amber-700 dark:text-amber-400">
+          unsure
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * Relabel a line: pick an existing product, or describe a new one. Every
+ * line the store printed the same way follows, and it's remembered.
+ */
+function LabelEditor({
+  lineId,
+  onDone,
+  onCancel,
+}: {
+  lineId: number;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [q, setQ] = useState('');
+  const [found, setFound] = useState<SpendingProduct[]>([]);
+  const [cats, setCats] = useState<SpendingCategory[]>([]);
+  const [making, setMaking] = useState(false);
+  const [name, setName] = useState('');
+  const [brand, setBrand] = useState('');
+  const [category, setCategory] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const t = setTimeout(() => {
+      spendingApi
+        .searchProducts(q)
+        .then((r) => !cancelled && setFound(r))
+        .catch((err) => !cancelled && setProblem(errMessage(err)));
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [q]);
+
+  useEffect(() => {
+    if (!making || cats.length) return;
+    spendingApi.categories().then(setCats).catch((err) => setProblem(errMessage(err)));
+  }, [making, cats.length]);
+
+  const save = async (label: LineLabel) => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await spendingApi.correctLine(lineId, label);
+      onDone();
+    } catch (err) {
+      setProblem(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-1.5 space-y-2 rounded-lg border border-border bg-background p-2">
+      {!making ? (
+        <>
+          <input className={FIELD} value={q} placeholder="Find a product"
+                 onChange={(e) => setQ(e.target.value)} autoFocus />
+          <ul className="max-h-48 overflow-y-auto">
+            {found.map((p) => (
+              <li key={p.id}>
+                <button type="button" disabled={busy}
+                        className="w-full rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                        onClick={() => void save({ productId: p.id })}>
+                  {p.name}
+                  <span className="text-muted-foreground">
+                    {[p.brand, p.category].filter(Boolean).map((x) => ` · ${x}`).join('')}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="flex justify-between gap-2">
+            <Button variant="outline" size="sm" onClick={() => { setMaking(true); setName(q); }}>
+              <Plus className="mr-1 h-3.5 w-3.5" /> New product
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <input className={FIELD} value={name} placeholder="What it is (e.g. coffee beans)"
+                 onChange={(e) => setName(e.target.value)} autoFocus />
+          <input className={FIELD} value={brand} placeholder="Brand (optional)"
+                 onChange={(e) => setBrand(e.target.value)} />
+          <input className={FIELD} value={category} placeholder="Category" list={`cats-${lineId}`}
+                 onChange={(e) => setCategory(e.target.value)} />
+          <datalist id={`cats-${lineId}`}>
+            {cats.map((c) => <option key={c.id} value={c.name} />)}
+          </datalist>
+          <div className="flex justify-between gap-2">
+            <Button size="sm" disabled={busy || !name.trim()}
+                    onClick={() => void save({ new: {
+                      name: name.trim(), brand: brand.trim() || null,
+                      category: category.trim() || null,
+                    } })}>
+              {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1 h-3.5 w-3.5" />}
+              Save
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setMaking(false)}>Back</Button>
+          </div>
+        </>
+      )}
+      {problem && <p className="text-xs text-destructive">{problem}</p>}
+    </div>
+  );
+}
+
+/** A committed purchase: the image, its lines (each with its product label,
+ * correctable), charges, payment. */
 function CommittedDetail({ id, onError }: { id: number; onError: (e: string) => void }) {
-  const tx = useDetail(id, onError);
+  const [version, setVersion] = useState(0);
+  useLive(['spending'], () => setVersion((v) => v + 1));
+  const tx = useDetail(id, onError, version);
+  const [editing, setEditing] = useState<number | null>(null);
   if (!tx) return <Loader2 className="mx-3 mb-3 h-4 w-4 animate-spin text-muted-foreground" />;
   const money = (c: number) => formatMoney(c, tx.currency);
   return (
@@ -310,11 +495,21 @@ function CommittedDetail({ id, onError }: { id: number; onError: (e: string) => 
       <Evidence tx={tx} />
       <table className="w-full text-sm">
         <tbody>
-          {tx.lineItems.map((l, i) => (
-            <tr key={i}>
+          {tx.lineItems.map((l) => (
+            <tr key={l.id} className="align-top">
               <td className="py-0.5 pr-2 text-foreground">
                 {l.qty != null && l.qty !== 1 ? `${l.qty} × ` : ''}
                 {l.rawText}
+                <button type="button"
+                        className="block text-left text-xs text-muted-foreground hover:text-foreground"
+                        aria-label={`Relabel ${l.rawText}`}
+                        onClick={() => setEditing((cur) => (cur === l.id ? null : l.id))}>
+                  <LabelText line={l} />
+                </button>
+                {editing === l.id && (
+                  <LabelEditor lineId={l.id} onCancel={() => setEditing(null)}
+                               onDone={() => { setEditing(null); setVersion((v) => v + 1); }} />
+                )}
               </td>
               <td className="py-0.5 text-right tabular-nums">{money(l.lineTotalCents)}</td>
             </tr>

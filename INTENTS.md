@@ -745,6 +745,14 @@ Photograph a receipt in Scratch, hold send, and it becomes spending rows
 - **Two layers catch the unexpected.** The extraction transcribes anything
   that fits no field into `unmapped`, and the parser checks the arithmetic
   within a rounding tolerance. Either one sends the receipt to review.
+- **Labels come after approval, in the background.** Product matching
+  (`spending_match.py`) runs only on approved lines, so nothing unapproved
+  is classified and it works from the corrected text: an alias, else the
+  decision model asked with the candidates in two orders (both must agree,
+  since small models lean on option order), else the chat model. Every
+  label is applied; unsure ones are marked, never blocking. Only confident
+  and corrected labels become aliases, so one bad guess can't repeat, and a
+  correction remaps every line its store printed the same way.
 - **Nothing commits on its own yet.** Every receipt lands pending until the
   user approves it (with corrections); auto-commit waits for product
   matching, when every line resolves through a known alias.
