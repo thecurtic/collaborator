@@ -289,6 +289,15 @@ def load_config() -> dict:
             "extract_max_tokens": 8192,   # thinking + a long receipt's JSON
             "timeout": 300,               # seconds, the text-only structuring call
         },
+        "decision": {
+            # A decision model (typed questions, a probability per option;
+            # decision.py). Empty model = none: the chat model decides.
+            "endpoint_url": "",       # empty = inference.endpoint_url
+            "model": "",
+            "timeout": 30,            # seconds per request
+            "image_max_side": 896,    # px; servers refuse inputs past their batch
+            "classify_threshold": 0.8,  # below it, the chat model classifies
+        },
         "location": {
             # Per-turn location context (frontend sends {lat, lon, accuracy, ts}
             # on /api/messages when granted). Raw coordinates only — no

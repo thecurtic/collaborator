@@ -728,8 +728,13 @@ Photograph a receipt in Scratch, hold send, and it becomes spending rows
   user's own `spending.db` beside `conversations.db`: personal data with a
   longer life than app state, so app internals can be rebuilt without it.
   The model reads receipts; it never sums or guesses numbers.
-- **Classify first, then divert.** A held photo gets a label-only vision
-  call before anything else; backend code routes on it. A receipt leaves
+- **Classify first, then divert.** A held photo gets a label-only call
+  before anything else; backend code routes on it. A decision model answers
+  it when one is configured (`decision.py`: typed questions, a probability
+  per option, no generated text); below its threshold or unreachable, the
+  chat model decides. Every answer is logged in `decision_log` (labels and
+  scores, never content) so real accuracy, not claimed calibration, sets the
+  thresholds. The model is config: swap it as better ones arrive. A receipt leaves
   Scratch completely (image copied to `spending-evidence/`, item deleted,
   caption kept on the evidence); everything else takes the ordinary path.
 - **Read, then structure.** The receipt is first transcribed by a plain

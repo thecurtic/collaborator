@@ -46,6 +46,20 @@ def main():
     print(f"vision model:     {vision.model()!r}")
     if not vision.model():
         sys.exit("No model here can see images, so nothing is classified.")
+    import decision
+    print(f"decision model:   {decision.model()!r}")
+    if decision.model():
+        try:
+            with open(path, "rb") as f:
+                img = vision.prepare_image(f.read(), mime, max_side=decision.image_max_side())
+            a = decision.ask([decision.choice("kind", "What is this image?",
+                                              spending.CLASSIFY_OPTIONS)], images=[img])["kind"]
+            print(f"\n[decision] {a['choice']!r} at {a['probability']:.3f} "
+                  f"(threshold {decision.threshold('classify')})")
+            for v, p in sorted(a["probabilities"].items(), key=lambda x: -x[1]):
+                print(f"    {v:10} {p:.3f}")
+        except decision.DecisionError as e:
+            print(f"\n[decision] FAILED: {e}")
     try:
         print(f"\nclassify() →  {spending.classify(path, mime)!r}")
     except RuntimeError as e:

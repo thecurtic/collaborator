@@ -131,6 +131,22 @@ CREATE TABLE IF NOT EXISTS payments (
     tendered_cents INTEGER,
     change_cents INTEGER
 );
+-- Every decision-model answer, and the fallback's when it decided instead:
+-- the record that measures real accuracy and tunes the thresholds. Labels
+-- and scores only, never content.
+CREATE TABLE IF NOT EXISTS decision_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    task TEXT NOT NULL,                       -- classify | match | category
+    model TEXT NOT NULL,
+    subject TEXT,                             -- e.g. "evidence:12", "line:40"
+    answer TEXT,
+    probability REAL,
+    probabilities TEXT,                       -- JSON {option: p}
+    options INTEGER,                          -- size of the option list
+    used INTEGER NOT NULL DEFAULT 1,          -- 0: below threshold, fallback decided
+    corrected_to TEXT                         -- set when the user corrects it
+);
 CREATE INDEX IF NOT EXISTS idx_tx_status ON transactions(status, datetime);
 CREATE INDEX IF NOT EXISTS idx_lines_tx ON line_items(transaction_id);
 CREATE INDEX IF NOT EXISTS idx_charges_tx ON charges(transaction_id);
@@ -280,11 +296,14 @@ def _label(reply: str) -> str:
 
 
 def _look(path: str, mime: Optional[str], prompt: str, max_tokens: int) -> str:
+    return _look_image(_image(path, mime), prompt, max_tokens)
+
+
+def _look_image(image: tuple, prompt: str, max_tokens: int) -> str:
     """One plain look, retried once with twice the budget when the reply
     comes back empty: a reasoning model sometimes thinks a whole budget
     away on a dense receipt, and the next try usually lands."""
     import vision
-    image = _image(path, mime)
     try:
         return vision.look([image], prompt, max_tokens=max_tokens, temperature=0)
     except vision.EmptyReply as e:
@@ -293,18 +312,72 @@ def _look(path: str, mime: Optional[str], prompt: str, max_tokens: int) -> str:
                            temperature=0)
 
 
-def classify(path: str, mime: Optional[str]) -> Optional[str]:
-    """The content label, or None when no model here can see images.
+# The decision model's question: each option described in full, kept short
+# because image requests leave little room for text.
+CLASSIFY_OPTIONS = {
+    "receipt": "A printed or digital store receipt with line items and a total",
+    "statement": "A bank or card statement, or a banking app screen",
+    "wallet": "A Bitcoin or Lightning wallet app screen",
+    "chat": "A screenshot of a text conversation",
+    "document": "Any other document or screenshot",
+    "photo": "A photo of a scene, person, animal or object",
+    "other": "None of these",
+}
 
-    A plain request: structured output on an image request comes back empty
-    on some servers (LM Studio's MLX engine), so the label is parsed out of
-    the reply instead. Raises RuntimeError when the look fails."""
+
+def log_decision(db_path: Optional[str], task: str, model_id: str, subject: Optional[str],
+                 answer: Optional[str], probability: Optional[float] = None,
+                 probabilities: Optional[dict] = None, used: bool = True) -> None:
+    """One row of the decision log (labels and scores only, never content)."""
+    if not db_path:
+        return
+    conn = connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO decision_log (task, model, subject, answer, probability,"
+            " probabilities, options, used) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (task, model_id, subject, answer, probability,
+             json.dumps(probabilities) if probabilities else None,
+             len(probabilities) if probabilities else None, int(used)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def classify(path: str, mime: Optional[str], db_path: Optional[str] = None,
+             subject: Optional[str] = None) -> Optional[str]:
+    """The content label, or None when no model here can see images (the
+    receipt couldn't be read anyway, so the item takes the ordinary path).
+
+    The decision model answers first when one is configured; below its
+    threshold, or unreachable, the chat model decides with a plain request
+    (structured output on an image request comes back empty on some
+    servers, so its label is parsed from the reply). Both are logged.
+    Raises RuntimeError when the chat model's look fails."""
+    import decision
     import vision
     if not vision.model():
         return None
-    reply = _look(path, mime, CLASSIFY_PROMPT,
-                  int(_cfg().get("classify_max_tokens", 2048)))
-    return _label(reply)
+    who = decision.model()
+    if who:
+        try:
+            with open(path, "rb") as f:
+                dimage = vision.prepare_image(
+                    f.read(), mime, max_side=decision.image_max_side())
+            a = decision.ask([decision.choice("kind", "What is this image?", CLASSIFY_OPTIONS)],
+                             images=[dimage])["kind"]
+            used = a["choice"] in LABELS and a["probability"] >= decision.threshold("classify")
+            log_decision(db_path, "classify", who, subject, a["choice"],
+                         a["probability"], a["probabilities"], used)
+            if used:
+                return a["choice"]
+        except decision.DecisionError as e:
+            print(f"Warning: spending: decision model unavailable, using the chat model ({e})")
+    reply = _look_image(_image(path, mime), CLASSIFY_PROMPT,
+                        int(_cfg().get("classify_max_tokens", 2048)))
+    label = _label(reply)
+    log_decision(db_path, "classify", vision.model(), subject, label)
+    return label
 
 
 def transcribe_receipt(path: str, mime: Optional[str]) -> str:
@@ -596,7 +669,8 @@ def divert(db_path: str, row: dict, media_dir: str) -> Optional[dict]:
     if not os.path.exists(src):
         return None
     try:
-        label = classify(src, row.get("media_mime"))
+        label = classify(src, row.get("media_mime"), db_path,
+                         f"scratch:{row.get('id')}")
     except RuntimeError as e:
         # Never fall through to the note agent on a failed look: a receipt
         # would become a note. Say so on the card; a hold retries.

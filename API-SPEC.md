@@ -1299,7 +1299,9 @@ transcript on the Transcripts page (§16, source `scratch`) and the job running
 in the background. A voice note recorded in the app (`media_name`
 `voice-note.*`) keeps the one-shot action: what was said is transcribed and
 the agent acts on it.
-With `spending.enabled` (the default), a held photo is classified first; a receipt leaves
+With `spending.enabled` (the default), a held photo is classified first (by the
+configured decision model, `POST {decision.endpoint_url}/decisions`, else or
+when it's unsure by the chat model); a receipt leaves
 Scratch (§30): the response is `{ "diverted": true, "transaction_id",
 "evidence_id", "review": [...] }` instead of `{ "item" }`, and the item is
 deleted. A receipt that can't be read, or whose reading trips the secret

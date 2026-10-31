@@ -255,6 +255,18 @@ spending:
   extract_max_tokens: 8192     # reading the receipt, and structuring what was read
   timeout: 300                 # seconds, the structuring call
 
+# A decision model: answers typed questions (yes/no, one of several) with a
+# probability per option and no generated text, over a decisions endpoint
+# (POST {endpoint_url}/decisions). Spending uses it to classify held photos,
+# falling back to the chat model when it's unsure or unreachable. Leave
+# model empty to use the chat model for everything.
+decision:
+  endpoint_url: ""             # empty = inference.endpoint_url
+  model: ""                    # e.g. a d1 decision model's id
+  timeout: 30                  # seconds per request
+  image_max_side: 896          # px; images are shrunk to fit the server's batch
+  classify_threshold: 0.8      # below it, the chat model classifies the photo
+
 # Files attached to chats: stored on this server, text extracted once
 # (markitdown, PDF text layers, the chat model's vision for images and scans,
 # speech-to-text for audio/video) and kept with the attachment.

@@ -11,7 +11,9 @@ os.environ["AUTH_ENABLED"] = "false"
 os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "conversations.db")
 import config
 config.get_config._config = config.load_config()
-import importlib, db, main, scratch, spending, vision
+import importlib, db, decision, main, scratch, spending, vision
+import pytest
+import requests
 importlib.reload(db)
 importlib.reload(main)
 from starlette.testclient import TestClient
@@ -382,3 +384,105 @@ def test_empty_look_retries_with_more_room(monkeypatch):
     item, out = _hold(c)
     assert out.get("diverted") is True
     assert budgets[1] == 2 * budgets[0]
+
+
+# --- The decision model ------------------------------------------------------------
+
+class _Resp:
+    def __init__(self, data, status=200):
+        self._data, self.status_code, self.text = data, status, ""
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(f"{self.status_code}", response=self)
+    def json(self):
+        return self._data
+
+
+def _decide(monkeypatch, cfg, kind=None, p=0.97, fail=False, sent=None):
+    """A decision model answering the classify question with `kind`."""
+    cfg["decision"]["model"] = "decider"
+    def post(url, json=None, timeout=None):
+        if sent is not None:
+            sent.append((url, json))
+        if fail:
+            raise requests.exceptions.ConnectionError("refused")
+        probs = [{"value": v, "probability": (p if v == kind else (1 - p) / 6)}
+                 for v in spending.CLASSIFY_OPTIONS]
+        return _Resp({"answers": [{"type": "choice", "name": "kind", "choice": kind,
+                                   "probabilities": probs, "confidence": p - 0.02}]})
+    monkeypatch.setattr(decision.requests, "post", post)
+
+
+def _log(dbp):
+    conn = spending.connect(dbp)
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT task, model, subject, answer, probability, options, used FROM decision_log ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def test_decision_model_classifies_when_sure(monkeypatch):
+    c, cfg, dbp = _fresh()
+    calls, sent = [], []
+    _fake_vision(monkeypatch, "photo", GROCERY, calls)   # Qwen would say photo
+    _decide(monkeypatch, cfg, "receipt", sent=sent)
+    item, out = _hold(c)
+    assert out.get("diverted") is True
+    assert spending.CLASSIFY_PROMPT not in calls          # Qwen never asked
+    url, body = sent[0]
+    assert url.endswith("/decisions") and body["model"] == "decider"
+    part = body["input"][0]["content"][0]
+    assert part["type"] == "input_image" and part["image_url"].startswith("data:image/")
+    assert {c["value"] for c in body["questions"][0]["choices"]} == set(spending.CLASSIFY_OPTIONS)
+    row, = _log(dbp)
+    assert row["task"] == "classify" and row["model"] == "decider" and row["answer"] == "receipt"
+    assert row["used"] == 1 and row["options"] == len(spending.CLASSIFY_OPTIONS)
+    assert row["subject"] == f"scratch:{item['id']}"
+
+
+def test_unsure_decision_falls_back_to_the_chat_model(monkeypatch):
+    c, cfg, dbp = _fresh()
+    calls = []
+    _fake_vision(monkeypatch, "receipt", GROCERY, calls)
+    _decide(monkeypatch, cfg, "document", p=0.55)
+    item, out = _hold(c)
+    assert out.get("diverted") is True                    # Qwen said receipt
+    assert spending.CLASSIFY_PROMPT in calls
+    unsure, qwen = _log(dbp)
+    assert unsure["answer"] == "document" and unsure["used"] == 0
+    assert qwen["answer"] == "receipt" and qwen["model"] != "decider" and qwen["used"] == 1
+
+
+def test_unreachable_decision_model_falls_back(monkeypatch):
+    c, cfg, dbp = _fresh()
+    _fake_vision(monkeypatch, "receipt", GROCERY)
+    _decide(monkeypatch, cfg, fail=True)
+    item, out = _hold(c)
+    assert out.get("diverted") is True
+    row, = _log(dbp)
+    assert row["model"] != "decider" and row["answer"] == "receipt"
+
+
+def test_no_decision_model_configured_asks_only_the_chat_model(monkeypatch):
+    c, cfg, dbp = _fresh()
+    monkeypatch.setattr(decision.requests, "post", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("no decision model is configured")))
+    _fake_vision(monkeypatch, "photo", GROCERY)
+    _hold(c)
+
+
+def test_decision_reply_parsing(monkeypatch):
+    c, cfg, dbp = _fresh()
+    cfg["decision"]["model"] = "decider"
+    monkeypatch.setattr(decision.requests, "post", lambda *a, **k: _Resp({"answers": [
+        {"type": "predicate", "name": "tea", "probability": 0.91},
+        {"type": "choice", "name": "m", "choice": "p1", "confidence": 0.6,
+         "probabilities": [{"value": "p1", "probability": 0.7}, {"value": "new", "probability": 0.3}]}]}))
+    out = decision.ask([decision.predicate("tea", "Tea?"),
+                        decision.choice("m", "Which?", {"p1": "A", "new": "Not listed"})], text="x")
+    assert out["tea"] == {"probability": 0.91}
+    assert out["m"]["choice"] == "p1" and out["m"]["probability"] == 0.7 and out["m"]["confidence"] == 0.6
+    monkeypatch.setattr(decision.requests, "post", lambda *a, **k: _Resp({"answers": []}))
+    with pytest.raises(decision.DecisionError, match="unanswered"):
+        decision.ask([decision.predicate("tea", "Tea?")], text="x")
