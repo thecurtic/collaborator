@@ -837,7 +837,14 @@ export function ScratchView({
   const runAct = async (item: ScratchItem) => {
     setActing((prev) => new Set(prev).add(item.id));
     try {
-      replaceItem(await api.actScratch(item.id));
+      const out = await api.actScratch(item.id);
+      if ('diverted' in out) {
+        // A receipt: it left Scratch for Spending, so the card goes.
+        setItems((prev) => prev?.filter((i) => i.id !== item.id) ?? prev);
+        setPinned((prev) => prev.filter((i) => i.id !== item.id));
+      } else {
+        replaceItem(out);
+      }
     } catch (err) {
       setError(errMessage(err));
     } finally {

@@ -270,6 +270,13 @@ export interface ScratchItem {
   } | null;
 }
 
+/** What a hold-send on a receipt returns: it left Scratch for Spending. */
+export interface ScratchDiverted {
+  diverted: true;
+  transactionId: number;
+  evidenceId: number;
+}
+
 /** Scratch's derived filters (by what each item already is). */
 export type ScratchFilter = 'links' | 'photos' | 'documents' | 'text' | 'voice';
 

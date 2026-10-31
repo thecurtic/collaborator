@@ -718,6 +718,29 @@ pi-session-manager.
   the user asks, and mark everything as untrusted agent output. Recall still
   never sees agent content.
 
+## Decision: Spending Lives in Its Own Database, Fed Only From Scratch
+
+Decided 2026-10-31 (the receipt-capture spec; phase 1 built: receipts).
+Photograph a receipt in Scratch, hold send, and it becomes spending rows
+(`backend/spending.py`, API-SPEC §30).
+
+- **Rows are the truth.** Spending math is SQL over integer cents in the
+  user's own `spending.db` beside `conversations.db`: personal data with a
+  longer life than app state, so app internals can be rebuilt without it.
+  The model reads receipts; it never sums or guesses numbers.
+- **Classify first, then divert.** A held photo gets a label-only vision
+  call before anything else; backend code routes on it. A receipt leaves
+  Scratch completely (image copied to `spending-evidence/`, item deleted,
+  caption kept on the evidence); everything else takes the ordinary path.
+- **Two layers catch the unexpected.** The extraction transcribes anything
+  that fits no field into `unmapped`, and the parser checks the arithmetic
+  within a rounding tolerance. Either one sends the receipt to review.
+- **Nothing commits on its own yet.** Every receipt lands pending until the
+  user approves it (with corrections); auto-commit waits for product
+  matching, when every line resolves through a known alias.
+- **Last four only.** Full card and account numbers, auth codes, balances
+  and Bitcoin addresses are left out at extraction.
+
 ## Future Considerations (User-Defined)
 
 - [ ] Priority levels for recall

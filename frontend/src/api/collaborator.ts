@@ -13,6 +13,7 @@ import type {
   ProposedDraft,
   RecallBlock,
   ScratchFilter,
+  ScratchDiverted,
   ScratchItem,
   ReindexResult,
   SendMessageInput,
@@ -557,8 +558,12 @@ export interface CollaboratorApi {
     limit?: number;
     type?: ScratchFilter | null;
   }): Promise<{ items: ScratchItem[]; pinned: ScratchItem[] }>;
-  /** The hold-send gesture: one-shot agent action on this item. */
-  actScratch(id: number): Promise<ScratchItem>;
+  /**
+   * The hold-send gesture: one-shot agent action on this item. A receipt
+   * comes back `diverted` instead: it became a pending spending transaction
+   * and the Scratch item is gone.
+   */
+  actScratch(id: number): Promise<ScratchItem | ScratchDiverted>;
   /** Toggle the has-the-LLM-seen-this flag. */
   setScratchReadable(id: number, readable: boolean): Promise<ScratchItem>;
   /** Pin above the stream, or back into it. */
@@ -1110,11 +1115,18 @@ class HttpCollaboratorApi implements CollaboratorApi {
     };
   }
 
-  async actScratch(id: number): Promise<ScratchItem> {
-    const res = await request<{ item: ApiScratchItem }>(
-      `/api/scratch/${id}/act`,
-      { method: 'POST' },
-    );
+  async actScratch(id: number): Promise<ScratchItem | ScratchDiverted> {
+    const res = await request<
+      | { item: ApiScratchItem }
+      | { diverted: true; transaction_id: number; evidence_id: number }
+    >(`/api/scratch/${id}/act`, { method: 'POST' });
+    if ('diverted' in res) {
+      return {
+        diverted: true,
+        transactionId: res.transaction_id,
+        evidenceId: res.evidence_id,
+      };
+    }
     return toScratchItem(res.item);
   }
 

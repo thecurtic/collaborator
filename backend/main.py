@@ -54,6 +54,7 @@ import uploads
 import vision
 import wallet
 import scratch
+import spending
 import tool_log
 import link_preview
 import gate_client
@@ -4143,6 +4144,28 @@ async def act_on_scratch(
         return {"item": _finish("pending", result, draft_id=result["draft_id"],
                                 llm_readable=False)}
 
+    if kind == "image" and row.get("media_path") and spending.enabled():
+        # Spending evidence leaves Scratch completely: classified first, and a
+        # receipt is copied into spending-evidence/, recorded as a pending
+        # transaction, and its Scratch item deleted. Anything else carries on.
+        out = await asyncio.to_thread(spending.divert, db_path, row,
+                                      scratch.media_dir(db_path))
+        if out and out.get("diverted"):
+            conn = sqlite3.connect(db_path)
+            try:
+                gone = delete_scratch(conn, scratch_id)
+            finally:
+                conn.close()
+            if gone:
+                scratch.delete_media_if_unshared(db_path, gone)
+            live.publish(db_path, ["spending"])
+            return {"diverted": True, "transaction_id": out["transaction_id"],
+                    "evidence_id": out["evidence_id"], "review": out["review"]}
+        if out and out.get("refused"):
+            return {"item": _finish("refused", {"kind": "secret", "note": out["refused"]})}
+        if out and out.get("error"):
+            return {"item": _finish("done", {"kind": "error", "note": out["error"]})}
+
     if kind in ("audio", "video") and row.get("media_path") \
             and not scratch.is_voice_note(row):
         # An attached recording or video: holding send transcribes it onto
@@ -4254,6 +4277,79 @@ async def act_on_scratch(
                                 draft_id=result["draft_id"], llm_readable=True)}
     status = "refused" if result["kind"] == "flagged" else "done"
     return {"item": _finish(status, result, llm_readable=True)}
+
+
+# --- Spending (receipts diverted from Scratch; spending.py) --------------------
+# Rows live in the user's spending.db. Phase 1: every receipt lands pending;
+# the user approves (optionally correcting it) or discards.
+
+class SpendingApproval(BaseModel):
+    receipt: Optional[dict] = None   # corrections, in the extraction's shape
+
+
+@app.get("/api/spending/transactions")
+async def get_spending_transactions(
+    status: Optional[str] = None,
+    limit: int = 100,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    _require_auth(passkey)
+    if status not in (None, "pending", "committed"):
+        raise HTTPException(status_code=422, detail="status is pending or committed")
+    db_path = _resolve_db_path(passkey)
+    items = spending.list_transactions(db_path, status, max(1, min(limit, 500)))
+    return {"items": items, "count": len(items)}
+
+
+@app.get("/api/spending/transactions/{tx_id}")
+async def get_spending_transaction(
+    tx_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    _require_auth(passkey)
+    tx = spending.get_transaction(_resolve_db_path(passkey), tx_id)
+    if tx is None:
+        raise HTTPException(status_code=404, detail=f"No transaction {tx_id}")
+    return {"transaction": tx}
+
+
+@app.post("/api/spending/transactions/{tx_id}/approve")
+async def approve_spending_transaction(
+    tx_id: int,
+    request: SpendingApproval,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    _require_auth(passkey)
+    try:
+        tx = spending.approve(_resolve_db_path(passkey), tx_id, request.receipt)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if tx is None:
+        raise HTTPException(status_code=404, detail=f"No pending transaction {tx_id}")
+    return {"transaction": tx}
+
+
+@app.delete("/api/spending/transactions/{tx_id}")
+async def discard_spending_transaction(
+    tx_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    _require_auth(passkey)
+    if not spending.discard(_resolve_db_path(passkey), tx_id):
+        raise HTTPException(status_code=404, detail=f"No transaction {tx_id}")
+    return {"deleted": tx_id}
+
+
+@app.get("/api/spending/evidence/{evidence_id}/image")
+async def get_spending_evidence_image(
+    evidence_id: int,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    _require_auth(passkey)
+    found = spending.evidence_file(_resolve_db_path(passkey), evidence_id)
+    if found is None or not os.path.exists(found[0]):
+        raise HTTPException(status_code=404, detail="no image for this evidence")
+    return _serve_user_file(found[0], found[1], os.path.basename(found[0]))
 
 
 # --- Attachments (files handed to a chat; attachments.py) ----------------------

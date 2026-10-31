@@ -108,8 +108,10 @@ def image_part(mime: str, b64: str) -> dict:
 
 
 def look(images: List[tuple], prompt: str, max_tokens: int = 1024,
-         timeout: float = None, temperature: float = 0.2) -> str:
+         timeout: float = None, temperature: float = 0.2,
+         response_format: Optional[dict] = None) -> str:
     """Ask the vision model about one or more images ((mime, base64) pairs).
+    `response_format` asks for structured output (json_schema).
     Raises RuntimeError with a readable reason on any failure."""
     from inference import _get_endpoint_url
     who = model()
@@ -127,6 +129,8 @@ def look(images: List[tuple], prompt: str, max_tokens: int = 1024,
         "max_tokens": max_tokens,
         "stream": False,
     }
+    if response_format:
+        payload["response_format"] = response_format
     try:
         # Generous timeout: LM Studio may load the model on first use.
         r = requests.post(f"{_get_endpoint_url()}/chat/completions", json=payload,

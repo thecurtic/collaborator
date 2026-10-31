@@ -39,6 +39,7 @@ _AREAS = [
     ("/api/notes", ["notes"]),
     ("/api/events", ["notes"]),
     ("/api/scratch", ["scratch"]),
+    ("/api/spending", ["spending"]),
     ("/api/transcripts", ["transcripts"]),
     ("/api/transcribe", ["transcripts"]),
     ("/api/projects", ["projects"]),

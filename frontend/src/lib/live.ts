@@ -23,6 +23,7 @@ export type LiveArea =
   | 'projects'
   | 'feed'
   | 'wallet'
+  | 'spending'
   /** A reply streaming on another device (carries the text so far). */
   | 'reply';
 

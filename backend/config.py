@@ -279,6 +279,14 @@ def load_config() -> dict:
             # (same exit and guards as fetch_url). False: plain URLs, no fetch.
             "link_previews": True,
         },
+        "spending": {
+            # Receipts held in Scratch become spending rows in spending.db
+            # (spending.py). Off: every held photo takes the ordinary path.
+            "enabled": False,
+            "rounding_tolerance": 0.05,  # per arithmetic check (cash rounds to $0.05)
+            "classify_max_tokens": 512,  # reasoning models need thinking headroom
+            "extract_max_tokens": 4096,
+        },
         "location": {
             # Per-turn location context (frontend sends {lat, lon, accuracy, ts}
             # on /api/messages when granted). Raw coordinates only — no

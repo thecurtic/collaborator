@@ -245,6 +245,15 @@ scratch:
                                # when set; with a webtool, no icons/thumbnails).
                                # false: plain URLs, nothing fetched
 
+# Spending: a receipt held in Scratch is classified, read into structured rows
+# in spending.db (beside conversations.db) and leaves Scratch; it waits as a
+# pending transaction until approved. Needs a chat model that sees images.
+spending:
+  enabled: false               # true: hold-send diverts receipts out of Scratch
+  rounding_tolerance: 0.05     # per arithmetic check; cash totals round to $0.05
+  classify_max_tokens: 512     # the label call (reasoning models need headroom)
+  extract_max_tokens: 4096     # the receipt-reading call
+
 # Files attached to chats: stored on this server, text extracted once
 # (markitdown, PDF text layers, the chat model's vision for images and scans,
 # speech-to-text for audio/video) and kept with the attachment.

@@ -1298,6 +1298,11 @@ transcript on the Transcripts page (§16, source `scratch`) and the job running
 in the background. A voice note recorded in the app (`media_name`
 `voice-note.*`) keeps the one-shot action: what was said is transcribed and
 the agent acts on it.
+With `spending.enabled`, a held photo is classified first; a receipt leaves
+Scratch (§30): the response is `{ "diverted": true, "transaction_id",
+"evidence_id", "review": [...] }` instead of `{ "item" }`, and the item is
+deleted. A receipt that can't be read, or whose reading trips the secret
+check, stays as an item (`error` / `refused`).
 
 ScratchItem: `{ id, created_at, kind, content, media_path, media_mime,
 media_size, media_hash, transcript, status, llm_readable, action_result,
@@ -1695,7 +1700,7 @@ Messages say which area changed; the data still comes from the normal API:
 data: {"areas": ["chats"], "origin": "k3x9..."}
 ```
 Areas: `chats`, `notes` (events included), `drafts`, `scratch`,
-`transcripts`, `projects`, `feed`, `wallet`. They're sent after every
+`transcripts`, `projects`, `feed`, `wallet`, `spending`. They're sent after every
 successful write request (by its path) and by background work (a saved
 reply, a generated title, branch summaries, a transcription job, a link
 preview). `origin` is the `X-Client-Id` header of the request that made the
@@ -1713,6 +1718,49 @@ saved turns follow as a `chats` change.
 
 After a gap (a phone that slept, a dropped connection), a client can't know
 what it missed: on reconnecting it reloads everything it shows.
+
+### 30. Spending (receipts)
+
+Receipts held in Scratch (§23) become rows in the user's `spending.db`, beside
+`conversations.db`. Off unless `spending.enabled`; needs a chat model that
+sees images. The receipt image is copied to `spending-evidence/` (Scratch's
+own copy goes only when no other item shares it). Amounts are integer cents.
+Every receipt lands `pending` with the reasons it needs review; nothing
+commits on its own yet.
+
+**`GET /api/spending/transactions?status=pending|committed&limit=100`** →
+`{ "items": [Transaction], "count": N }`, newest purchase first; `422` for
+another status.
+
+**`GET /api/spending/transactions/{id}`** → `{ "transaction": Transaction +
+{ line_items, charges, payment, evidence } }`.
+
+**`POST /api/spending/transactions/{id}/approve`** `{ "receipt"?: {...} }` →
+`{ "transaction" }`, now `committed`. `receipt` carries the user's
+corrections in the extraction's shape (amounts in units: `store {name,
+address, store_number}`, `datetime`, `currency`, `line_items [{raw_text, qty,
+unit_price, line_total}]`, `charges [{kind, name, raw_text, amount, rate,
+line_index}]`, `subtotal`, `total`, `payment {method, card_brand, last_four,
+tendered, change}`, `unmapped`); `422` when it has no total or no lines, `404`
+when the transaction isn't pending. Its charge types become known, so they
+stop being flagged on later receipts.
+
+**`DELETE /api/spending/transactions/{id}`** → `{ "deleted": id }`: the
+transaction and the evidence only it held, image included.
+
+**`GET /api/spending/evidence/{id}/image`** → the receipt image.
+
+Transaction: `{ id, status, datetime, currency, amount_cents, subtotal_cents,
+store, store_address, review, created_at, committed_at }`. `review` lists why
+it awaits the user: `the numbers don't add up to the total` (lines and
+charges vs. subtotal and total, within `spending.rounding_tolerance`),
+`something on the receipt fits no field`, `new charge: <name>`, `payment
+method unclear`, `no store name`, `no date`. A line item: `{ raw_text, qty,
+unit_price_cents, line_total_cents, product_id }`; a charge: `{ kind (tax |
+fee | deposit | discount | rounding | tip | other), name, raw_text,
+amount_cents, rate, known, line_index }`; payment: `{ method (cash | card |
+bitcoin | other), card_brand, last_four, tendered_cents, change_cents }`;
+evidence: `{ id, type, caption, role, captured_at, unmapped }`.
 
 ## Data Models
 
