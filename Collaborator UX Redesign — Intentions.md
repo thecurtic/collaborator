@@ -215,7 +215,7 @@ Collaborator has a Lightning wallet of its own, and the shape copies what the br
 
 ### Spending
 
-Spending is what I've spent, read from receipts. I photograph a receipt in Scratch and hold send; it never stays in Scratch and I never say what it is. It lands on the Spending screen, in the hamburger menu next to Wallet, since the bottom bar is full and this is for occasional deep looks (receipt-capture spec, 2026-10-31).
+Spending is what I've spent, read from receipts. I photograph a receipt in Scratch and hold send; it never stays in Scratch and I never say what it is. It lands on the Spending screen, in the hamburger menu beside the other archives (Wallet stays in Settings), since the bottom bar is full and this is for occasional deep looks (receipt-capture spec, 2026-10-31).
 
 - **Nothing counts until I've checked it.** New receipts are pinned at the top under "To check", each showing why it needs a look (the numbers don't add up, a charge it hasn't seen, an unclear payment method). Opening one shows the photo beside every field it read, all editable; approve commits it as corrected, discard throws it and its photo away. Approving teaches it the charge types, so the next receipt with GST isn't flagged for it.
 - **Below that, the period total and the purchases.** A week / month / year toggle (month by default) over what's been approved, then every purchase newest first; a purchase opens to its receipt photo, lines, charges and how it was paid.

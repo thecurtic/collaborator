@@ -4,6 +4,7 @@ import {
   Globe,
   LogOut,
   Menu,
+  Receipt,
   ScrollText,
   Settings as SettingsIcon,
   Users,
@@ -45,6 +46,7 @@ export function AppMenu({
   onOpenNotes,
   onOpenPeople,
   onOpenToolLog,
+  onOpenSpending,
   onSignOut,
 }: {
   onOpenSettings: () => void;
@@ -53,6 +55,7 @@ export function AppMenu({
   onOpenNotes: () => void;
   onOpenPeople: () => void;
   onOpenToolLog: () => void;
+  onOpenSpending: () => void;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -100,6 +103,9 @@ export function AppMenu({
             </MenuItem>
             <MenuItem icon={FileVideo} onClick={() => pick(onOpenTranscripts)}>
               Transcripts
+            </MenuItem>
+            <MenuItem icon={Receipt} onClick={() => pick(onOpenSpending)}>
+              Spending
             </MenuItem>
             <div className="my-1 border-t border-border" />
             <MenuItem icon={Globe} onClick={() => pick(onOpenWebSearch)}>

@@ -774,6 +774,7 @@ function AppShell() {
               onOpenNotes={() => openNotes(null)}
               onOpenPeople={() => openNotes('social-graph')}
               onOpenToolLog={() => push({ kind: 'toolLog' })}
+              onOpenSpending={() => push({ kind: 'spending' })}
               onSignOut={() => {
                 resetScreens();
                 signOut();
@@ -875,7 +876,6 @@ function AppShell() {
         onOpenProfile={() => push({ kind: 'profile' })}
         onOpenReferences={() => push({ kind: 'references' })}
         onOpenWallet={() => push({ kind: 'wallet' })}
-        onOpenSpending={() => push({ kind: 'spending' })}
       />
 
       {/* Chat-title hold menu (+ its rename sheet). */}
