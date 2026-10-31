@@ -366,3 +366,19 @@ def test_structuring_call_is_text_only(monkeypatch):
     assert p["response_format"]["json_schema"]["name"] == "receipt"
     assert all(isinstance(m["content"], str) for m in p["messages"])   # no image parts
     assert "TOTAL 29.09" in p["messages"][1]["content"]
+
+
+def test_empty_look_retries_with_more_room(monkeypatch):
+    c, cfg, dbp = _fresh()
+    _fake_vision(monkeypatch, "receipt", GROCERY)
+    real, budgets = vision.look, []
+
+    def look(images, prompt, **k):
+        budgets.append(k["max_tokens"])
+        if len(budgets) == 1:     # the first look thinks its budget away
+            raise vision.EmptyReply("used its whole budget thinking", True)
+        return real(images, prompt, **k)
+    monkeypatch.setattr(vision, "look", look)
+    item, out = _hold(c)
+    assert out.get("diverted") is True
+    assert budgets[1] == 2 * budgets[0]

@@ -107,6 +107,14 @@ def image_part(mime: str, b64: str) -> dict:
     return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
 
 
+class EmptyReply(RuntimeError):
+    """The model answered with nothing; `budget` is True when it stopped at
+    max_tokens (a reasoning model thought the whole budget away)."""
+    def __init__(self, msg: str, budget: bool):
+        super().__init__(msg)
+        self.budget = budget
+
+
 def look(images: List[tuple], prompt: str, max_tokens: int = 1024,
          timeout: float = None, temperature: float = 0.2,
          response_format: Optional[dict] = None) -> str:
@@ -136,8 +144,10 @@ def look(images: List[tuple], prompt: str, max_tokens: int = 1024,
         r = requests.post(f"{_get_endpoint_url()}/chat/completions", json=payload,
                           timeout=timeout or scfg.get("timeout", 180))
         r.raise_for_status()
-        msg = r.json()["choices"][0]["message"]
+        choice = r.json()["choices"][0]
+        msg = choice["message"]
         text = (msg.get("content") or "").strip()
+        hit_length = choice.get("finish_reason") == "length"
     except requests.exceptions.RequestException as e:
         body = getattr(getattr(e, "response", None), "text", "") or ""
         raise RuntimeError(f"vision request to {who} failed: {e}"
@@ -148,7 +158,10 @@ def look(images: List[tuple], prompt: str, max_tokens: int = 1024,
     if "</think>" in text:
         text = text.rsplit("</think>", 1)[1].strip()
     if not text:
-        raise RuntimeError(f"vision model {who} returned no text")
+        if hit_length:
+            raise EmptyReply(f"vision model {who} used its whole {max_tokens}-token "
+                             "budget thinking and returned no text", True)
+        raise EmptyReply(f"vision model {who} returned no text", False)
     return text
 
 

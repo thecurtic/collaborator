@@ -279,6 +279,20 @@ def _label(reply: str) -> str:
     return words.pop() if len(words) == 1 else "other"
 
 
+def _look(path: str, mime: Optional[str], prompt: str, max_tokens: int) -> str:
+    """One plain look, retried once with twice the budget when the reply
+    comes back empty: a reasoning model sometimes thinks a whole budget
+    away on a dense receipt, and the next try usually lands."""
+    import vision
+    image = _image(path, mime)
+    try:
+        return vision.look([image], prompt, max_tokens=max_tokens, temperature=0)
+    except vision.EmptyReply as e:
+        print(f"Warning: spending: empty look, retrying with more room ({e})")
+        return vision.look([image], prompt, max_tokens=max_tokens * 2,
+                           temperature=0)
+
+
 def classify(path: str, mime: Optional[str]) -> Optional[str]:
     """The content label, or None when no model here can see images.
 
@@ -288,19 +302,16 @@ def classify(path: str, mime: Optional[str]) -> Optional[str]:
     import vision
     if not vision.model():
         return None
-    reply = vision.look([_image(path, mime)], CLASSIFY_PROMPT,
-                        max_tokens=int(_cfg().get("classify_max_tokens", 2048)),
-                        temperature=0)
+    reply = _look(path, mime, CLASSIFY_PROMPT,
+                  int(_cfg().get("classify_max_tokens", 2048)))
     return _label(reply)
 
 
 def transcribe_receipt(path: str, mime: Optional[str]) -> str:
     """Step 1: the receipt's text, read the way a chat attachment is (a
     plain request, which every vision server handles)."""
-    import vision
-    return vision.look([_image(path, mime)], TRANSCRIBE_PROMPT,
-                       max_tokens=int(_cfg().get("extract_max_tokens", 8192)),
-                       temperature=0)
+    return _look(path, mime, TRANSCRIBE_PROMPT,
+                 int(_cfg().get("extract_max_tokens", 8192)))
 
 
 def _complete(messages: list, response_format: Optional[dict]) -> str:

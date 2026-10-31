@@ -24,10 +24,13 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong';
 }
 
+// No width here: row fields size themselves (w-12, flex-1 …); a lone field
+// takes FIELD. A w-full in the base would beat those and push rows off-screen.
 const INPUT =
-  'w-full min-w-0 rounded-md border border-input bg-background px-2 py-1.5 text-base text-foreground ' +
+  'min-w-0 rounded-md border border-input bg-background px-2 py-1.5 text-base text-foreground ' +
   'placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 ' +
   'focus-visible:ring-ring sm:text-sm';
+const FIELD = `${INPUT} w-full`;
 
 const PERIODS: { key: SpendingPeriod; label: string }[] = [
   { key: 'week', label: 'Week' },
@@ -427,22 +430,22 @@ function PendingEditor({
       <div className="grid grid-cols-2 gap-2">
         <label className="col-span-2">
           <span className={label}>Store</span>
-          <input className={INPUT} value={draft.storeName}
+          <input className={FIELD} value={draft.storeName}
                  onChange={(e) => set({ storeName: e.target.value })} />
         </label>
         <label className="col-span-2">
           <span className={label}>Address</span>
-          <input className={INPUT} value={draft.storeAddress}
+          <input className={FIELD} value={draft.storeAddress}
                  onChange={(e) => set({ storeAddress: e.target.value })} />
         </label>
         <label>
           <span className={label}>Date</span>
-          <input className={INPUT} value={draft.date} placeholder="YYYY-MM-DD"
+          <input className={FIELD} value={draft.date} placeholder="YYYY-MM-DD"
                  onChange={(e) => set({ date: e.target.value })} />
         </label>
         <label>
           <span className={label}>Currency</span>
-          <input className={INPUT} value={draft.currency} placeholder="CAD"
+          <input className={FIELD} value={draft.currency} placeholder="CAD"
                  onChange={(e) => set({ currency: e.target.value })} />
         </label>
       </div>
@@ -507,17 +510,17 @@ function PendingEditor({
       <div className="grid grid-cols-2 gap-2">
         <label>
           <span className={label}>Subtotal</span>
-          <input className={`${INPUT} text-right`} value={draft.subtotal} inputMode="decimal"
+          <input className={`${FIELD} text-right`} value={draft.subtotal} inputMode="decimal"
                  onChange={(e) => set({ subtotal: e.target.value })} />
         </label>
         <label>
           <span className={label}>Total</span>
-          <input className={`${INPUT} text-right font-medium`} value={draft.total} inputMode="decimal"
+          <input className={`${FIELD} text-right font-medium`} value={draft.total} inputMode="decimal"
                  onChange={(e) => set({ total: e.target.value })} />
         </label>
         <label>
           <span className={label}>Paid by</span>
-          <select className={INPUT} value={draft.method}
+          <select className={FIELD} value={draft.method}
                   onChange={(e) => set({ method: e.target.value as ReceiptDraft['method'] })}>
             {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
@@ -526,12 +529,12 @@ function PendingEditor({
           <div className="flex gap-1.5">
             <label className="flex-1">
               <span className={label}>Card</span>
-              <input className={INPUT} value={draft.cardBrand}
+              <input className={FIELD} value={draft.cardBrand}
                      onChange={(e) => set({ cardBrand: e.target.value })} />
             </label>
             <label className="w-16 flex-none">
               <span className={label}>Last 4</span>
-              <input className={INPUT} value={draft.lastFour} inputMode="numeric" maxLength={4}
+              <input className={FIELD} value={draft.lastFour} inputMode="numeric" maxLength={4}
                      onChange={(e) => set({ lastFour: e.target.value.replace(/\D/g, '') })} />
             </label>
           </div>
