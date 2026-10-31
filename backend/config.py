@@ -434,6 +434,8 @@ def load_config() -> dict:
                 "read_logs": True,     # agent can read its own recent server logs
                 "wallet": True,        # self-gating: needs a wallet for the user
                 "ditta_search": True,  # self-gating: needs tools.ditta.url + pubkey
+                "spending_lookup": True,  # resolve store/category/brand/card names (spending.enabled)
+                "spending_query": True,   # spending totals, summed in SQL
             },
             "git": {
                 # Read-only forge access (Gitea; GitHub API-compatible for these

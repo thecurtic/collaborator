@@ -1781,6 +1781,17 @@ optional).
 **`GET /api/spending/products?q=`** → `{ "products": [{ id, name, brand,
 category }] }`: name, brand or category containing `q` (all when empty).
 
+**Chat tools.** With spending enabled the model gets two read-only tools
+(`spending_query.py`; descriptions in `tools-spec.md`): `spending_lookup`
+resolves a name as said (stores, categories across the tree, brands,
+products, cards by last four) to real ids, flagging `ambiguous`; and
+`spending_query` sums committed spending in SQL, filtered by those ids, a
+period or dates, payment method or card, grouped by store, category, brand,
+product, payment, card, month, week or day. Category, brand and product
+answers are line totals before tax; the others are what was paid. Its
+`summary` and `caveats` say when unsure labels, unlabelled lines or receipts
+awaiting approval touch the answer.
+
 **`GET /api/spending/categories`** → `{ "categories": [{ id, name, parent_id
 }] }`: a seeded flat list to start; new ones are added as labels need them.
 

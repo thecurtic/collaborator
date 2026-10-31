@@ -753,6 +753,11 @@ Photograph a receipt in Scratch, hold send, and it becomes spending rows
   label is applied; unsure ones are marked, never blocking. Only confident
   and corrected labels become aliases, so one bad guess can't repeat, and a
   correction remaps every line its store printed the same way.
+- **The model asks, the database adds.** Chat questions go through two
+  tools: a lookup that turns what was said into real ids (and says when to
+  ask which one), then a structured query, no raw SQL. The tool writes the
+  caveats itself (unsure labels, unlabelled lines, receipts awaiting
+  approval), so the disclosure doesn't depend on the model's wording.
 - **Nothing commits on its own yet.** Every receipt lands pending until the
   user approves it (with corrections); auto-commit waits for product
   matching, when every line resolves through a known alias.

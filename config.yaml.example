@@ -348,6 +348,8 @@ tools:
     wallet: true              # self-gating: active only when the requesting user has a
                               # wallet under the selected tools.wallet.provider
     ditta_search: true        # self-gating: active only when tools.ditta.url + pubkey are set
+    spending_lookup: true     # resolve store/category/brand/card names (needs spending.enabled)
+    spending_query: true      # spending totals and breakdowns, summed by the database
   transcribe_video:
     sync_max_minutes: 10      # videos up to this long transcribe within the turn
     max_minutes: 240          # hard cap; longer videos are refused
