@@ -63,16 +63,19 @@ def _png():
 
 
 def _fake_vision(monkeypatch, label, receipt=None, calls=None):
+    """Step 1 (vision) answers by prompt; step 2 (text) returns `receipt`."""
     def look(images, prompt, **k):
         if calls is not None:
             calls.append(prompt)
+        assert k.get("response_format") is None, "no structured output on images"
         if prompt == spending.CLASSIFY_PROMPT:
-            assert k.get("response_format", {}).get("type") == "json_schema"
             return json.dumps({"label": label})
-        if prompt == spending.RECEIPT_PROMPT:
-            return json.dumps(receipt)
+        if prompt == spending.TRANSCRIBE_PROMPT:
+            return "SAFEWAY #4931\nCLASSICO TOM BASIL 4.99\nTOTAL 29.09"
         return "A photo of a dog in a park."
     monkeypatch.setattr(vision, "look", look)
+    monkeypatch.setattr(spending, "_complete",
+                        lambda messages, fmt: json.dumps(receipt))
 
 
 def _hold(c, data=None, caption=None):
@@ -284,21 +287,30 @@ def test_label_parsing():
     assert spending._label('{"label": "invoice"}') == "other"
 
 
-def test_classify_retries_plain_when_structured_fails(monkeypatch):
+def test_structure_retries_plain_when_structured_is_empty(monkeypatch):
     c, cfg, dbp = _fresh()
-    formats = []
+    _fake_vision(monkeypatch, "receipt", GROCERY)
+    seen = []
 
-    def look(images, prompt, **k):
-        if prompt == spending.CLASSIFY_PROMPT:
-            formats.append(k.get("response_format"))
-            if k.get("response_format"):
-                raise RuntimeError("vision request failed: 400 json_schema unsupported")
-            return "receipt"
-        return json.dumps(GROCERY)
-    monkeypatch.setattr(vision, "look", look)
+    def complete(messages, fmt):
+        seen.append((fmt is not None, messages[1]["content"]))
+        return "" if fmt else "Here you go:\n" + json.dumps(GROCERY)
+    monkeypatch.setattr(spending, "_complete", complete)
     _, out = _hold(c)
     assert out["diverted"] is True
-    assert formats[0] is not None and formats[1] is None
+    assert [structured for structured, _ in seen] == [True, False]
+    # The transcription from step 1 is what step 2 structures.
+    assert "CLASSICO TOM BASIL 4.99" in seen[0][1]
+
+
+def test_nothing_read_stays_in_scratch(monkeypatch):
+    c, cfg, dbp = _fresh()
+    _fake_vision(monkeypatch, "receipt", GROCERY)
+    monkeypatch.setattr(spending, "_complete", lambda messages, fmt: "")
+    _, out = _hold(c)
+    assert out["item"]["action_result"]["kind"] == "error"
+    assert "returned nothing" in out["item"]["action_result"]["note"]
+    assert c.get("/api/scratch").json()["count"] == 1
 
 
 def test_failed_classify_never_becomes_a_note(monkeypatch):
@@ -329,3 +341,28 @@ def test_pending_receipts_show_in_the_feed(monkeypatch):
     assert items[0]["ref"] == {"transaction_id": out["transaction_id"]}
     c.post(f"/api/spending/transactions/{out['transaction_id']}/approve", json={})
     assert not any(i["type"] == "spending" for i in c.get("/api/feed").json()["items"])
+
+
+def test_structuring_call_is_text_only(monkeypatch):
+    _fresh()
+    import requests
+    sent = {}
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": json.dumps(GROCERY)}}]}
+
+    def post(url, json=None, timeout=None):
+        sent.update(url=url, payload=json)
+        return R()
+    monkeypatch.setattr(requests, "post", post)
+    data = spending.structure_receipt("SAFEWAY\nTOTAL 29.09")
+    assert data["total"] == 29.09
+    assert sent["url"].endswith("/chat/completions")
+    p = sent["payload"]
+    assert p["response_format"]["json_schema"]["name"] == "receipt"
+    assert all(isinstance(m["content"], str) for m in p["messages"])   # no image parts
+    assert "TOTAL 29.09" in p["messages"][1]["content"]

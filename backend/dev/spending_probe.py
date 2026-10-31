@@ -1,5 +1,5 @@
 """Why didn't a held receipt divert? Runs the spending classifier (and,
-with --extract, the receipt reader) against a photo, with the server's own
+with --extract, both reading steps: transcribe, then structure) against a photo, with the server's own
 config, and prints what the model answered (dev tooling, never deployed).
 
     cd backend && .venv/bin/python dev/spending_probe.py            # newest Scratch photo
@@ -46,31 +46,25 @@ def main():
     print(f"vision model:     {vision.model()!r}")
     if not vision.model():
         sys.exit("No model here can see images, so nothing is classified.")
-    image = [spending._image(path, mime)]
-    tokens = int(spending._cfg().get("classify_max_tokens", 2048))
-    for name, fmt in (("structured", {"type": "json_schema",
-                                      "json_schema": spending._CLASSIFY_SCHEMA}),
-                      ("plain", None)):
-        try:
-            reply = vision.look(image, spending.CLASSIFY_PROMPT, max_tokens=tokens,
-                                temperature=0, response_format=fmt)
-            print(f"\n[{name}] reply: {reply[:500]!r}")
-            print(f"[{name}] label: {spending._label(reply)!r}")
-        except RuntimeError as e:
-            print(f"\n[{name}] FAILED: {e}")
     try:
-        print(f"\nclassify() →      {spending.classify(path, mime)!r}")
+        print(f"\nclassify() →  {spending.classify(path, mime)!r}")
     except RuntimeError as e:
         print(f"\nclassify() FAILED: {e}")
-    if args.extract:
-        try:
-            data = spending.extract_receipt(path, mime)
-            receipt, problems = spending.normalize(data)
-            print("\nextracted:", json.dumps(data, indent=2)[:4000])
-            print("problems:", problems)
-            print("review:", spending.review_reasons(receipt, set()))
-        except (RuntimeError, ValueError) as e:
-            print(f"\nextract FAILED: {e}")
+    if not args.extract:
+        return
+    try:
+        text = spending.transcribe_receipt(path, mime)
+        print(f"\n[step 1] transcription ({len(text)} chars):\n{text[:3000]}")
+    except RuntimeError as e:
+        sys.exit(f"\n[step 1] transcription FAILED: {e}")
+    try:
+        data = spending.structure_receipt(text)
+        receipt, problems = spending.normalize(data)
+        print("\n[step 2] structured:", json.dumps(data, indent=2)[:4000])
+        print("problems:", problems)
+        print("review:", spending.review_reasons(receipt, set()))
+    except (RuntimeError, ValueError) as e:
+        print(f"\n[step 2] structuring FAILED: {e}")
 
 
 if __name__ == "__main__":

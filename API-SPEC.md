@@ -1726,7 +1726,9 @@ what it missed: on reconnecting it reloads everything it shows.
 Receipts held in Scratch (§23) become rows in the user's `spending.db`, beside
 `conversations.db`. On by default (`spending.enabled`); needs a chat model
 that sees images. The receipt image is copied to `spending-evidence/` (Scratch's
-own copy goes only when no other item shares it). Amounts are integer cents.
+own copy goes only when no other item shares it), transcribed by the vision
+model, and the transcription structured by a text-only call; the
+transcription itself isn't kept. Amounts are integer cents.
 Every receipt lands `pending` with the reasons it needs review; nothing
 commits on its own yet.
 

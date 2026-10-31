@@ -287,6 +287,7 @@ def load_config() -> dict:
             "rounding_tolerance": 0.05,  # per arithmetic check (cash rounds to $0.05)
             "classify_max_tokens": 2048,  # reasoning models think before the label
             "extract_max_tokens": 8192,   # thinking + a long receipt's JSON
+            "timeout": 300,               # seconds, the text-only structuring call
         },
         "location": {
             # Per-turn location context (frontend sends {lat, lon, accuracy, ts}

@@ -252,7 +252,8 @@ spending:
   enabled: true                # false: held photos all take the ordinary path
   rounding_tolerance: 0.05     # per arithmetic check; cash totals round to $0.05
   classify_max_tokens: 2048    # the label call (reasoning models think first)
-  extract_max_tokens: 8192     # the receipt-reading call
+  extract_max_tokens: 8192     # reading the receipt, and structuring what was read
+  timeout: 300                 # seconds, the structuring call
 
 # Files attached to chats: stored on this server, text extracted once
 # (markitdown, PDF text layers, the chat model's vision for images and scans,

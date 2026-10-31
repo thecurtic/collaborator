@@ -732,6 +732,11 @@ Photograph a receipt in Scratch, hold send, and it becomes spending rows
   call before anything else; backend code routes on it. A receipt leaves
   Scratch completely (image copied to `spending-evidence/`, item deleted,
   caption kept on the evidence); everything else takes the ordinary path.
+- **Read, then structure.** The receipt is first transcribed by a plain
+  vision request (as a chat attachment is), then that text is turned into
+  the receipt JSON by a text-only structured call. Structured output on an
+  image request comes back empty on LM Studio's MLX engine, so no image
+  call asks for it; the classifier parses its label from a plain reply.
 - **Two layers catch the unexpected.** The extraction transcribes anything
   that fits no field into `unmapped`, and the parser checks the arithmetic
   within a rounding tolerance. Either one sends the receipt to review.
