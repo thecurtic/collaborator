@@ -519,8 +519,8 @@ export interface ApiNotificationSettings {
 /** GET /api/feed — one warm-feed item. */
 export interface ApiFeedItem {
   key: string;
-  type: 'chat' | 'note' | 'event' | 'approval' | 'transcript' | 'merged'
-    | 'agent_question' | 'agent_message';
+  type: 'chat' | 'note' | 'event' | 'approval' | 'spending' | 'transcript'
+    | 'merged' | 'agent_question' | 'agent_message';
   title: string;
   subtitle?: string | null;
   warmth: string | null;

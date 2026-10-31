@@ -10,6 +10,7 @@ import {
   MessageSquare,
   Pin,
   PinOff,
+  Receipt,
   RefreshCw,
 } from 'lucide-react';
 import { useCallback, useEffect, useState, type ComponentType } from 'react';
@@ -33,6 +34,7 @@ const ICONS: Record<FeedItemType, ComponentType<{ className?: string }>> = {
   note: FileText,
   event: CalendarDays,
   approval: Inbox,
+  spending: Receipt,
   transcript: FileVideo,
   merged: GitMerge,
   agent_question: CircleHelp,
@@ -130,7 +132,8 @@ function Row({
       <Icon
         className={cn(
           'mt-0.5 h-4 w-4 shrink-0',
-          item.type === 'approval' || item.type === 'agent_message'
+          item.type === 'approval' || item.type === 'spending'
+            || item.type === 'agent_message'
             ? 'text-amber-600' : 'text-primary/70',
         )}
       />

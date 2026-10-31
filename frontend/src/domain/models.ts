@@ -598,6 +598,8 @@ export type FeedItemType =
   | 'note'
   | 'event'
   | 'approval'
+  /** A receipt waiting to be checked on the Spending screen. */
+  | 'spending'
   | 'transcript'
   | 'merged'
   /** An open question from an agent channel (heavy: it blocks on me). */
@@ -624,6 +626,8 @@ export interface FeedItem {
     draftId?: number;
     runId?: string | null;
     transcriptId?: number;
+    /** A spending item's pending transaction. */
+    transactionId?: number;
     project?: string | null;
     /** Agent items: the stored message, its channel, and its question. */
     messageId?: number;

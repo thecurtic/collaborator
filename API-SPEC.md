@@ -1047,7 +1047,7 @@ dropped in Collaborator, never sent.
 
 The front door: one list ordered by **warmth**, the later of "last touched"
 and "last changed". Nothing is scored; shape weight only breaks ties
-(agent question > approval = agent message > event > merged > chat >
+(agent question > approval = spending = agent message > event > merged > chat >
 transcript > note). Pinned items sit on
 top regardless of warmth.
 
@@ -1067,6 +1067,7 @@ Types, what "changed" means, and `ref`:
 | `note` | an in-app change: approval, edit, rename, or an Obsidian edit seen by reindex. File mtimes never count. Touched = opened (`GET /api/notes/{title}`) | `title` |
 | `event` | an event note starting within 14 days; within 24 h of starting it counts as warm *now* on every load, so close events stay near the top | `title`, `start`, `all_day` |
 | `approval` | a pending draft's creation | `draft_id`, `run_id` |
+| `spending` | a receipt waiting to be checked (§30), by its capture; leaves once approved or discarded | `transaction_id` |
 | `transcript` | a finished or failed transcription | `transcript_id`, `status` |
 | `merged` | merged agent work: an endpoint's `merged` event (quiet, never a notification) | `merged_id`, `project` |
 | `agent_question` | an open question from an agent channel; leaves once answered or closed | `message_id`, `project`, `endpoint_id`, `channel`, `question`, `text` (the message's text, up to 2000 chars) |
@@ -1079,7 +1080,7 @@ don't count against `limit`.
 **`POST /api/feed/touch`** `{ "key": "chat:12" }` → record that the user opened
 it (chats, transcripts, …; notes are touched server-side when read). `422` for
 a malformed key (`chat:<id>`, `note:<title>`, `transcript:<id>`,
-`approval:<id>`, `merged:<id>`, `agent:<id>`).
+`approval:<id>`, `spending:<id>`, `merged:<id>`, `agent:<id>`).
 
 **`POST /api/feed/pin`** `{ "key": "note:raised beds", "pinned": true }` → pin or
 unpin.
@@ -1302,7 +1303,8 @@ With `spending.enabled` (the default), a held photo is classified first; a recei
 Scratch (§30): the response is `{ "diverted": true, "transaction_id",
 "evidence_id", "review": [...] }` instead of `{ "item" }`, and the item is
 deleted. A receipt that can't be read, or whose reading trips the secret
-check, stays as an item (`error` / `refused`).
+check, stays as an item (`error` / `refused`). So does a photo the classifier
+couldn't look at (`error`: the photo never falls through to the note agent).
 
 ScratchItem: `{ id, created_at, kind, content, media_path, media_mime,
 media_size, media_hash, transcript, status, llm_readable, action_result,

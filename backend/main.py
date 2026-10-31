@@ -4752,7 +4752,7 @@ async def put_project_overrides(
 
 # --- Warm feed -----------------------------------------------------------------
 
-_FEED_KEY_RE = _re_mod.compile(r"^(chat|note|transcript|approval|merged|agent):.{1,200}$")
+_FEED_KEY_RE = _re_mod.compile(r"^(chat|note|transcript|approval|spending|merged|agent):.{1,200}$")
 
 
 class FeedKeyRequest(BaseModel):

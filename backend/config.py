@@ -285,8 +285,8 @@ def load_config() -> dict:
             # False: every held photo takes the ordinary path.
             "enabled": True,
             "rounding_tolerance": 0.05,  # per arithmetic check (cash rounds to $0.05)
-            "classify_max_tokens": 512,  # reasoning models need thinking headroom
-            "extract_max_tokens": 4096,
+            "classify_max_tokens": 2048,  # reasoning models think before the label
+            "extract_max_tokens": 8192,   # thinking + a long receipt's JSON
         },
         "location": {
             # Per-turn location context (frontend sends {lat, lon, accuracy, ts}

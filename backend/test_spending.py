@@ -272,3 +272,60 @@ def test_period_total_counts_committed_only(monkeypatch):
         assert out["since"] <= today
         assert out["totals"] == [{"currency": "CAD", "total_cents": 2909, "count": 1}]
     assert c.get("/api/spending/total", params={"period": "day"}).status_code == 422
+
+
+def test_label_parsing():
+    assert spending._label('{"label": "receipt"}') == "receipt"
+    assert spending._label("Sure: ```json\n{\"label\": \"statement\"}\n```") == "statement"
+    assert spending._label("receipt") == "receipt"
+    assert spending._label("Receipt.") == "receipt"
+    assert spending._label("a photo of a receipt") == "other"     # two labels: no answer
+    assert spending._label("no idea") == "other"
+    assert spending._label('{"label": "invoice"}') == "other"
+
+
+def test_classify_retries_plain_when_structured_fails(monkeypatch):
+    c, cfg, dbp = _fresh()
+    formats = []
+
+    def look(images, prompt, **k):
+        if prompt == spending.CLASSIFY_PROMPT:
+            formats.append(k.get("response_format"))
+            if k.get("response_format"):
+                raise RuntimeError("vision request failed: 400 json_schema unsupported")
+            return "receipt"
+        return json.dumps(GROCERY)
+    monkeypatch.setattr(vision, "look", look)
+    _, out = _hold(c)
+    assert out["diverted"] is True
+    assert formats[0] is not None and formats[1] is None
+
+
+def test_failed_classify_never_becomes_a_note(monkeypatch):
+    c, cfg, dbp = _fresh()
+
+    def look(images, prompt, **k):
+        if prompt == spending.CLASSIFY_PROMPT:
+            raise RuntimeError("vision model returned no text")
+        return "a receipt, read as a note"
+    monkeypatch.setattr(vision, "look", look)
+    monkeypatch.setattr(scratch, "run_text_action", lambda *a: (_ for _ in ()).throw(
+        AssertionError("a failed look must not reach the note agent")))
+    item, out = _hold(c)
+    assert out["item"]["id"] == item["id"]
+    assert out["item"]["action_result"]["kind"] == "error"
+    assert "couldn't tell what this photo is" in out["item"]["action_result"]["note"]
+
+
+def test_pending_receipts_show_in_the_feed(monkeypatch):
+    c, cfg, dbp = _fresh()
+    assert not any(i["type"] == "spending" for i in c.get("/api/feed").json()["items"])
+    _fake_vision(monkeypatch, "receipt", GROCERY)
+    _, out = _hold(c)
+    items = [i for i in c.get("/api/feed").json()["items"] if i["type"] == "spending"]
+    assert len(items) == 1
+    assert items[0]["title"] == "Safeway"
+    assert items[0]["subtitle"] == "$29.09 · receipt to check"
+    assert items[0]["ref"] == {"transaction_id": out["transaction_id"]}
+    c.post(f"/api/spending/transactions/{out['transaction_id']}/approve", json={})
+    assert not any(i["type"] == "spending" for i in c.get("/api/feed").json()["items"])

@@ -474,8 +474,14 @@ function AppShell() {
       void api.touchFeedItem(item.key);
     } else if ((item.type === 'note' || item.type === 'event') && r.title) {
       openNoteByTitle(r.title);
+    } else if (item.type === 'approval' && r.runId?.startsWith('scratch-')) {
+      // Scratch-born proposals live on their Scratch card, not the inbox.
+      resetScreens();
+      setTab('scratch');
     } else if (item.type === 'approval') {
       openInbox(r.runId ?? null);
+    } else if (item.type === 'spending') {
+      push({ kind: 'spending' });
     } else if (item.type === 'transcript' && r.transcriptId != null) {
       openTranscripts(r.transcriptId);
       void api.touchFeedItem(item.key);

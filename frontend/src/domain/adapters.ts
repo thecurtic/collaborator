@@ -506,7 +506,7 @@ export function toNotificationSettings(
 }
 
 const FEED_TYPES = new Set([
-  'chat', 'note', 'event', 'approval', 'transcript', 'merged',
+  'chat', 'note', 'event', 'approval', 'spending', 'transcript', 'merged',
   'agent_question', 'agent_message',
 ]);
 
@@ -532,6 +532,7 @@ export function toFeedItem(api: ApiFeedItem): FeedItem {
       draftId: num(r.draft_id),
       runId: typeof r.run_id === 'string' ? r.run_id : null,
       transcriptId: num(r.transcript_id),
+      transactionId: num(r.transaction_id),
       project: typeof r.project === 'string' ? r.project : null,
       messageId: num(r.message_id),
       endpointId: typeof r.endpoint_id === 'string' ? r.endpoint_id : undefined,

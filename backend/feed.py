@@ -13,6 +13,8 @@ Item types and what "changed" means for each:
               starting it counts as warm right now, every load, so close
               events stay near the top
   approval    a pending draft (its creation)
+  spending    a receipt waiting to be checked (its capture); it leaves once
+              approved or discarded
   transcript  a finished or failed transcription (its finish)
   merged      merged agent work: the agent seam records it when an endpoint
               sends a `merged` event (agents.py); quiet, never a notification
@@ -30,7 +32,8 @@ import sqlite3
 from typing import Dict, List, Optional
 
 # Tie-break order (higher wins at equal warmth): what needs me first.
-SHAPE_WEIGHT = {"agent_question": 8, "approval": 6, "agent_message": 6, "event": 5,
+SHAPE_WEIGHT = {"agent_question": 8, "approval": 6, "spending": 6, "agent_message": 6,
+                "event": 5,
                 "merged": 4, "chat": 3, "transcript": 2, "note": 1}
 EVENT_WINDOW_DAYS = 14
 EVENT_WARMS_HOURS = 24
@@ -244,6 +247,24 @@ def _approval_items(conn) -> List[Dict]:
     return out
 
 
+def _spending_items(conn) -> List[Dict]:
+    """Pending receipts, from the spending.db beside this conversations.db."""
+    import os
+    import spending
+    path = next((r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"), "")
+    if not path or not os.path.exists(spending.db_path_for(path)):
+        return []
+    out = []
+    for tx in spending.list_transactions(path, "pending"):
+        amount = f"${tx['amount_cents'] / 100:,.2f}"
+        out.append({"key": f"spending:{tx['id']}", "type": "spending",
+                    "title": tx["store"] or "Receipt",
+                    "subtitle": f"{amount} · receipt to check",
+                    "warmth": _parse(tx["created_at"]), "tags": [],
+                    "ref": {"transaction_id": tx["id"]}})
+    return out
+
+
 def _transcript_items(conn, activity) -> List[Dict]:
     out = []
     try:
@@ -293,7 +314,8 @@ def build_feed(conn, limit: int = FEED_LIMIT) -> Dict:
     now = _now()
     activity = _activity(conn)
     items = (_chat_items(conn, activity) + _note_and_event_items(conn, activity, now)
-             + _approval_items(conn) + _transcript_items(conn, activity)
+             + _approval_items(conn) + _spending_items(conn)
+             + _transcript_items(conn, activity)
              + _merged_items(conn, activity) + _agent_items(conn))
     pins = dict(conn.execute("SELECT key, pinned_at FROM feed_pins").fetchall())
     epoch = _dt.datetime.min.replace(tzinfo=_dt.timezone.utc)

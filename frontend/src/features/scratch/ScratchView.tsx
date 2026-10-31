@@ -128,9 +128,19 @@ function ProposedCard({
   // One hold-send can propose SEVERAL notes (66ae41e re-tags every sibling
   // with this run_id) — the card is the whole set's only home.
   const [drafts, setDrafts] = useState<NoteDraft[] | null>(null);
+  // Bumped on every decision: the card's status follows only its first
+  // draft, so a sibling decided alone must refetch the set itself.
+  const [version, setVersion] = useState(0);
+  const decided = () => {
+    setVersion((v) => v + 1);
+    onDecided();
+  };
 
   useEffect(() => {
-    if (item.status !== 'pending') return;
+    if (item.status !== 'pending') {
+      setDrafts(null); // decided: the buttons go with it
+      return;
+    }
     let cancelled = false;
     api
       .listDrafts({ status: 'pending', runId: `scratch-${item.id}` })
@@ -143,7 +153,7 @@ function ProposedCard({
     return () => {
       cancelled = true;
     };
-  }, [item.id, item.status]);
+  }, [item.id, item.status, version]);
 
   return (
     <div className="mt-2 space-y-2">
@@ -166,8 +176,8 @@ function ProposedCard({
           <Loader2 className="h-3 w-3 animate-spin" /> loading proposals…
         </p>
       )}
-      {drafts?.map((d) => (
-        <DraftDecision key={d.id} draft={d} onDecided={onDecided} />
+      {item.status === 'pending' && drafts?.map((d) => (
+        <DraftDecision key={d.id} draft={d} onDecided={decided} />
       ))}
     </div>
   );

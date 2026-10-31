@@ -256,27 +256,48 @@ def _image(path: str, mime: Optional[str]):
         return vision.prepare_image(f.read(), mime)
 
 
+def _label(reply: str) -> str:
+    """A label out of the model's reply: the JSON's, else the one known
+    word in a plain-text answer (several, as in "a photo of a receipt", is
+    no answer)."""
+    try:
+        data = _parse_json(reply)
+        if isinstance(data, dict):
+            label = str(data.get("label") or "").strip().lower()
+            if label in LABELS:
+                return label
+    except ValueError:
+        pass
+    words = {w for w in re.findall(r"[a-z]+", reply.lower()) if w in LABELS}
+    return words.pop() if len(words) == 1 else "other"
+
+
 def classify(path: str, mime: Optional[str]) -> Optional[str]:
-    """The content label, or None when no model here can see images."""
+    """The content label, or None when no model here can see images.
+
+    Structured output first; a backend that refuses json_schema on an image
+    request (or a reply that comes back empty) gets one plain-text retry.
+    Raises RuntimeError when both fail."""
     import vision
     if not vision.model():
         return None
-    reply = vision.look([_image(path, mime)], CLASSIFY_PROMPT,
-                        max_tokens=int(_cfg().get("classify_max_tokens", 512)),
-                        temperature=0, response_format={
-                            "type": "json_schema", "json_schema": _CLASSIFY_SCHEMA})
+    image = [_image(path, mime)]
+    tokens = int(_cfg().get("classify_max_tokens", 2048))
     try:
-        label = str(_parse_json(reply).get("label") or "").strip().lower()
-    except ValueError:
-        label = reply.strip().lower()
-    return label if label in LABELS else "other"
+        reply = vision.look(image, CLASSIFY_PROMPT, max_tokens=tokens, temperature=0,
+                            response_format={"type": "json_schema",
+                                             "json_schema": _CLASSIFY_SCHEMA})
+    except RuntimeError as e:
+        print(f"Warning: spending classify (structured) failed, retrying plain: {e}")
+        reply = vision.look(image, CLASSIFY_PROMPT, max_tokens=tokens, temperature=0)
+    return _label(reply)
 
 
 def extract_receipt(path: str, mime: Optional[str]) -> dict:
     """The receipt JSON as the model read it (raises RuntimeError/ValueError)."""
     import vision
     reply = vision.look([_image(path, mime)], RECEIPT_PROMPT,
-                        max_tokens=int(_cfg().get("extract_max_tokens", 4096)),
+                        max_tokens=int(_cfg().get("extract_max_tokens", 8192)),
                         temperature=0, response_format={
                             "type": "json_schema", "json_schema": _RECEIPT_SCHEMA})
     data = _parse_json(reply)
@@ -513,8 +534,13 @@ def divert(db_path: str, row: dict, media_dir: str) -> Optional[dict]:
         return None
     try:
         label = classify(src, row.get("media_mime"))
-    except RuntimeError:
-        return None            # the ordinary path reports what's wrong with vision
+    except RuntimeError as e:
+        # Never fall through to the note agent on a failed look: a receipt
+        # would become a note. Say so on the card; a hold retries.
+        print(f"Warning: spending classify failed: {e}")
+        return {"error": f"couldn't tell what this photo is: {e}"}
+    # The label only, never content (same contract as Scratch).
+    print(f"spending: held photo classified as {label!r}")
     if label != "receipt":     # phase 1: only receipts divert
         return None
     try:
