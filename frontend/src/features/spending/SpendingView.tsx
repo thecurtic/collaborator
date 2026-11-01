@@ -183,7 +183,9 @@ export function SpendingView() {
               {committed.map((tx) => (
                 <li key={tx.id}>
                   <TxRow tx={tx} open={open === tx.id} onToggle={() => toggle(tx.id)} />
-                  {open === tx.id && <CommittedDetail id={tx.id} onError={setError} />}
+                  {open === tx.id && (
+                    <CommittedDetail id={tx.id} onError={setError} onDeleted={decided} />
+                  )}
                 </li>
               ))}
             </ul>
@@ -483,11 +485,38 @@ function LabelEditor({
 
 /** A committed purchase: the image, its lines (each with its product label,
  * correctable), charges, payment. */
-function CommittedDetail({ id, onError }: { id: number; onError: (e: string) => void }) {
+function CommittedDetail({
+  id,
+  onError,
+  onDeleted,
+}: {
+  id: number;
+  onError: (e: string) => void;
+  onDeleted: () => void;
+}) {
   const [version, setVersion] = useState(0);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   useLive(['spending'], () => setVersion((v) => v + 1));
   const tx = useDetail(id, onError, version);
   const [editing, setEditing] = useState<number | null>(null);
+
+  // Two taps: a purchase and its receipt image go for good.
+  const remove = async () => {
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      return;
+    }
+    setDeleting(true);
+    try {
+      await spendingApi.discard(id);
+      onDeleted();
+    } catch (err) {
+      onError(errMessage(err));
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  };
   if (!tx) return <Loader2 className="mx-3 mb-3 h-4 w-4 animate-spin text-muted-foreground" />;
   const money = (c: number) => formatMoney(c, tx.currency);
   return (
@@ -539,6 +568,27 @@ function CommittedDetail({ id, onError }: { id: number; onError: (e: string) => 
           {tx.payment.lastFour ? ` ···${tx.payment.lastFour}` : ''}
         </p>
       )}
+      <div className="flex justify-end gap-2">
+        {confirmDelete && !deleting && (
+          <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
+            Keep it
+          </Button>
+        )}
+        <Button
+          variant={confirmDelete ? 'destructive' : 'ghost'}
+          size="sm"
+          disabled={deleting}
+          onClick={() => void remove()}
+          className={confirmDelete ? '' : 'text-muted-foreground'}
+        >
+          {deleting ? (
+            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="mr-1 h-3.5 w-3.5" />
+          )}
+          {confirmDelete ? 'Delete purchase and receipt?' : 'Delete'}
+        </Button>
+      </div>
     </div>
   );
 }

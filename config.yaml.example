@@ -255,6 +255,7 @@ spending:
   extract_max_tokens: 8192     # reading the receipt, and structuring what was read
   timeout: 300                 # seconds, the structuring call
   match_interval_seconds: 3600 # approved lines are labelled on approval; this sweep catches the rest
+  category_options: 30         # a new product picks its category from at most this many (the closest)
   # When a label is unsure, the printed line and the store's name are searched
   # on the web and the chat model looks again (on by default; Settings →
   # Spending turns it off). The query leaves this server: it tells the

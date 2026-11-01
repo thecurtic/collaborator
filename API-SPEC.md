@@ -1804,20 +1804,29 @@ category }] }`: name, brand or category containing `q` (all when empty).
 
 **Chat tools.** With spending enabled the model gets two read-only tools
 (`spending_query.py`; descriptions in `tools-spec.md`): `spending_lookup`
-resolves a name as said (stores, categories across the tree, brands,
-products, cards by last four) to real ids, flagging `ambiguous`; and
-`spending_query` sums committed spending in SQL, filtered by those ids, a
-period or dates, payment method or card, grouped by store, category, brand,
-product, payment, card, month, week or day. Category, brand and product
-answers are line totals before tax; the others are what was paid. Its
-`summary` and `caveats` say when unsure labels, unlabelled lines or receipts
-awaiting approval touch the answer.
+resolves a name as said (stores, categories, tags, brands, products, cards
+by last four) to real ids, flagging `ambiguous`; and `spending_query` sums
+committed spending in SQL, filtered by those ids, a period or dates, payment
+method or card, grouped by store, category, tag, brand, product, payment,
+card, month, week or day. Categories and tags are one filter: a line under
+any of them counts once. Grouped by category the parts add up to the total;
+grouped by tag they can overlap, and the caveats say by how much. Category,
+tag, brand and product answers are line totals before tax; the others are
+what was paid. Its `summary` and `caveats` say when unsure labels,
+unlabelled lines, receipts awaiting approval or tag overlap touch the answer.
 
-**`GET /api/spending/categories`** → `{ "categories": [{ id, name, parent_id
-}] }`: a seeded flat list to start; new ones are added as labels need them.
+**`GET /api/spending/categories`** → `{ "categories": [{ id, name, tags:
+[names] }] }`. Every product has one hard category (so a breakdown by category
+adds up); a category carries any number of tags for broader, overlapping
+groupings (coffee: beverages, breakfast, groceries). Seeded with ~30
+categories and their tags; a new product picks its category from the
+closest `spending.category_options` (30), a new category only when none
+fits, and a new category takes the existing tags that fit it.
 
-**`DELETE /api/spending/transactions/{id}`** → `{ "deleted": id }`: the
-transaction and the evidence only it held, image included.
+**`DELETE /api/spending/transactions/{id}`** → `{ "deleted": id }`: any
+transaction, pending or approved, with its lines, charges, payment and the
+evidence only it held, image included. What was learned from it (products,
+aliases) stays.
 
 **`GET /api/spending/evidence/{id}/image`** → the receipt image.
 

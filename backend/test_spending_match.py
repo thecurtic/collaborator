@@ -265,3 +265,50 @@ def test_old_unsure_labels_get_one_searched_look(searching):
     water = _lines(dbp, tx)[2]
     assert water["match"] == "chat" and water["product"]["brand"] == "Bubly"
     assert sm.run_once(dbp) == {} and len(searching) == 1        # never looked at twice
+
+
+def test_new_category_takes_its_tags_and_the_pick_is_logged(models, monkeypatch):
+    c, cfg, dbp = _fresh()
+    def complete(messages, fmt):
+        prompt = messages[0]["content"]
+        assert "Categories to choose from:" in prompt and "coffee" in prompt
+        assert "Tags in use" in prompt and "beverages" in prompt
+        return json.dumps({"product_id": None, "name": "kombucha", "brand": "GT's",
+                           "category": "fermented drinks", "tags": ["beverages", "made-up"],
+                           "sure": True})
+    monkeypatch.setattr(spending, "_complete", complete)
+    one = dict(GROCERY, line_items=[{"raw_text": "GTS KOMBUCHA", "qty": 1, "unit_price": 4.5,
+                                     "line_total": 4.5}], charges=[], subtotal=4.5, total=4.5)
+    tx = _committed(dbp, one)
+    assert sm.run_once(dbp) == {"chat": 1}
+    cats = {x["name"]: x["tags"] for x in c.get("/api/spending/categories").json()["categories"]}
+    assert cats["fermented drinks"] == ["beverages"]        # only tags that exist
+    assert cats["coffee"] == ["beverages", "breakfast", "groceries"]
+    conn = spending.connect(dbp)
+    row = conn.execute("SELECT answer, options FROM decision_log WHERE task = 'category'").fetchone()
+    conn.close()
+    assert row["answer"] == "fermented drinks" and row["options"] == len(spending.SEED_CATEGORIES)
+
+
+def test_category_options_are_capped(models):
+    c, cfg, dbp = _fresh()
+    cfg["spending"]["category_options"] = 5
+    conn = spending.connect(dbp)
+    coffee = sm.new_product(conn, "coffee beans", "Kicking Horse", "coffee")
+    opts = sm.category_options(conn, "KICKING HORSE 454G",
+                               [{"id": coffee, "name": "coffee beans", "brand": "Kicking Horse",
+                                 "category": "coffee"}])
+    conn.close()
+    assert len(opts) == 5 and "coffee" in opts               # the candidates' own always kept
+
+
+def test_an_approved_purchase_can_be_deleted(models):
+    c, cfg, dbp = _fresh()
+    tx = _committed(dbp)
+    sm.run_once(dbp)
+    assert c.delete(f"/api/spending/transactions/{tx}").status_code == 200
+    assert c.get(f"/api/spending/transactions/{tx}").status_code == 404
+    assert c.get("/api/spending/labels/unsure").json() == {"lines": []}
+    conn = spending.connect(dbp)
+    assert conn.execute("SELECT COUNT(*) FROM line_items").fetchone()[0] == 0
+    conn.close()

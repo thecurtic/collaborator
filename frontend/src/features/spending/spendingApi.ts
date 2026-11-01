@@ -54,10 +54,11 @@ export interface SpendingSettings {
   searchProvider: string | null;
 }
 
+/** One hard category per product, carrying broader tags (beverages…). */
 export interface SpendingCategory {
   id: number;
   name: string;
-  parentId: number | null;
+  tags: string[];
 }
 
 /** A correction: an existing product, or a new one. */
@@ -319,10 +320,8 @@ export const spendingApi = {
   },
 
   async categories(): Promise<SpendingCategory[]> {
-    const r = await request<{ categories: { id: number; name: string; parent_id: number | null }[] }>(
-      '/api/spending/categories',
-    );
-    return r.categories.map((c) => ({ id: c.id, name: c.name, parentId: c.parent_id }));
+    const r = await request<{ categories: SpendingCategory[] }>('/api/spending/categories');
+    return r.categories;
   },
 
   /** The user's label for a line; lines printed the same way follow. */

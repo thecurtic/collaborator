@@ -49,9 +49,21 @@ CREATE TABLE IF NOT EXISTS stores (
     address TEXT,
     store_number TEXT
 );
+-- One hard category per product (every dollar lands in exactly one), and
+-- any number of tags per category for broader, overlapping groupings
+-- (coffee: beverages, breakfast).
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS category_tags (
+    category_id INTEGER NOT NULL REFERENCES categories(id),
+    tag_id INTEGER NOT NULL REFERENCES tags(id),
+    PRIMARY KEY (category_id, tag_id)
 );
 CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -171,7 +183,6 @@ CREATE INDEX IF NOT EXISTS idx_charges_tx ON charges(transaction_id);
 
 # Columns added after the first schema: (table, column, definition).
 _ADDED = (
-    ("categories", "parent_id", "INTEGER REFERENCES categories(id)"),  # a tree, one level at first
     ("aliases", "source", "TEXT"),                    # model | user
     ("line_items", "match", "TEXT"),                  # alias | model | chat | unsure | user
     ("line_items", "matched_at", "TEXT"),
@@ -179,16 +190,26 @@ _ADDED = (
     ("line_items", "searched", "INTEGER NOT NULL DEFAULT 0"),  # had its web-search second look
 )
 
-# The starting categories: fine-grained, flat, and short enough for one
-# question. New ones are added only when nothing here fits.
-SEED_CATEGORIES = (
-    "fruit", "vegetables", "meat", "seafood", "eggs", "milk", "cheese", "yogurt",
-    "bread", "baked goods", "cereal", "pasta", "rice and grains", "pasta sauce",
-    "canned goods", "condiments", "baking supplies", "snacks", "frozen food",
-    "coffee", "tea", "soft drinks", "water", "juice", "alcohol",
-    "cleaning supplies", "paper products", "personal care", "pet supplies",
-    "prepared food",
-)
+# The starting categories (fine-grained; new ones are added only when
+# nothing here fits) and the tags each carries.
+SEED_CATEGORIES = {
+    "fruit": ("produce", "groceries"), "vegetables": ("produce", "groceries"),
+    "meat": ("protein", "groceries"), "seafood": ("protein", "groceries"),
+    "eggs": ("protein", "breakfast", "groceries"), "milk": ("dairy", "groceries"),
+    "cheese": ("dairy", "groceries"), "yogurt": ("dairy", "breakfast", "groceries"),
+    "bread": ("bakery", "breakfast", "groceries"), "baked goods": ("bakery", "groceries"),
+    "cereal": ("breakfast", "pantry", "groceries"), "pasta": ("pantry", "groceries"),
+    "rice and grains": ("pantry", "groceries"), "pasta sauce": ("pantry", "groceries"),
+    "canned goods": ("pantry", "groceries"), "condiments": ("pantry", "groceries"),
+    "baking supplies": ("pantry", "groceries"), "snacks": ("groceries",),
+    "frozen food": ("groceries",),
+    "coffee": ("beverages", "breakfast", "groceries"), "tea": ("beverages", "groceries"),
+    "soft drinks": ("beverages", "groceries"), "water": ("beverages", "groceries"),
+    "juice": ("beverages", "breakfast", "groceries"), "alcohol": ("beverages",),
+    "cleaning supplies": ("household",), "paper products": ("household",),
+    "personal care": ("household",), "pet supplies": ("pets",),
+    "prepared food": ("groceries",),
+}
 
 
 # Per-user preferences, shown in Settings, with their defaults.
@@ -235,9 +256,28 @@ def connect(db_path: str) -> sqlite3.Connection:
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         if column not in cols:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    # The category tree became tags (no prod data depended on it): rebuild
+    # categories without parent_id, which a foreign key keeps DROP COLUMN off.
+    if "parent_id" in {r["name"] for r in conn.execute("PRAGMA table_info(categories)")}:
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.executescript(
+            "CREATE TABLE categories_new (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "name TEXT NOT NULL UNIQUE);"
+            "INSERT INTO categories_new (id, name) SELECT id, name FROM categories;"
+            "DROP TABLE categories; ALTER TABLE categories_new RENAME TO categories;")
+        conn.execute("PRAGMA foreign_keys = ON")
     if not conn.execute("SELECT 1 FROM categories LIMIT 1").fetchone():
         conn.executemany("INSERT OR IGNORE INTO categories (name) VALUES (?)",
                          [(c,) for c in SEED_CATEGORIES])
+    if not conn.execute("SELECT 1 FROM tags LIMIT 1").fetchone():
+        for cat, tags in SEED_CATEGORIES.items():
+            for tag in tags:
+                conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
+                conn.execute(
+                    "INSERT OR IGNORE INTO category_tags (category_id, tag_id) "
+                    "SELECT c.id, t.id FROM categories c, tags t WHERE c.name = ? AND t.name = ?",
+                    (cat, tag))
     conn.commit()
     return conn
 
@@ -407,8 +447,10 @@ CLASSIFY_OPTIONS = {
 
 def log_decision(db_path: Optional[str], task: str, model_id: str, subject: Optional[str],
                  answer: Optional[str], probability: Optional[float] = None,
-                 probabilities: Optional[dict] = None, used: bool = True) -> None:
-    """One row of the decision log (labels and scores only, never content)."""
+                 probabilities: Optional[dict] = None, used: bool = True,
+                 options: Optional[int] = None) -> None:
+    """One row of the decision log (labels and scores only, never content).
+    `options`: the size of the option list, when there are no probabilities."""
     if not db_path:
         return
     conn = connect(db_path)
@@ -418,7 +460,7 @@ def log_decision(db_path: Optional[str], task: str, model_id: str, subject: Opti
             " probabilities, options, used) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (task, model_id, subject, answer, probability,
              json.dumps(probabilities) if probabilities else None,
-             len(probabilities) if probabilities else None, int(used)))
+             len(probabilities) if probabilities else options, int(used)))
         conn.commit()
     finally:
         conn.close()

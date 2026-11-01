@@ -98,14 +98,34 @@ def test_category_query_sums_lines_and_carries_caveats():
     assert len(out["caveats"]) == 3 and out["must_mention"] is True
 
 
-def test_subcategories_count_toward_their_parent():
+def test_tags_group_categories_and_count_each_line_once():
     c, cfg, dbp = _data()
-    conn = spending.connect(dbp)
-    drinks = sm.category_id(conn, "beverages")
-    conn.execute("UPDATE categories SET parent_id = ? WHERE name = 'coffee'", (drinks,))
-    conn.commit(); conn.close()
-    out = sq.query(dbp, category_ids=[drinks], period="all")
+    beverages = next(m for m in sq.lookup(dbp, "beverages")["matches"] if m["type"] == "tag")
+    assert "coffee" in beverages["name"]                    # "beverages (covers ... coffee ...)"
+    breakfast = next(m for m in sq.lookup(dbp, "breakfast")["matches"] if m["type"] == "tag")
+    # Coffee carries both tags: asked together, its lines count once.
+    both = sq.query(dbp, tag_ids=[beverages["id"], breakfast["id"]], period="all")
+    assert both["summary"].startswith("$45.47 CAD across 3 lines")
+    # A category plus a tag that covers it: still once.
+    coffee = sq.lookup(dbp, "coffee")["matches"][0]["id"]
+    assert sq.query(dbp, category_ids=[coffee], tag_ids=[beverages["id"]],
+                    period="all")["summary"].startswith("$45.47 CAD across 3 lines")
+    # Pasta sauce is pantry, not beverages.
+    pantry = next(m for m in sq.lookup(dbp, "pantry")["matches"] if m["type"] == "tag")
+    assert sq.query(dbp, tag_ids=[pantry["id"]], period="all")["summary"].startswith("$4.99")
+
+
+def test_tag_breakdown_reports_its_overlap():
+    c, cfg, dbp = _data()
+    beverages = next(m for m in sq.lookup(dbp, "beverages")["matches"] if m["type"] == "tag")
+    breakfast = next(m for m in sq.lookup(dbp, "breakfast")["matches"] if m["type"] == "tag")
+    out = sq.query(dbp, tag_ids=[beverages["id"], breakfast["id"]], period="all", group_by="tag")
+    assert {g["key"]: g["total_cents"] for g in out["groups"]} == {"beverages": 4547, "breakfast": 4547}
     assert out["summary"].startswith("$45.47 CAD across 3 lines")
+    assert any("$45.47 is counted in more than one tag" in n for n in out["caveats"])
+    # By category, the groups add up to the total: no overlap note.
+    by_cat = sq.query(dbp, period="all", group_by="category")
+    assert not any("overlap" in n for n in by_cat["caveats"])
 
 
 def test_store_and_grouping():
