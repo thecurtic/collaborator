@@ -92,10 +92,13 @@ for the frontend dev loop, PWA testing and the Android shell.
   also documented live by the running backend at `/docs`.
 - [docs/known-issues.md](docs/known-issues.md): bugs and the optimization backlog.
 
-## Contributing
+## Forking, not contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Agents working in this repo follow
-[AGENTS.md](AGENTS.md).
+This is a personal project, open so you can run it and make it your own. I'm
+not taking pull requests or offering support, and anything can change
+without notice. Forks are encouraged: see [CONTRIBUTING.md](CONTRIBUTING.md)
+for how to get it running and the conventions the code follows. Agents
+working in this repo follow [AGENTS.md](AGENTS.md).
 
 ## AI-assisted code
 
