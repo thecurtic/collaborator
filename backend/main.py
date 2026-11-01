@@ -4471,6 +4471,28 @@ async def approve_spending_transaction(
     return {"transaction": tx}
 
 
+@app.put("/api/spending/transactions/{tx_id}")
+async def edit_spending_transaction(
+    tx_id: int,
+    request: SpendingApproval,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Correct an approved purchase after the fact; it stays approved."""
+    _require_auth(passkey)
+    db_path = _resolve_db_path(passkey)
+    if request.receipt is None:
+        raise HTTPException(status_code=422, detail="receipt is required")
+    try:
+        tx = spending.edit(db_path, tx_id, request.receipt)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if tx is None:
+        raise HTTPException(status_code=404, detail=f"No approved transaction {tx_id}")
+    spending_match.kick(db_path)        # changed lines get labelled again
+    live.publish(db_path, ["spending"])
+    return {"transaction": tx}
+
+
 class LineLabel(BaseModel):
     product_id: Optional[int] = None
     new: Optional[dict] = None       # {name, brand, category}

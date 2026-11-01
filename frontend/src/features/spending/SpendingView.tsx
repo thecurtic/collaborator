@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Loader2, Plus, Receipt, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Loader2, Pencil, Plus, Receipt, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useLive } from '@/lib/live';
@@ -497,6 +497,7 @@ function CommittedDetail({
   const [version, setVersion] = useState(0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [correcting, setCorrecting] = useState(false);
   useLive(['spending'], () => setVersion((v) => v + 1));
   const tx = useDetail(id, onError, version);
   const [editing, setEditing] = useState<number | null>(null);
@@ -518,6 +519,19 @@ function CommittedDetail({
     }
   };
   if (!tx) return <Loader2 className="mx-3 mb-3 h-4 w-4 animate-spin text-muted-foreground" />;
+  if (correcting) {
+    return (
+      <PendingEditor
+        id={id}
+        onError={onError}
+        onCancel={() => setCorrecting(false)}
+        onDone={() => {
+          setCorrecting(false);
+          setVersion((v) => v + 1);
+        }}
+      />
+    );
+  }
   const money = (c: number) => formatMoney(c, tx.currency);
   return (
     <div className="space-y-3 border-t border-border px-3 py-3">
@@ -569,6 +583,12 @@ function CommittedDetail({
         </p>
       )}
       <div className="flex justify-end gap-2">
+        {!confirmDelete && (
+          <Button variant="ghost" size="sm" className="text-muted-foreground"
+                  onClick={() => setCorrecting(true)}>
+            <Pencil className="mr-1 h-3.5 w-3.5" /> Edit
+          </Button>
+        )}
         {confirmDelete && !deleting && (
           <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
             Keep it
@@ -598,11 +618,15 @@ function PendingEditor({
   id,
   onDone,
   onError,
+  onCancel,
 }: {
   id: number;
   onDone: () => void;
   onError: (e: string) => void;
+  /** Given: correcting an approved purchase (Save / Cancel, no approve). */
+  onCancel?: () => void;
 }) {
+  const editing = onCancel !== undefined;
   const tx = useDetail(id, onError);
   const [draft, setDraft] = useState<ReceiptDraft | null>(null);
   const [busy, setBusy] = useState<'approve' | 'discard' | null>(null);
@@ -643,9 +667,14 @@ function PendingEditor({
       }
       edit = out.receipt;
     }
+    if (editing && !edit) {
+      onDone();                 // nothing changed
+      return;
+    }
     setBusy('approve');
     try {
-      await spendingApi.approve(id, edit);
+      if (editing && edit) await spendingApi.update(id, edit);
+      else await spendingApi.approve(id, edit);
       onDone();
     } catch (err) {
       setProblem(errMessage(err));
@@ -788,17 +817,28 @@ function PendingEditor({
 
       {problem && <p className="text-sm text-destructive">{problem}</p>}
 
+      {editing && (
+        <p className="text-xs text-muted-foreground">
+          Lines you leave as printed keep their labels; a line you change is labelled again.
+        </p>
+      )}
       <div className="flex gap-2">
         <Button className="flex-1" onClick={() => void approve()} disabled={busy !== null}>
           {busy === 'approve' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
             : <Check className="mr-1.5 h-4 w-4" />}
-          Approve
+          {editing ? 'Save' : 'Approve'}
         </Button>
-        <Button variant="secondary" onClick={() => void discard()} disabled={busy !== null}>
-          {busy === 'discard' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-            : <Trash2 className="mr-1.5 h-4 w-4" />}
-          Discard
-        </Button>
+        {editing ? (
+          <Button variant="secondary" onClick={onCancel} disabled={busy !== null}>
+            Cancel
+          </Button>
+        ) : (
+          <Button variant="secondary" onClick={() => void discard()} disabled={busy !== null}>
+            {busy === 'discard' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              : <Trash2 className="mr-1.5 h-4 w-4" />}
+            Discard
+          </Button>
+        )}
       </div>
     </div>
   );

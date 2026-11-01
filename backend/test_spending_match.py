@@ -312,3 +312,39 @@ def test_an_approved_purchase_can_be_deleted(models):
     conn = spending.connect(dbp)
     assert conn.execute("SELECT COUNT(*) FROM line_items").fetchone()[0] == 0
     conn.close()
+
+
+def test_an_approved_purchase_can_be_edited_after_the_fact(models):
+    c, cfg, dbp = _fresh()
+    tx = _committed(dbp)
+    sm.run_once(dbp)
+    before = _lines(dbp, tx)
+    sauce, coffee = before[0], before[1]
+
+    fixed = json.loads(json.dumps(GROCERY))
+    fixed["store"]["address"] = "Cambie and 7th"
+    fixed["line_items"][1]["raw_text"] = "KICKING HORSE 454G "          # spacing only
+    fixed["line_items"][2]["raw_text"] = "SPARKLING WATER 12PK"         # misread, fixed
+    fixed["line_items"][0]["line_total"] = fixed["line_items"][0]["unit_price"] = 5.49
+    fixed["subtotal"], fixed["total"] = 29.17, 29.59
+    r = c.put(f"/api/spending/transactions/{tx}", json={"receipt": fixed})
+    assert r.status_code == 200
+    out = r.json()["transaction"]
+    assert out["status"] == "committed" and out["amount_cents"] == 2959
+    assert out["store_address"] == "Cambie and 7th"
+    lines = out["line_items"]
+    # Unchanged lines keep their row and label; the price change came along.
+    assert lines[0]["id"] == sauce["id"] and lines[0]["product"] == sauce["product"]
+    assert lines[0]["line_total_cents"] == 549
+    assert lines[1]["id"] == coffee["id"] and lines[1]["match"] == coffee["match"]
+    # The corrected line starts unlabelled and the matcher picks it up.
+    assert lines[2]["match"] is None and lines[2]["product"] is None
+    assert sm.unmatched_lines(dbp) == [lines[2]["id"]]
+    # The deposit charge still points at the third line.
+    assert out["charges"][0]["line_index"] == 2
+
+    # Only approved purchases are edited here; a bad edit is refused.
+    pending = _committed(dbp, approve=False)
+    assert c.put(f"/api/spending/transactions/{pending}", json={"receipt": fixed}).status_code == 404
+    assert c.put(f"/api/spending/transactions/{tx}", json={"receipt": dict(fixed, total=None)}).status_code == 422
+    assert c.put(f"/api/spending/transactions/{tx}", json={}).status_code == 422

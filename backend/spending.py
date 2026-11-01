@@ -727,18 +727,49 @@ def _store_id(conn, store: dict) -> Optional[int]:
         (store["name"], store.get("address"), store.get("store_number"))).lastrowid
 
 
-def _write_details(conn, tx_id: int, receipt: dict) -> None:
-    """(Re)write a transaction's lines, charges and payment from a receipt."""
+def _printed_key(text: str) -> str:
+    """How printed lines compare (case and spacing don't count); the same
+    key spending_match uses for aliases."""
+    return " ".join((text or "").upper().split())
+
+
+def _write_details(conn, tx_id: int, receipt: dict, keep_labels: bool = False) -> None:
+    """(Re)write a transaction's lines, charges and payment from a receipt.
+
+    `keep_labels` (an edit after approval): a line whose printed text is
+    unchanged keeps its row, so its product label, correction and logged
+    decisions stay with it; a changed or new line starts unlabelled (the
+    background matcher labels it), and a line that's gone is removed."""
     conn.execute("DELETE FROM charges WHERE transaction_id = ?", (tx_id,))
-    conn.execute("DELETE FROM line_items WHERE transaction_id = ?", (tx_id,))
     conn.execute("DELETE FROM payments WHERE transaction_id = ?", (tx_id,))
-    line_ids = []
+    old = {}
+    if keep_labels:
+        for r in conn.execute("SELECT id, raw_text FROM line_items WHERE transaction_id = ? "
+                              "ORDER BY position", (tx_id,)):
+            old.setdefault(_printed_key(r["raw_text"]), []).append(r["id"])
+    else:
+        conn.execute("DELETE FROM line_items WHERE transaction_id = ?", (tx_id,))
+    line_ids, kept = [], set()
     for i, l in enumerate(receipt["line_items"]):
+        same = old.get(_printed_key(l["raw_text"]))
+        if same:
+            lid = same.pop(0)
+            kept.add(lid)
+            conn.execute("UPDATE line_items SET position = ?, raw_text = ?, qty = ?, "
+                         "unit_price_cents = ?, line_total_cents = ? WHERE id = ?",
+                         (i, l["raw_text"], l["qty"], l["unit_price_cents"],
+                          l["line_total_cents"], lid))
+            line_ids.append(lid)
+            continue
         line_ids.append(conn.execute(
             "INSERT INTO line_items (transaction_id, position, raw_text, qty, "
             "unit_price_cents, line_total_cents) VALUES (?, ?, ?, ?, ?, ?)",
             (tx_id, i, l["raw_text"], l["qty"], l["unit_price_cents"],
              l["line_total_cents"])).lastrowid)
+    for ids in old.values():
+        for lid in ids:
+            if lid not in kept:
+                conn.execute("DELETE FROM line_items WHERE id = ?", (lid,))
     for c in receipt["charges"]:
         t = conn.execute("SELECT id FROM charge_types WHERE kind = ? AND name = ? "
                          "COLLATE NOCASE", (c["kind"], c["name"] or c["kind"])).fetchone()
@@ -951,6 +982,46 @@ def evidence_file(db_path: str, evidence_id: int) -> Optional[Tuple[str, Optiona
     return os.path.join(evidence_dir(db_path), r["image_path"]), r["image_mime"]
 
 
+def _learn_charge_types(conn, tx_id: int) -> None:
+    """The user has seen this purchase's charges: their types become known."""
+    for c in conn.execute("SELECT id, kind, name FROM charges WHERE "
+                          "transaction_id = ? AND type_id IS NULL", (tx_id,)).fetchall():
+        name = c["name"] or c["kind"]
+        conn.execute("INSERT OR IGNORE INTO charge_types (kind, name) VALUES (?, ?)",
+                     (c["kind"], name))
+        t = conn.execute("SELECT id FROM charge_types WHERE kind = ? AND name = ?",
+                         (c["kind"], name)).fetchone()
+        conn.execute("UPDATE charges SET type_id = ? WHERE id = ?", (t["id"], c["id"]))
+
+
+def edit(db_path: str, tx_id: int, edited: dict) -> Optional[dict]:
+    """Correct an approved purchase after the fact (the receipt's shape,
+    amounts in units, as on approve). It stays approved; unchanged lines
+    keep their labels, changed ones are labelled again in the background,
+    and a store left with no purchases goes. None when there's no such
+    approved purchase; ValueError on an unusable edit."""
+    receipt, problems = normalize(edited)
+    if problems:
+        raise ValueError("; ".join(problems))
+    conn = connect(db_path)
+    try:
+        r = conn.execute("SELECT status FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+        if not r or r["status"] != "committed":
+            return None
+        conn.execute(
+            "UPDATE transactions SET store_id = ?, datetime = ?, currency = ?, "
+            "amount_cents = ?, subtotal_cents = ? WHERE id = ?",
+            (_store_id(conn, receipt["store"]), receipt["datetime"], receipt["currency"],
+             receipt["total_cents"], receipt["subtotal_cents"], tx_id))
+        _write_details(conn, tx_id, receipt, keep_labels=True)
+        _learn_charge_types(conn, tx_id)
+        prune_stores(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    return get_transaction(db_path, tx_id)
+
+
 def approve(db_path: str, tx_id: int, edited: Optional[dict] = None) -> Optional[dict]:
     """Commit a pending transaction, with the user's corrections when given
     (the same shape a receipt extraction has, amounts in units, not cents).
@@ -974,14 +1045,7 @@ def approve(db_path: str, tx_id: int, edited: Optional[dict] = None) -> Optional
                  receipt["subtotal_cents"], tx_id))
             _write_details(conn, tx_id, receipt)
             prune_stores(conn)          # a corrected store name leaves the misread one
-        for c in conn.execute("SELECT id, kind, name FROM charges WHERE "
-                              "transaction_id = ? AND type_id IS NULL", (tx_id,)).fetchall():
-            name = c["name"] or c["kind"]
-            conn.execute("INSERT OR IGNORE INTO charge_types (kind, name) VALUES (?, ?)",
-                         (c["kind"], name))
-            t = conn.execute("SELECT id FROM charge_types WHERE kind = ? AND name = ?",
-                             (c["kind"], name)).fetchone()
-            conn.execute("UPDATE charges SET type_id = ? WHERE id = ?", (t["id"], c["id"]))
+        _learn_charge_types(conn, tx_id)
         conn.execute("UPDATE transactions SET status = 'committed', review = '[]', "
                      "committed_at = datetime('now') WHERE id = ?", (tx_id,))
         conn.commit()

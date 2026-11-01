@@ -1823,6 +1823,16 @@ categories and their tags; a new product picks its category from the
 closest `spending.category_options` (30), a new category only when none
 fits, and a new category takes the existing tags that fit it.
 
+**`PUT /api/spending/transactions/{id}`** `{ "receipt": {...} }` → `{
+"transaction" }`: correct an approved purchase after the fact (the same
+receipt shape as approve's; it stays approved). A line whose printed text is
+unchanged (case and spacing aside) keeps its row, so its label, correction
+and logged decisions stay; a changed or new line starts unlabelled and the
+background matcher labels it; a line left out is removed. A store left with
+no purchases goes. `422` without a total or lines (or without `receipt`),
+`404` when the purchase isn't approved (a pending one is corrected on
+approve).
+
 **`DELETE /api/spending/transactions/{id}`** → `{ "deleted": id }`: any
 transaction, pending or approved, with its lines, charges, payment and the
 evidence only it held, image included. A store left with no purchases goes

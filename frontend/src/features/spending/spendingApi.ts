@@ -281,6 +281,15 @@ export const spendingApi = {
     return toDetail(r.transaction);
   },
 
+  /** Correct an approved purchase after the fact; it stays approved. */
+  async update(id: number, receipt: ReceiptEdit): Promise<SpendingDetail> {
+    const r = await request<{ transaction: ApiDetail }>(`/api/spending/transactions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ receipt }),
+    });
+    return toDetail(r.transaction);
+  },
+
   async discard(id: number): Promise<void> {
     await request(`/api/spending/transactions/${id}`, { method: 'DELETE' });
   },
