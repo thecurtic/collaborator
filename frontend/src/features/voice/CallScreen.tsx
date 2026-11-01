@@ -540,7 +540,24 @@ export function CallScreen({
         ]}
         onClose={() => setHandMenu(false)}
       />
-      <CameraSheet open={camera} onClose={() => setCamera(false)} onDone={addFiles} />
+      <CameraSheet
+        open={camera}
+        onClose={() => setCamera(false)}
+        onShot={(file) => {
+          const key = addFiles([file])[0];
+          return key == null ? undefined : String(key);
+        }}
+        shots={handover.flatMap((h) =>
+          h.kind === 'file'
+            ? [{
+                key: String(h.key),
+                previewUrl: null,
+                status: h.status === 'failed' ? ('error' as const) : h.status,
+                progress: h.status === 'ready' ? 1 : 0,
+              }]
+            : [])}
+        onRemove={(key) => removeHandover(Number(key))}
+      />
       <HandTextSheet
         open={textSheet}
         onClose={() => setTextSheet(false)}

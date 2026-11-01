@@ -19,6 +19,7 @@ from db import (
     init_db, create_turn, get_recent_turns, get_turn_by_id, delete_turn,
     create_scratch, get_scratch, list_scratch, set_scratch_action, set_scratch_pinned,
     set_scratch_readable, delete_scratch, SCRATCH_TYPES,
+    create_scratch_upload, take_scratch_upload, stale_scratch_uploads,
     get_ancestor_chain, get_turn_tree,
     search_similar_turns, search_keyword_turns, set_turn_embedding, update_turn_tags,
     update_turn_name, update_subtree_state, set_current_recall, get_current_recall,
@@ -3939,32 +3940,98 @@ async def create_scratch_text(
     return {"item": row}
 
 
-@app.post("/api/scratch/media")
-async def create_scratch_media(
-    file: UploadFile = File(...),
-    content: Optional[str] = Form(None),
-    passkey: Optional[str] = Header(None, alias="X-Passkey"),
-):
-    """Capture a media item (photo, voice memo, file). Content-addressed on
-    disk (sha256): identical bytes dedupe, and the hash column keys future
-    sync integrations."""
-    _require_auth(passkey)
-    db_path = _resolve_db_path(passkey)
+async def _receive_scratch_file(db_path: str, file: UploadFile):
+    """(media_path, digest, size) of an upload stored content-addressed in
+    scratch-media/ (identical bytes dedupe; the hash keys future sync)."""
     try:
         tmp, digest, size = await uploads.receive(
             file, scratch.media_dir(db_path), scratch.max_media_mb())
     except ValueError as e:
         raise HTTPException(status_code=422 if "empty" in str(e) else 413,
                             detail=str(e))
-    name = scratch.place_media(db_path, tmp, digest, file.content_type,
-                               file.filename)
-    kind = scratch.detect_kind(None, file.content_type)
+    return scratch.place_media(db_path, tmp, digest, file.content_type,
+                               file.filename), digest, size
+
+
+def _drop_stale_scratch_uploads(conn, db_path: str) -> None:
+    """Unsent uploads older than two days were abandoned with their draft."""
+    for gone in stale_scratch_uploads(conn):
+        scratch.delete_media_if_unshared(db_path, gone)
+
+
+@app.post("/api/scratch/uploads")
+async def upload_scratch_file(
+    file: UploadFile = File(...),
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Upload a file ahead of the send (a photo the moment it's taken). It
+    isn't an item yet: POST /api/scratch/media with its `upload_id` makes it
+    one, with the caption typed by then; DELETE drops it."""
+    _require_auth(passkey)
+    db_path = _resolve_db_path(passkey)
+    name, digest, size = await _receive_scratch_file(db_path, file)
+    conn = sqlite3.connect(db_path)
+    try:
+        _drop_stale_scratch_uploads(conn, db_path)
+        up = create_scratch_upload(conn, name, file.content_type, size, digest,
+                                   (file.filename or "")[:255] or None)
+    finally:
+        conn.close()
+    return {"upload": up}
+
+
+@app.delete("/api/scratch/uploads/{upload_id}")
+async def drop_scratch_upload(
+    upload_id: str,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """An unsent upload taken back out of the draft."""
+    _require_auth(passkey)
+    db_path = _resolve_db_path(passkey)
+    conn = sqlite3.connect(db_path)
+    try:
+        gone = take_scratch_upload(conn, upload_id)
+    finally:
+        conn.close()
+    if not gone:
+        raise HTTPException(status_code=404, detail="No such upload")
+    scratch.delete_media_if_unshared(db_path, gone)
+    return {"deleted": upload_id}
+
+
+@app.post("/api/scratch/media")
+async def create_scratch_media(
+    file: Optional[UploadFile] = File(None),
+    content: Optional[str] = Form(None),
+    upload_id: Optional[str] = Form(None),
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    """Capture a media item (photo, voice memo, file): the file itself, or
+    the `upload_id` of one uploaded ahead (POST /api/scratch/uploads)."""
+    _require_auth(passkey)
+    db_path = _resolve_db_path(passkey)
+    if upload_id:
+        conn = sqlite3.connect(db_path)
+        try:
+            up = take_scratch_upload(conn, upload_id)
+        finally:
+            conn.close()
+        if not up:
+            raise HTTPException(status_code=404, detail="No such upload (sent already, or expired)")
+        name, digest, size = up["media_path"], up["media_hash"], up["media_size"]
+        mime, filename = up["media_mime"], up["media_name"]
+    elif file is not None:
+        name, digest, size = await _receive_scratch_file(db_path, file)
+        mime, filename = file.content_type, (file.filename or "")[:255] or None
+    else:
+        raise HTTPException(status_code=422, detail="A file or an upload_id is needed")
+    kind = scratch.detect_kind(None, mime)
     conn = sqlite3.connect(db_path)
     try:
         row = create_scratch(conn, kind, content=(content or "").strip() or None,
-                             media_path=name, media_mime=file.content_type,
+                             media_path=name, media_mime=mime,
                              media_size=size, media_hash=digest,
-                             media_name=(file.filename or "")[:255] or None)
+                             media_name=filename)
     finally:
         conn.close()
     return {"item": row}

@@ -1274,7 +1274,17 @@ Capture is inert; only the act (hold-send) gesture shows an item to a model.
 **`POST /api/scratch`** `{ "content": "…" }` → `{ "item": ScratchItem }` (kind
 `text` or `url`). **`POST /api/scratch/media`** multipart `file` + optional
 `content` (caption) → `{ "item" }` (kind `image` | `audio` | `video` | `file`).
-Streamed to disk; `413` over `scratch.max_media_mb` (default 1024).
+Streamed to disk; `413` over `scratch.max_media_mb` (default 1024). Instead of
+`file`, an `upload_id` makes the item from a file uploaded ahead (`404` once
+it's been used or has expired; `422` with neither).
+
+**`POST /api/scratch/uploads`** multipart `file` → `{ "upload": { id,
+media_mime, media_size, media_name } }`: uploaded ahead of the send (a photo
+the moment it's taken), not an item yet, so nothing lists or reads it.
+**`DELETE /api/scratch/uploads/{id}`** → `{ "deleted": id }` takes it back.
+Unsent uploads older than two days are dropped (on the next upload). Their
+files are shared with items as usual: a file goes only when no item and no
+unsent upload holds it.
 
 **`GET /api/scratch?limit=50&before=<id>&q=<text>&type=<filters>`** → the
 stream, newest first, unpinned items only: `{ "items": [...], "count": N,

@@ -569,3 +569,44 @@ def test_link_previews_off_and_private_refused(monkeypatch):
     row = next(i for i in c.get("/api/scratch").json()["items"] if i["id"] == item["id"])
     assert row["preview_status"] == "failed" and row["preview_title"] is None
     print("✓ previews: off means no fetch; private hosts refused")
+
+
+def test_uploads_ahead_of_the_send():
+    """A photo uploads the moment it's taken and becomes an item only when
+    sent (with the caption typed by then); unsent uploads hold their file."""
+    c, cfg, dbp = _fresh()
+    data = b"\x89PNG\r\n\x1a\nahead"
+    mdir = scratch.media_dir(dbp)
+    up = c.post("/api/scratch/uploads",
+                files={"file": ("shot.png", io.BytesIO(data), "image/png")}).json()["upload"]
+    assert up["media_size"] == len(data) and up["media_name"] == "shot.png"
+    assert c.get("/api/scratch").json()["count"] == 0          # not an item yet
+    assert len(os.listdir(mdir)) == 1
+
+    item = c.post("/api/scratch/media", data={"upload_id": up["id"], "content": "the receipt"}).json()["item"]
+    assert item["kind"] == "image" and item["content"] == "the receipt"
+    assert item["media_name"] == "shot.png" and item["media_size"] == len(data)
+    assert c.get(f"/api/scratch/{item['id']}/media").content == data
+    # An upload is sent once.
+    assert c.post("/api/scratch/media", data={"upload_id": up["id"]}).status_code == 404
+    assert c.post("/api/scratch/media", data={}).status_code == 422
+
+    # Dropping an unsent upload keeps a file an item shares, and the item's
+    # delete keeps a file an unsent upload still holds.
+    again = c.post("/api/scratch/uploads",
+                   files={"file": ("same.png", io.BytesIO(data), "image/png")}).json()["upload"]
+    assert c.delete(f"/api/scratch/{item['id']}").status_code == 200
+    assert len(os.listdir(mdir)) == 1
+    assert c.delete(f"/api/scratch/uploads/{again['id']}").status_code == 200
+    assert os.listdir(mdir) == []
+    assert c.delete(f"/api/scratch/uploads/{again['id']}").status_code == 404
+
+    # Abandoned uploads go after two days (checked on the next upload).
+    old = c.post("/api/scratch/uploads",
+                 files={"file": ("old.png", io.BytesIO(b"\x89PNG\r\n\x1a\nold"), "image/png")}).json()["upload"]
+    conn = sqlite3.connect(dbp)
+    conn.execute("UPDATE scratch_uploads SET created_at = datetime('now', '-3 days') WHERE id = ?", (old["id"],))
+    conn.commit(); conn.close()
+    c.post("/api/scratch/uploads", files={"file": ("new.png", io.BytesIO(b"\x89PNG\r\n\x1a\nnew"), "image/png")})
+    assert c.post("/api/scratch/media", data={"upload_id": old["id"]}).status_code == 404
+    assert len(os.listdir(mdir)) == 1

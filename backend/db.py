@@ -225,6 +225,20 @@ def ensure_conversation_schema(conn) -> None:
     # media_name: the file's own name, so a document shows as what it is.
     if "media_name" not in sc_cols:
         cursor.execute("ALTER TABLE scratch ADD COLUMN media_name TEXT")
+    # Uploads that aren't items yet: a photo uploads the moment it's taken,
+    # and becomes an item only when sent (the caption and the hold come
+    # with the send). Files live in scratch-media/ like items' do.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS scratch_uploads (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            media_path TEXT NOT NULL,
+            media_mime TEXT,
+            media_size INTEGER,
+            media_hash TEXT,
+            media_name TEXT
+        )
+    """)
     # Link previews (title + favicon, YouTube title + thumbnail), one row
     # per URL, joined onto url items (link_preview.py).
     import link_preview
@@ -1356,11 +1370,53 @@ def delete_scratch(db, scratch_id: int) -> Optional[dict]:
     db.cursor().execute("DELETE FROM scratch WHERE id = ?", (scratch_id,))
     db.commit()
     if row.get("media_hash"):
-        remaining = db.cursor().execute(
-            "SELECT COUNT(*) FROM scratch WHERE media_hash = ?",
-            (row["media_hash"],)).fetchone()[0]
-        row["media_shared"] = remaining > 0
+        row["media_shared"] = _media_in_use(db, row["media_hash"])
     return row
+
+
+def _media_in_use(db, media_hash: str) -> bool:
+    """Another item or an unsent upload still holds this file."""
+    return bool(db.cursor().execute(
+        "SELECT (SELECT COUNT(*) FROM scratch WHERE media_hash = ?) + "
+        "(SELECT COUNT(*) FROM scratch_uploads WHERE media_hash = ?)",
+        (media_hash, media_hash)).fetchone()[0])
+
+
+def create_scratch_upload(db, media_path: str, media_mime: Optional[str],
+                          media_size: int, media_hash: str,
+                          media_name: Optional[str]) -> dict:
+    import secrets
+    upload_id = secrets.token_hex(12)
+    db.cursor().execute(
+        "INSERT INTO scratch_uploads (id, media_path, media_mime, media_size, "
+        "media_hash, media_name) VALUES (?, ?, ?, ?, ?, ?)",
+        (upload_id, media_path, media_mime, media_size, media_hash, media_name))
+    db.commit()
+    return {"id": upload_id, "media_mime": media_mime, "media_size": media_size,
+            "media_name": media_name}
+
+
+def take_scratch_upload(db, upload_id: str) -> Optional[dict]:
+    """Remove an unsent upload's row and return it (its file stays)."""
+    row = db.cursor().execute(
+        "SELECT id, media_path, media_mime, media_size, media_hash, media_name "
+        "FROM scratch_uploads WHERE id = ?", (upload_id,)).fetchone()
+    if not row:
+        return None
+    db.cursor().execute("DELETE FROM scratch_uploads WHERE id = ?", (upload_id,))
+    db.commit()
+    keys = ("id", "media_path", "media_mime", "media_size", "media_hash", "media_name")
+    out = dict(zip(keys, row))
+    out["media_shared"] = _media_in_use(db, out["media_hash"]) if out["media_hash"] else False
+    return out
+
+
+def stale_scratch_uploads(db, older_than_hours: float = 48) -> List[dict]:
+    """Take every unsent upload older than this (abandoned drafts)."""
+    ids = [r[0] for r in db.cursor().execute(
+        "SELECT id FROM scratch_uploads WHERE created_at < datetime('now', ?)",
+        (f"-{older_than_hours} hours",)).fetchall()]
+    return [r for r in (take_scratch_upload(db, i) for i in ids) if r]
 
 
 # --- Video transcripts (STT jobs) ----------------------------------------------

@@ -7,6 +7,7 @@ import {
   Paperclip,
   Phone,
   Plus,
+  RotateCw,
   SendHorizontal,
   Square,
   X,
@@ -24,9 +25,10 @@ import {
 import { ActionSheet } from '@/components/ActionSheet';
 import { Button } from '@/components/ui/button';
 import type { Attachment } from '@/domain/models';
-import { attachmentsApi, formatSize, isMediaFile } from '@/features/attachments/attachmentsApi';
+import { attachmentsApi, formatSize } from '@/features/attachments/attachmentsApi';
 import { kindIcon } from '@/features/attachments/AttachmentViews';
 import { CameraSheet } from '@/features/attachments/CameraSheet';
+import { useUploadQueue } from '@/features/attachments/usePendingUploads';
 import { useDictation } from '@/features/voice/useDictation';
 import { useWakeLock } from '@/features/voice/useWakeLock';
 import { useLongPress } from '@/lib/useLongPress';
@@ -69,26 +71,6 @@ interface ComposerProps {
 const MAX_TEXTAREA_PX = 160; // matches max-h-40
 const MAX_ATTACHMENTS = 10; // the backend's per-message limit
 
-/** A file on its way into the next message: uploading, ready, or failed. */
-interface PendingFile {
-  key: string;
-  name: string;
-  size: number;
-  /** Local preview for images (revoked when the chip goes). */
-  previewUrl: string | null;
-  status: 'uploading' | 'ready' | 'error';
-  /** 0–1 while uploading. */
-  progress: number;
-  /** Audio or video (sending it with a hold transcribes it). */
-  media: boolean;
-  attachment?: Attachment;
-  error?: string;
-  abort?: AbortController;
-}
-
-let pendingSeq = 0;
-
-
 export function Composer({
   disabled,
   onSend,
@@ -102,8 +84,20 @@ export function Composer({
   const [value, setValue] = useState('');
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   // Attachments upload the moment they're picked (to the server, so every
-  // device sees them); the message only carries their ids.
-  const [files, setFiles] = useState<PendingFile[]>([]);
+  // device sees them); the message only carries their ids. A send asked
+  // for meanwhile waits for them (and for a reply still streaming).
+  const up = useUploadQueue<Attachment, boolean>({
+    upload: (file, name, signal, onProgress) =>
+      attachmentsApi.upload(file, name, signal, onProgress),
+    // Never sent: discard it server-side too (best-effort).
+    discard: (a) => void attachmentsApi.remove(a.id).catch(() => {}),
+    send: (transcribe) => void sendNow(transcribe),
+    max: MAX_ATTACHMENTS,
+    blocked: disabled,
+  });
+  const files = up.items;
+  const valueRef = useRef(value);
+  valueRef.current = value;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [addMenu, setAddMenu] = useState(false);
   const [camera, setCamera] = useState(false);
@@ -144,85 +138,42 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_PX)}px`;
   }, [value]);
 
-  function addFiles(list: FileList | File[]) {
-    const incoming = Array.from(list);
-    if (incoming.length === 0) return;
-    setFiles((prev) => {
-      const room = MAX_ATTACHMENTS - prev.length;
-      if (room <= 0) return prev;
-      const added: PendingFile[] = incoming.slice(0, room).map((file) => {
-        const abort = new AbortController();
-        const key = `f${++pendingSeq}`;
-        const name = file.name || 'pasted-file';
-        void attachmentsApi
-          .upload(file, name, abort.signal, (progress) =>
-            setFiles((cur) => cur.map((f) => (f.key === key ? { ...f, progress } : f))),
-          )
-          .then((attachment) =>
-            setFiles((cur) =>
-              cur.map((f) => (f.key === key ? { ...f, status: 'ready', attachment } : f)),
-            ),
-          )
-          .catch((err: unknown) => {
-            if (abort.signal.aborted) return;
-            setFiles((cur) =>
-              cur.map((f) =>
-                f.key === key
-                  ? { ...f, status: 'error', error: err instanceof Error ? err.message : 'Upload failed' }
-                  : f,
-              ),
-            );
-          });
-        return {
-          key,
-          name,
-          size: file.size,
-          previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
-          status: 'uploading',
-          progress: 0,
-          media: isMediaFile(file.type, name),
-          abort,
-        };
-      });
-      return [...prev, ...added];
-    });
-  }
+  const addFiles = (list: FileList | File[]) => void up.add(list);
+  const removeFile = up.remove;
+  const uploading = up.uploading;
+  const ready = files.filter((f) => f.status === 'ready' && f.result);
 
-  function removeFile(key: string) {
-    setFiles((cur) => {
-      const f = cur.find((x) => x.key === key);
-      if (f) {
-        f.abort?.abort();
-        if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
-        // Never sent: discard it server-side too (best-effort).
-        if (f.attachment) void attachmentsApi.remove(f.attachment.id).catch(() => {});
-      }
-      return cur.filter((x) => x.key !== key);
-    });
-  }
-
-  const uploading = files.some((f) => f.status === 'uploading');
-  const ready = files.filter((f) => f.status === 'ready' && f.attachment);
-
-  async function submit(transcribe = false) {
-    const trimmed = value.trim();
-    if ((!trimmed && ready.length === 0) || disabled || uploading) return;
+  async function sendNow(transcribe: boolean) {
+    const trimmed = valueRef.current.trim();
+    const sentFiles = up.take();
+    const attached = sentFiles.filter((f) => f.status === 'ready' && f.result);
+    if (!trimmed && attached.length === 0) {
+      up.restore(sentFiles);
+      return;
+    }
     // Clear optimistically (the streaming bubble shows the text); restore the
     // draft if the send fails so the message isn't lost.
-    const sentFiles = files;
     setValue('');
-    setFiles([]);
     const ok = await onSend(
       trimmed,
-      ready.map((f) => f.attachment as Attachment),
+      attached.map((f) => f.result as Attachment),
       transcribe,
     );
     if (!ok) {
       setValue((v) => (v ? v : trimmed));
-      setFiles((cur) => (cur.length ? cur : sentFiles));
+      up.restore(sentFiles);
     } else {
-      sentFiles.forEach((f) => f.previewUrl && URL.revokeObjectURL(f.previewUrl));
+      up.release(sentFiles);
     }
+  }
+
+  // Sent while files are uploading (or a reply is still streaming): it
+  // goes out by itself once they're done; a failed upload holds it.
+  const sendQueue = up;
+
+  function submit(transcribe = false) {
+    if (!value.trim() && files.length === 0) return;
+    up.queue(transcribe);
   }
 
   function handleSubmit(e: FormEvent) {
@@ -292,13 +243,12 @@ export function Composer({
     // Files go along as a hand-over; wait for them to finish uploading.
     if ((!draft && ready.length === 0) || disabled || !onStartCall || uploading)
       return;
-    const sentFiles = files;
+    const sentFiles = up.take();
     setValue('');
-    setFiles([]);
-    sentFiles.forEach((f) => f.previewUrl && URL.revokeObjectURL(f.previewUrl));
+    up.release(sentFiles);
     onStartCall(
       draft,
-      ready.map((f) => f.attachment as Attachment),
+      sentFiles.filter((f) => f.status === 'ready' && f.result).map((f) => f.result as Attachment),
     );
   });
 
@@ -353,7 +303,7 @@ export function Composer({
           {files.length > 0 && (
             <div className="mb-1.5 flex gap-1.5 overflow-x-auto pb-1">
               {files.map((f) => {
-                const Icon = kindIcon(f.attachment?.kind ?? 'file');
+                const Icon = kindIcon(f.result?.kind ?? 'file');
                 return (
                   <div
                     key={f.key}
@@ -391,10 +341,20 @@ export function Composer({
                         <Loader2 className="h-4 w-4 animate-spin text-foreground" />
                       </span>
                     )}
-                    {f.status === 'error' && f.previewUrl && (
-                      <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/60">
-                        <AlertCircle className="h-4 w-4 text-destructive" />
-                      </span>
+                    {f.status === 'error' && (
+                      <button
+                        type="button"
+                        onClick={() => up.retry(f.key)}
+                        aria-label={`Retry uploading ${f.name}`}
+                        title={`${f.error ?? 'Upload failed'}: tap to retry`}
+                        className={cn(
+                          'flex items-center justify-center gap-1 rounded-lg text-[11px] text-destructive active:scale-95',
+                          f.previewUrl ? 'absolute inset-0 flex-col bg-background/70' : 'ml-1',
+                        )}
+                      >
+                        {f.previewUrl && <AlertCircle className="h-4 w-4" />}
+                        <span className="flex items-center gap-0.5"><RotateCw className="h-3 w-3" /> Retry</span>
+                      </button>
                     )}
                     <button
                       type="button"
@@ -408,6 +368,26 @@ export function Composer({
                 );
               })}
             </div>
+          )}
+          {sendQueue.queued && (
+            <p className="mb-1 flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
+              {sendQueue.held ? (
+                <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+              ) : (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              )}
+              <span className="min-w-0 flex-1">
+                {sendQueue.held
+                  ? 'An upload failed: retry or remove it, then this sends.'
+                  : uploading
+                    ? 'Sends when the uploads finish.'
+                    : 'Sends when the reply finishes.'}
+              </span>
+              <button type="button" onClick={sendQueue.cancel}
+                      className="shrink-0 underline active:opacity-70">
+                Don’t send
+              </button>
+            </p>
           )}
           {hasMedia && (
             <p className="mb-1 px-1 text-[11px] text-muted-foreground">
@@ -492,7 +472,7 @@ export function Composer({
                 <Button
                   type="submit"
                   size="icon"
-                  disabled={disabled || uploading}
+                  disabled={sendQueue.queued}
                   {...(onStartCall || hasMedia ? sendHold : {})}
                   aria-label={
                     hasMedia
@@ -539,7 +519,14 @@ export function Composer({
         ]}
         onClose={() => setAddMenu(false)}
       />
-      <CameraSheet open={camera} onClose={() => setCamera(false)} onDone={addFiles} />
+      <CameraSheet
+        open={camera}
+        onClose={() => setCamera(false)}
+        onShot={(file) => up.add([file])[0]}
+        shots={files}
+        onRemove={up.remove}
+        onRetry={up.retry}
+      />
     </div>
   );
 }

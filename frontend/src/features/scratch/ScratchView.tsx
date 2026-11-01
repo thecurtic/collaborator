@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   Camera,
   Check,
   ChevronDown,
@@ -17,6 +18,7 @@ import {
   PinOff,
   Play,
   Plus,
+  RotateCw,
   Search,
   SendHorizontal,
   ShieldAlert,
@@ -43,7 +45,7 @@ import {
 import { ActionSheet } from '@/components/ActionSheet';
 import { Button } from '@/components/ui/button';
 import { CameraSheet } from '@/features/attachments/CameraSheet';
-import { isMediaFile } from '@/features/attachments/attachmentsApi';
+import { useUploadQueue } from '@/features/attachments/usePendingUploads';
 import { SearchEverywhere } from '@/features/find/ScopedSearch';
 import { useLongPress } from '@/lib/useLongPress';
 import { cleanUrlsInText } from '@/lib/urlClean';
@@ -706,6 +708,8 @@ export function ScratchView({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [value, setValue] = useState('');
+  const valueRef = useRef(value);
+  valueRef.current = value;
   const [sending, setSending] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -721,11 +725,17 @@ export function ScratchView({
   const scrollPlan = useRef<'bottom' | number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Picked files wait in the composer: tap send saves them as they are,
-  // hold send lets the agent act (and transcribes recordings and videos).
-  const [staged, setStaged] = useState<{ key: number; file: File; url: string | null }[]>([]);
-  // Upload progress (0–1) of captures still on their way, by temp id.
-  const [uploads, setUploads] = useState<Map<number, number>>(new Map());
+  // Picked and photographed files upload at once but wait in the composer
+  // as drafts (not items yet): tap send saves them as they are, hold send
+  // lets the agent act (and transcribes recordings and videos). A send
+  // asked for while they upload goes out once they're done.
+  const up = useUploadQueue<string, boolean>({
+    upload: (file, name, signal, onProgress) =>
+      api.uploadScratchFile(file, name, { signal, onProgress }),
+    discard: (id) => void api.dropScratchUpload(id).catch(() => {}),
+    send: (act) => sendStaged(act),
+  });
+  const staged = up.items;
   const [addMenu, setAddMenu] = useState(false);
   const [camera, setCamera] = useState(false);
 
@@ -950,15 +960,7 @@ export function ScratchView({
     }
 
     if (staged.length > 0) {
-      const files = staged;
-      setStaged([]);
-      setValue('');
-      for (const [i, s] of files.entries()) {
-        // The typed text captions the first file.
-        void uploadOne(s.file, i === 0 ? text : '', act).finally(() => {
-          if (s.url) URL.revokeObjectURL(s.url);
-        });
-      }
+      sendQueue.queue(act);
       return;
     }
 
@@ -984,57 +986,43 @@ export function ScratchView({
     }
   };
 
-  /** Picked or photographed files wait in the composer until send. */
-  const stage = (files: File[]) =>
-    setStaged((prev) => [
-      ...prev,
-      ...files.map((file) => ({
-        key: ++pendingSeq,
-        file,
-        url: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
-      })),
-    ]);
-  const unstage = (key: number) =>
-    setStaged((prev) => {
-      const s = prev.find((x) => x.key === key);
-      if (s?.url) URL.revokeObjectURL(s.url);
-      return prev.filter((x) => x.key !== key);
-    });
+  const stage = (files: File[]) => void up.add(files);
+  const unstage = up.remove;
 
   /**
-   * Upload one file as a capture. Optimistic: a card shows at once with
-   * the upload's progress, then becomes the stored item; a failure takes
-   * it back out, says why next to the composer, and hands the file back.
+   * Make items of the uploaded drafts (the typed text captions the first),
+   * then, with `act`, the agent gets each. A card shows at once; one that
+   * can't be saved goes back to the composer, and says why.
    */
-  const uploadOne = async (file: File, caption: string, act: boolean) => {
-    const temp = pendingMediaItem(file, caption);
-    addItem(temp);
-    const setProgress = (p: number | null) =>
-      setUploads((prev) => {
-        const next = new Map(prev);
-        if (p == null) next.delete(temp.id);
-        else next.set(temp.id, p);
-        return next;
-      });
-    setProgress(0);
-    try {
-      const item = await api.addScratchMedia(file, file.name, caption || undefined, {
-        onProgress: setProgress,
-      });
-      setItems((prev) =>
-        !prev ? [item]
-          : prev.some((i) => i.id === temp.id) ? prev.map((i) => (i.id === temp.id ? item : i))
-          : prev.some((i) => i.id === item.id) ? prev : [item, ...prev]);
-      if (act) await runAct(item);
-    } catch (err) {
-      setItems((prev) => prev?.filter((i) => i.id !== temp.id) ?? prev);
-      setError(`${file.name}: ${errMessage(err)}`);
-      stage([file]);
-      if (caption) setValue((v) => (v ? v : caption));
-    } finally {
-      setProgress(null);
-    }
+  const sendStaged = (act: boolean) => {
+    const text = valueRef.current.trim();
+    const files = up.take();
+    if (!files.length) return;
+    setValue('');
+    files.forEach((f, i) => {
+      const caption = i === 0 ? text : '';
+      const temp = pendingMediaItem(f.file, caption);
+      addItem(temp);
+      void (async () => {
+        try {
+          const item = await api.addScratchUpload(f.result as string, caption || undefined);
+          setItems((prev) =>
+            !prev ? [item]
+              : prev.some((x) => x.id === temp.id) ? prev.map((x) => (x.id === temp.id ? item : x))
+              : prev.some((x) => x.id === item.id) ? prev : [item, ...prev]);
+          up.release([f]);
+          if (act) await runAct(item);
+        } catch (err) {
+          setItems((prev) => prev?.filter((x) => x.id !== temp.id) ?? prev);
+          setError(`${f.name}: ${errMessage(err)}`);
+          up.release([f]);
+          up.add([f.file]);
+          if (caption) setValue((v) => (v ? v : caption));
+        }
+      })();
+    });
   };
+  const sendQueue = up;
 
   // --- Mic gestures: tap = dictate into the field; swipe UP = raw record. ---
   const {
@@ -1155,10 +1143,7 @@ export function ScratchView({
       {item.mediaName && (
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />
-          Uploading {item.mediaName}
-          {item.mediaSize != null && item.mediaSize > 2_000_000 && uploads.has(item.id)
-            ? ` · ${Math.round((uploads.get(item.id) ?? 0) * 100)}%`
-            : '…'}
+          Saving {item.mediaName}…
         </p>
       )}
       <ScratchCard
@@ -1333,22 +1318,49 @@ export function ScratchView({
                 <div
                   key={s.key}
                   className={cn(
-                    'relative flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-muted/60 text-xs',
-                    s.url ? 'p-0' : 'max-w-[15rem] py-1.5 pl-2 pr-7',
+                    'relative flex shrink-0 items-center gap-1.5 rounded-lg border bg-muted/60 text-xs',
+                    s.previewUrl ? 'p-0' : 'max-w-[15rem] py-1.5 pl-2 pr-7',
+                    s.status === 'error' ? 'border-destructive/60' : 'border-border',
                   )}
-                  title={s.file.name}
+                  title={s.error ?? s.name}
                 >
-                  {s.url ? (
-                    <img src={s.url} alt={s.file.name} className="h-14 w-14 rounded-lg object-cover" />
+                  {s.previewUrl ? (
+                    <img src={s.previewUrl} alt={s.name} className="h-14 w-14 rounded-lg object-cover" />
                   ) : (
                     <span className="min-w-0">
-                      <span className="block truncate font-medium text-foreground">{s.file.name}</span>
-                      <span className="block text-muted-foreground">{fmtSize(s.file.size)}</span>
+                      <span className="block truncate font-medium text-foreground">{s.name}</span>
+                      <span className={cn('block', s.status === 'error' ? 'text-destructive' : 'text-muted-foreground')}>
+                        {s.status === 'error'
+                          ? (s.error ?? 'Upload failed')
+                          : s.status === 'uploading'
+                            ? `${Math.round(s.progress * 100)}% of ${fmtSize(s.size)}`
+                            : fmtSize(s.size)}
+                      </span>
                     </span>
+                  )}
+                  {s.status === 'uploading' && s.previewUrl && (
+                    <span className="absolute inset-x-1 bottom-1 h-1 overflow-hidden rounded-full bg-background/70">
+                      <span className="block h-full bg-primary transition-[width]"
+                            style={{ width: `${Math.round(s.progress * 100)}%` }} />
+                    </span>
+                  )}
+                  {s.status === 'error' && (
+                    <button
+                      type="button"
+                      onClick={() => up.retry(s.key)}
+                      aria-label={`Retry uploading ${s.name}`}
+                      className={cn(
+                        'flex items-center justify-center gap-1 rounded-lg text-[11px] text-destructive active:scale-95',
+                        s.previewUrl ? 'absolute inset-0 flex-col bg-background/70' : 'ml-1',
+                      )}
+                    >
+                      {s.previewUrl && <AlertCircle className="h-4 w-4" />}
+                      <span className="flex items-center gap-0.5"><RotateCw className="h-3 w-3" /> Retry</span>
+                    </button>
                   )}
                   <button
                     type="button"
-                    aria-label={`Remove ${s.file.name}`}
+                    aria-label={`Remove ${s.name}`}
                     onClick={() => unstage(s.key)}
                     className="absolute right-0.5 top-0.5 rounded-full bg-background/80 p-0.5 text-foreground shadow-sm active:scale-90"
                   >
@@ -1357,8 +1369,25 @@ export function ScratchView({
                 </div>
               ))}
             </div>
+            {sendQueue.queued && (
+              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                {sendQueue.held ? (
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                ) : (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                )}
+                <span className="min-w-0 flex-1">
+                  {sendQueue.held
+                    ? 'An upload failed: retry or remove it, then this sends.'
+                    : 'Sends when the uploads finish.'}
+                </span>
+                <button type="button" onClick={sendQueue.cancel} className="shrink-0 underline active:opacity-70">
+                  Don’t send
+                </button>
+              </p>
+            )}
             <p className="text-[11px] text-muted-foreground">
-              {staged.some((s) => isMediaFile(s.file.type, s.file.name))
+              {staged.some((s) => s.media)
                 ? 'Tap send to save as is · hold send to transcribe'
                 : 'Tap send to save · hold send to let the agent read it'}
             </p>
@@ -1455,7 +1484,7 @@ export function ScratchView({
             <Button
               type="button"
               size="icon"
-              disabled={sending || (!value.trim() && !recording && staged.length === 0)}
+              disabled={sending || sendQueue.queued || (!value.trim() && !recording && staged.length === 0)}
               {...sendHold}
               aria-label="Save note to self (hold to let the agent act on it)"
               title="Tap: save silently · Hold: let the agent act on it"
@@ -1481,7 +1510,14 @@ export function ScratchView({
         ]}
         onClose={() => setAddMenu(false)}
       />
-      <CameraSheet open={camera} onClose={() => setCamera(false)} onDone={stage} />
+      <CameraSheet
+        open={camera}
+        onClose={() => setCamera(false)}
+        onShot={(file) => up.add([file])[0]}
+        shots={staged}
+        onRemove={up.remove}
+        onRetry={up.retry}
+      />
     </div>
   );
 }

@@ -1,17 +1,26 @@
-import { Camera, Loader2, SwitchCamera, X } from 'lucide-react';
+import { AlertCircle, Camera, Loader2, RotateCw, SwitchCamera, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import { useModalA11y } from '@/lib/useModalA11y';
 import { cn } from '@/lib/utils';
 
-interface Shot {
+/** A photo in the tray: uploading, uploaded, or failed (with a retry). */
+export interface CameraShot {
+  key: string;
+  previewUrl: string | null;
+  status: 'uploading' | 'ready' | 'error';
+  progress: number;
+}
+
+/** Taken, still being encoded: its thumbnail shows already. */
+interface Encoding {
   key: number;
-  file: File;
-  url: string;
+  thumb: string;
 }
 
 let shotSeq = 0;
+const THUMB_PX = 160;
 
 function photoName(n: number): string {
   const d = new Date();
@@ -23,10 +32,15 @@ function photoName(n: number): string {
 }
 
 /**
- * The in-app camera: take one photo or several, then hand them all over.
- * Shots collect in a strip at the bottom (tap one's × to drop it). Back
- * keeps what was taken (it's the same as Done); only the × at the top
- * discards, and with photos taken it asks for a second tap first.
+ * The in-app camera: snap, snap, snap, Done. Each photo drops into the tray
+ * the instant it's taken (a small thumbnail drawn from the frame, before
+ * the full-size picture is encoded) and is handed over at once (`onShot`),
+ * so its upload starts while the next is taken; the tray shows each one's
+ * progress (`shots`, from the owner), a failed one with a retry. Done is
+ * there from the first photo and just closes: uploads carry on.
+ *
+ * Back keeps what was taken (the same as Done); only the × at the top
+ * discards this session's photos, and asks for a second tap first.
  *
  * When the camera can't be opened here (no permission, no camera), it
  * offers the phone's own camera app instead, one photo at a time.
@@ -34,13 +48,24 @@ function photoName(n: number): string {
 export function CameraSheet({
   open,
   onClose,
-  onDone,
+  onShot,
+  shots: allShots,
+  onRemove,
+  onRetry,
 }: {
   open: boolean;
   onClose: () => void;
-  onDone: (files: File[]) => void;
+  /** A photo taken: start its upload; returns the key its tray entry has. */
+  onShot: (file: File) => string | undefined;
+  /** The owner's pending files (only this session's show in the tray). */
+  shots: CameraShot[];
+  onRemove: (key: string) => void;
+  /** Absent: a failed photo shows as failed, with no retry. */
+  onRetry?: (key: string) => void;
 }) {
-  const [shots, setShots] = useState<Shot[]>([]);
+  const [sessionKeys, setSessionKeys] = useState<string[]>([]);
+  const [encoding, setEncoding] = useState<Encoding[]>([]);
+  const shots = allShots.filter((s) => sessionKeys.includes(s.key));
   const [facing, setFacing] = useState<'environment' | 'user'>('environment');
   const [status, setStatus] = useState<'starting' | 'ready' | 'error'>('starting');
   const [error, setError] = useState<string | null>(null);
@@ -50,25 +75,28 @@ export function CameraSheet({
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fallbackRef = useRef<HTMLInputElement>(null);
-  const shotsRef = useRef(shots);
-  shotsRef.current = shots;
+  const sessionRef = useRef(sessionKeys);
+  sessionRef.current = sessionKeys;
+  const taken = shots.length + encoding.length;
+
+  const hand = (file: File) => {
+    const key = onShot(file);
+    if (key) setSessionKeys((prev) => [...prev, key]);
+  };
 
   const finish = () => {
-    const files = shotsRef.current.map((s) => s.file);
-    shotsRef.current.forEach((s) => URL.revokeObjectURL(s.url));
-    setShots([]);
+    setSessionKeys([]);
     setConfirmDiscard(false);
-    if (files.length) onDone(files);
     onClose();
   };
 
   const discard = () => {
-    if (shotsRef.current.length > 0 && !confirmDiscard) {
+    if (taken > 0 && !confirmDiscard) {
       setConfirmDiscard(true);
       return;
     }
-    shotsRef.current.forEach((s) => URL.revokeObjectURL(s.url));
-    setShots([]);
+    sessionRef.current.forEach(onRemove);
+    setSessionKeys([]);
     setConfirmDiscard(false);
     onClose();
   };
@@ -155,25 +183,25 @@ export function CameraSheet({
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     setFlash(true);
     setTimeout(() => setFlash(false), 120);
+    // The tray shows the shot now: a small thumbnail is quick to draw, the
+    // full-size JPEG takes a moment longer.
+    const n = ++shotSeq;
+    const scale = THUMB_PX / Math.max(canvas.width, canvas.height);
+    const thumb = document.createElement('canvas');
+    thumb.width = Math.round(canvas.width * scale);
+    thumb.height = Math.round(canvas.height * scale);
+    thumb.getContext('2d')?.drawImage(canvas, 0, 0, thumb.width, thumb.height);
+    setEncoding((prev) => [...prev, { key: n, thumb: thumb.toDataURL('image/jpeg', 0.7) }]);
+    setConfirmDiscard(false);
     canvas.toBlob(
       (blob) => {
-        if (!blob) return;
-        const n = ++shotSeq;
-        const file = new File([blob], photoName(n), { type: 'image/jpeg' });
-        setShots((prev) => [...prev, { key: n, file, url: URL.createObjectURL(blob) }]);
-        setConfirmDiscard(false);
+        setEncoding((prev) => prev.filter((e) => e.key !== n));
+        if (blob) hand(new File([blob], photoName(n), { type: 'image/jpeg' }));
       },
       'image/jpeg',
       0.92,
     );
   };
-
-  const drop = (key: number) =>
-    setShots((prev) => {
-      const s = prev.find((x) => x.key === key);
-      if (s) URL.revokeObjectURL(s.url);
-      return prev.filter((x) => x.key !== key);
-    });
 
   if (!open) return null;
 
@@ -200,7 +228,7 @@ export function CameraSheet({
             <X className="h-5 w-5" />
             {confirmDiscard && (
               <span className="text-sm">
-                Discard {shots.length} photo{shots.length === 1 ? '' : 's'}?
+                Discard {taken} photo{taken === 1 ? '' : 's'}?
               </span>
             )}
           </button>
@@ -253,28 +281,61 @@ export function CameraSheet({
           onChange={(e) => {
             const f = e.target.files?.[0];
             e.target.value = '';
-            if (!f) return;
-            const n = ++shotSeq;
-            setShots((prev) => [...prev, { key: n, file: f, url: URL.createObjectURL(f) }]);
+            if (f) hand(f);
           }}
         />
       </div>
 
       <div className="pb-safe">
         <div className="px-3 pb-4 pt-3">
-          {shots.length > 0 && (
+          {taken > 0 && (
             <div className="mb-3 flex gap-2 overflow-x-auto">
               {shots.map((s) => (
                 <div key={s.key} className="relative shrink-0">
-                  <img src={s.url} alt="" className="h-16 w-16 rounded-lg object-cover" />
+                  {s.previewUrl ? (
+                    <img src={s.previewUrl} alt="" className="h-16 w-16 rounded-lg object-cover" />
+                  ) : (
+                    <div className="h-16 w-16 rounded-lg bg-white/10" />
+                  )}
+                  {s.status === 'uploading' && (
+                    <div className="absolute inset-x-1 bottom-1 h-1 overflow-hidden rounded-full bg-black/50">
+                      <div className="h-full bg-white transition-[width]"
+                           style={{ width: `${Math.round(s.progress * 100)}%` }} />
+                    </div>
+                  )}
+                  {s.status === 'error' && !onRetry && (
+                    <span className="absolute inset-0 flex flex-col items-center justify-center rounded-lg bg-black/60 text-[10px]">
+                      <AlertCircle className="h-4 w-4 text-destructive" /> Failed
+                    </span>
+                  )}
+                  {s.status === 'error' && onRetry && (
+                    <button
+                      type="button"
+                      onClick={() => onRetry(s.key)}
+                      aria-label="Upload failed: retry"
+                      className="absolute inset-0 flex flex-col items-center justify-center gap-0.5 rounded-lg bg-black/60 text-[10px] active:scale-95"
+                    >
+                      <AlertCircle className="h-4 w-4 text-destructive" />
+                      <span className="flex items-center gap-0.5"><RotateCw className="h-3 w-3" /> Retry</span>
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => drop(s.key)}
+                    onClick={() => {
+                      onRemove(s.key);
+                      setSessionKeys((prev) => prev.filter((k) => k !== s.key));
+                    }}
                     aria-label="Remove this photo"
                     className="absolute right-0.5 top-0.5 rounded-full bg-black/70 p-0.5 active:scale-90"
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
+                </div>
+              ))}
+              {encoding.map((e) => (
+                <div key={`e${e.key}`} className="relative shrink-0">
+                  <img src={e.thumb} alt="" className="h-16 w-16 rounded-lg object-cover opacity-80" />
+                  <Loader2 className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 animate-spin" />
                 </div>
               ))}
             </div>
@@ -289,9 +350,9 @@ export function CameraSheet({
               className="h-[72px] w-[72px] rounded-full border-4 border-white bg-white/20 transition active:scale-90 active:bg-white/60 disabled:opacity-40"
             />
             <span className="flex flex-1 justify-end">
-              {shots.length > 0 && (
+              {taken > 0 && (
                 <Button onClick={finish} className="rounded-full px-5">
-                  Done · {shots.length}
+                  Done · {taken}
                 </Button>
               )}
             </span>

@@ -854,9 +854,10 @@ export function useCall(
     [],
   );
 
-  /** Hand over files: each uploads now, and goes with the next turn. */
+  /** Hand over files: each uploads now, and goes with the next turn.
+   * Returns the keys given them. */
   const addFiles = useCallback(
-    (list: File[]) => {
+    (list: File[]): number[] => {
       const added: Handover[] = list.map((file) => {
         const key = ++handoverKey.current;
         const upload = attachmentsApi
@@ -881,6 +882,7 @@ export function useCall(
         return { key, kind: 'file', name: file.name || 'file', status: 'uploading', upload };
       });
       setHandover([...handoverRef.current, ...added]);
+      return added.map((h) => h.key);
     },
     [setHandover],
   );

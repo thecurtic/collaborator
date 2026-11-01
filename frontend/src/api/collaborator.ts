@@ -547,6 +547,19 @@ export interface CollaboratorApi {
     content?: string,
     opts?: { signal?: AbortSignal; onProgress?: (fraction: number) => void },
   ): Promise<ScratchItem>;
+  /**
+   * Upload a file ahead of the send (a photo the moment it's taken); it
+   * becomes an item only through addScratchUpload.
+   */
+  uploadScratchFile(
+    file: File | Blob,
+    filename: string,
+    opts?: { signal?: AbortSignal; onProgress?: (fraction: number) => void },
+  ): Promise<string>;
+  /** Make an item of an upload sent ahead, with the caption typed by then. */
+  addScratchUpload(uploadId: string, content?: string): Promise<ScratchItem>;
+  /** Take an unsent upload back out (best-effort). */
+  dropScratchUpload(uploadId: string): Promise<void>;
   /** Authenticated media bytes for an item (thumbnails, audio playback). */
   getScratchMedia(id: number): Promise<Blob>;
   /** A link item's stored favicon or YouTube thumbnail. */
@@ -1085,6 +1098,29 @@ class HttpCollaboratorApi implements CollaboratorApi {
     if (content) form.append('content', content);
     const res = await uploadForm<{ item: ApiScratchItem }>('/api/scratch/media', form, opts);
     return toScratchItem(res.item);
+  }
+
+  async uploadScratchFile(
+    file: File | Blob,
+    filename: string,
+    opts?: { signal?: AbortSignal; onProgress?: (fraction: number) => void },
+  ): Promise<string> {
+    const form = new FormData();
+    form.append('file', file, filename);
+    const res = await uploadForm<{ upload: { id: string } }>('/api/scratch/uploads', form, opts);
+    return res.upload.id;
+  }
+
+  async addScratchUpload(uploadId: string, content?: string): Promise<ScratchItem> {
+    const form = new FormData();
+    form.append('upload_id', uploadId);
+    if (content) form.append('content', content);
+    const res = await uploadForm<{ item: ApiScratchItem }>('/api/scratch/media', form);
+    return toScratchItem(res.item);
+  }
+
+  async dropScratchUpload(uploadId: string): Promise<void> {
+    await request(`/api/scratch/uploads/${encodeURIComponent(uploadId)}`, { method: 'DELETE' });
   }
 
   async getScratchMedia(id: number): Promise<Blob> {
