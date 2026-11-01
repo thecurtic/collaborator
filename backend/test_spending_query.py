@@ -65,9 +65,11 @@ def test_lookup_resolves_misspoken_names_and_flags_ambiguity():
     nothing = sq.lookup(dbp, "zzzz qqqq")
     assert nothing["matches"] == [] and "ask the user" in nothing["note"]
     # Two stores fitting equally well is "ask which one".
-    conn = spending.connect(dbp)
-    conn.execute("INSERT INTO stores (name, address) VALUES ('Safeway', 'Main St')")
-    conn.commit(); conn.close()
+    r = json.loads(json.dumps(GROCERY))
+    r["store"] = {"name": "Safeway", "address": "Main St", "store_number": None}
+    n, _ = spending.normalize(r)
+    spending.record_receipt(dbp, n, image_path="z.png", image_mime=None, image_hash=None,
+                            extracted=r, caption=None)
     assert sq.lookup(dbp, "Safeway")["ambiguous"] is True
 
 
@@ -154,3 +156,26 @@ def test_tools_are_offered_and_answer():
     cfg["spending"]["enabled"] = False
     names = {s["function"]["name"] for s in main._build_tools(dbp)[0]}
     assert "spending_query" not in names
+
+
+def test_a_store_without_purchases_is_forgotten():
+    c, cfg, dbp = _data()
+    gambie = _receipt(dbp, "Canadian Tire", [("WIPER BLADES", 24.99, None)])
+    conn = spending.connect(dbp)
+    conn.execute("UPDATE stores SET address = 'Gambie and 7th' WHERE name = 'Canadian Tire'")
+    conn.commit(); conn.close()
+    assert sq.lookup(dbp, "Canadian Tire")["matches"][0]["name"] == "Canadian Tire, Gambie and 7th"
+    assert c.delete(f"/api/spending/transactions/{gambie}").status_code == 200
+    assert sq.lookup(dbp, "Canadian Tire")["matches"] == []
+    # Correcting a receipt's store on approval drops the misread one too.
+    r = json.loads(json.dumps(GROCERY))
+    r["store"] = {"name": "Canadian Tyre", "address": None, "store_number": None}
+    n, _ = spending.normalize(r)
+    tx = spending.record_receipt(dbp, n, image_path="y.png", image_mime=None, image_hash=None,
+                                 extracted=r, caption=None)["transaction_id"]
+    r["store"]["name"] = "Canadian Tire"
+    spending.approve(dbp, tx, r)
+    names = [m["name"] for m in sq.lookup(dbp, "Canadian Tire")["matches"] if m["type"] == "store"]
+    assert names == ["Canadian Tire"]
+    # Safeway still has purchases, so it stays.
+    assert sq.lookup(dbp, "Safeway")["matches"][0]["type"] == "store"

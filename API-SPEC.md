@@ -1825,8 +1825,10 @@ fits, and a new category takes the existing tags that fit it.
 
 **`DELETE /api/spending/transactions/{id}`** → `{ "deleted": id }`: any
 transaction, pending or approved, with its lines, charges, payment and the
-evidence only it held, image included. What was learned from it (products,
-aliases) stays.
+evidence only it held, image included. A store left with no purchases goes
+too, with the aliases learned there (a misread address mustn't outlive its
+receipt; the same happens when an approval corrects the store). Products
+learned from it stay.
 
 **`GET /api/spending/evidence/{id}/image`** → the receipt image.
 

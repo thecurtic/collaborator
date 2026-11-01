@@ -246,6 +246,16 @@ def set_settings(db_path: str, changes: dict) -> dict:
     return get_settings(db_path)
 
 
+def prune_stores(conn) -> int:
+    """Drop stores no purchase points at any more (deleted, or renamed when
+    a receipt was corrected), with what was learned at them: a misread
+    "Gambie and 7th" mustn't outlive its receipt. Returns how many."""
+    orphans = "SELECT id FROM stores WHERE id NOT IN " \
+              "(SELECT store_id FROM transactions WHERE store_id IS NOT NULL)"
+    conn.execute(f"DELETE FROM aliases WHERE store_id IN ({orphans})")
+    return conn.execute(f"DELETE FROM stores WHERE id IN ({orphans})").rowcount
+
+
 def connect(db_path: str) -> sqlite3.Connection:
     """The user's spending.db, schema ensured."""
     conn = sqlite3.connect(db_path_for(db_path), timeout=10)
@@ -278,6 +288,7 @@ def connect(db_path: str) -> sqlite3.Connection:
                     "INSERT OR IGNORE INTO category_tags (category_id, tag_id) "
                     "SELECT c.id, t.id FROM categories c, tags t WHERE c.name = ? AND t.name = ?",
                     (cat, tag))
+    prune_stores(conn)          # stores left behind before this was done on delete
     conn.commit()
     return conn
 
@@ -962,6 +973,7 @@ def approve(db_path: str, tx_id: int, edited: Optional[dict] = None) -> Optional
                  receipt["currency"], receipt["total_cents"],
                  receipt["subtotal_cents"], tx_id))
             _write_details(conn, tx_id, receipt)
+            prune_stores(conn)          # a corrected store name leaves the misread one
         for c in conn.execute("SELECT id, kind, name FROM charges WHERE "
                               "transaction_id = ? AND type_id IS NULL", (tx_id,)).fetchall():
             name = c["name"] or c["kind"]
@@ -997,6 +1009,7 @@ def discard(db_path: str, tx_id: int) -> bool:
         for table in ("charges", "line_items", "payments"):
             conn.execute(f"DELETE FROM {table} WHERE transaction_id = ?", (tx_id,))
         conn.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
+        prune_stores(conn)
         conn.commit()
         for path in orphaned:
             if not conn.execute("SELECT 1 FROM evidence WHERE image_path = ?",
