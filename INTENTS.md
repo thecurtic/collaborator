@@ -753,6 +753,15 @@ Photograph a receipt in Scratch, hold send, and it becomes spending rows
   label is applied; unsure ones are marked, never blocking. Only confident
   and corrected labels become aliases, so one bad guess can't repeat, and a
   correction remaps every line its store printed the same way.
+- **Search is a second look, not a loop.** When the chat model isn't sure
+  of a line, code makes one web search (the printed line plus the store's
+  name, cached so it's never repeated) and the model looks again with the
+  results as untrusted data; its answer is still only a label, so a hostile
+  page can at worst mislabel a line. On by default in Settings; the provider
+  follows the main search unless `spending.search_provider` says otherwise.
+  The query tells the provider what was bought where, which the setting's
+  description says. Store classification by search is a stub for phase 2,
+  where statement descriptors need it.
 - **The model asks, the database adds.** Chat questions go through two
   tools: a lookup that turns what was said into real ids (and says when to
   ask which one), then a structured query, no raw SQL. The tool writes the

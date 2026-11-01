@@ -1246,9 +1246,19 @@ def web_search_provider() -> Optional[str]:
     return None
 
 
-def web_search(query: str, limit: Optional[int] = None) -> Dict:
-    """Dispatch a web search to the configured provider (see web_search_provider)."""
-    provider = web_search_provider()
+def web_search_usable(provider: str) -> bool:
+    """True when `provider` (brave | searxng) has its credential configured."""
+    wcfg = (_tools_config().get("web_search") or {})
+    return bool(wcfg.get("brave_api_key") if provider == "brave"
+                else wcfg.get("url") if provider == "searxng" else False)
+
+
+def web_search(query: str, limit: Optional[int] = None,
+               provider: Optional[str] = None) -> Dict:
+    """Dispatch a web search to `provider`, else the configured one (see
+    web_search_provider)."""
+    provider = provider if provider and web_search_usable(provider) else (
+        None if provider else web_search_provider())
     if provider == "brave":
         return web_search_brave(query, limit=limit)
     if provider == "searxng":

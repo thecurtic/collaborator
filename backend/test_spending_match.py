@@ -191,3 +191,77 @@ def test_seed_categories_and_endpoints(models):
     cats = c.get("/api/spending/categories").json()["categories"]
     assert {"coffee", "pasta sauce"} <= {x["name"] for x in cats}
     assert c.get("/api/spending/labels/unsure").json() == {"lines": []}
+
+
+# --- Web search on unsure labels ------------------------------------------------
+
+
+@pytest.fixture
+def searching(models, monkeypatch):
+    """Search faked (each test configures brave after _fresh); the chat
+    model is sure once it has results. Returns the queries sent."""
+    queries = []
+    def web_search(query, limit=None, provider=None):
+        queries.append((query, provider))
+        return {"results": [{"title": "bubly Sparkling Water, Lime, 12 x 355 mL",
+                             "snippet": "Unsweetened sparkling water.", "url": "https://x"}]}
+    monkeypatch.setattr(inference, "web_search", web_search)
+    plain = spending._complete
+    def complete(messages, fmt):
+        if "Web search results" in messages[1]["content"]:
+            return json.dumps({"product_id": None, "name": "sparkling water", "brand": "Bubly",
+                               "category": "water", "sure": True})
+        return plain(messages, fmt)
+    monkeypatch.setattr(spending, "_complete", complete)
+    return queries
+
+
+def test_unsure_label_is_searched_and_looked_at_again(searching):
+    c, cfg, dbp = _fresh()
+    cfg["tools"]["web_search"].update(provider="brave", brave_api_key="k")
+    tx = _committed(dbp)
+    assert sm.run_once(dbp) == {"chat": 3}
+    assert searching == [("SPARKLING WTR 12PK Safeway", "brave")]   # store name kept
+    water = _lines(dbp, tx)[2]
+    assert water["match"] == "chat" and water["product"]["brand"] == "Bubly"
+    conn = spending.connect(dbp)
+    models_logged = [r[0] for r in conn.execute("SELECT model FROM decision_log ORDER BY id")]
+    conn.close()
+    assert models_logged[-1].endswith("+search")
+    # Searched once: the next receipt resolves by alias, and a repeat query
+    # would come from the cache.
+    assert sm.search(dbp, "SPARKLING WTR 12PK Safeway")[0]["title"].startswith("bubly")
+    assert len(searching) == 1
+
+
+def test_search_respects_the_setting_and_the_provider(searching):
+    c, cfg, dbp = _fresh()
+    cfg["tools"]["web_search"].update(provider="brave", brave_api_key="k")
+    r = c.get("/api/spending/settings").json()
+    assert r == {"settings": {"search_fallback": True}, "search_provider": "brave"}
+    assert c.put("/api/spending/settings", json={"search_fallback": False}).json()["settings"] == \
+        {"search_fallback": False}
+    tx = _committed(dbp)
+    assert sm.run_once(dbp) == {"chat": 2, "unsure": 1} and searching == []
+    # Back on, but the configured provider has no credential: no search.
+    spending.set_settings(dbp, {"search_fallback": True})
+    cfg["spending"]["search_provider"] = "searxng"
+    cfg["tools"]["web_search"]["url"] = None
+    assert sm.search_provider() is None
+    cfg["tools"]["web_search"]["url"] = "http://searx.invalid"
+    assert sm.search_provider() == "searxng"
+    with pytest.raises(ValueError):
+        spending.set_settings(dbp, {"search_fallback": "yes"})
+
+
+def test_old_unsure_labels_get_one_searched_look(searching):
+    c, cfg, dbp = _fresh()
+    spending.set_settings(dbp, {"search_fallback": False})     # labelled with search off
+    tx = _committed(dbp)
+    assert sm.run_once(dbp) == {"chat": 2, "unsure": 1}
+    cfg["tools"]["web_search"].update(provider="brave", brave_api_key="k")
+    spending.set_settings(dbp, {"search_fallback": True})
+    assert sm.run_once(dbp) == {"searched chat": 1}
+    water = _lines(dbp, tx)[2]
+    assert water["match"] == "chat" and water["product"]["brand"] == "Bubly"
+    assert sm.run_once(dbp) == {} and len(searching) == 1        # never looked at twice

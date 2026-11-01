@@ -289,6 +289,10 @@ def load_config() -> dict:
             "extract_max_tokens": 8192,   # thinking + a long receipt's JSON
             "timeout": 300,               # seconds, the text-only structuring call
             "match_interval_seconds": 3600,  # the sweep for approved lines still unlabelled
+            # Web search for unsure labels (Settings → Spending turns it on/off):
+            # "" = the main search's provider (tools.web_search.provider).
+            "search_provider": "",
+            "search_results": 5,
         },
         "decision": {
             # A decision model (typed questions, a probability per option;

@@ -47,6 +47,13 @@ export interface UnsureLine {
   product: SpendingProduct | null;
 }
 
+export interface SpendingSettings {
+  /** Search the web when a label is unsure (on by default). */
+  searchFallback: boolean;
+  /** brave | searxng, or null when no search provider is usable. */
+  searchProvider: string | null;
+}
+
 export interface SpendingCategory {
   id: number;
   name: string;
@@ -324,6 +331,22 @@ export const spendingApi = {
       method: 'PUT',
       body: JSON.stringify('productId' in label ? { product_id: label.productId } : { new: label.new }),
     });
+  },
+
+  /** Per-user spending preferences, and which provider search would use. */
+  async settings(): Promise<SpendingSettings> {
+    const r = await request<{ settings: { search_fallback: boolean }; search_provider: string | null }>(
+      '/api/spending/settings',
+    );
+    return { searchFallback: r.settings.search_fallback, searchProvider: r.search_provider };
+  },
+
+  async setSearchFallback(on: boolean): Promise<SpendingSettings> {
+    const r = await request<{ settings: { search_fallback: boolean }; search_provider: string | null }>(
+      '/api/spending/settings',
+      { method: 'PUT', body: JSON.stringify({ search_fallback: on }) },
+    );
+    return { searchFallback: r.settings.search_fallback, searchProvider: r.search_provider };
   },
 
   async evidenceImage(id: number): Promise<Blob> {

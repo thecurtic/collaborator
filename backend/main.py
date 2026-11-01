@@ -4427,6 +4427,31 @@ async def correct_spending_line(
     return out
 
 
+class SpendingSettings(BaseModel):
+    search_fallback: Optional[bool] = None
+
+
+@app.get("/api/spending/settings")
+async def get_spending_settings(passkey: Optional[str] = Header(None, alias="X-Passkey")):
+    _require_auth(passkey)
+    return {"settings": spending.get_settings(_resolve_db_path(passkey)),
+            "search_provider": spending_match.search_provider()}
+
+
+@app.put("/api/spending/settings")
+async def put_spending_settings(
+    request: SpendingSettings,
+    passkey: Optional[str] = Header(None, alias="X-Passkey"),
+):
+    _require_auth(passkey)
+    changes = {k: v for k, v in request.model_dump().items() if v is not None}
+    try:
+        out = spending.set_settings(_resolve_db_path(passkey), changes)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"settings": out, "search_provider": spending_match.search_provider()}
+
+
 @app.get("/api/spending/labels/unsure")
 async def get_unsure_spending_labels(passkey: Optional[str] = Header(None, alias="X-Passkey")):
     _require_auth(passkey)

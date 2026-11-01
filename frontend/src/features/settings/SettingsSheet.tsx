@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { useModalA11y } from '@/lib/useModalA11y';
 import { AgentEndpointsSection } from './AgentEndpointsSection';
 import { NotificationsSection } from './NotificationsSection';
+import { SpendingSettingsSection } from './SpendingSettingsSection';
 import { ProjectOverridesSection } from './ProjectOverridesSection';
 import { useCapabilities } from '@/lib/capabilities';
 import { KEYWORD_OPTIONS } from '@/features/voice/keywordSpotter';
@@ -856,6 +857,8 @@ export function SettingsSheet({
         <DevicesSection />
 
         {/* Server-backed, per user: which kinds notify (all optional). */}
+        <SpendingSettingsSection open={open} />
+
         <NotificationsSection open={open} />
 
         {/* Agent endpoints: approve new ones, forget old ones (when any). */}

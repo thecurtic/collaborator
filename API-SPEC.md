@@ -1763,8 +1763,13 @@ its lines in the background (below); an hourly sweep
 `category`): an alias first (this store printed this text before), else the
 decision model's pick among ~10 retrieved candidates, asked with the list in
 two orders and accepted only when both agree above `decision.match_threshold`,
-else the chat model, which picks a candidate or writes a new product. Its
-unsure labels are applied and marked `unsure`. Only confident and corrected
+else the chat model, which picks a candidate or writes a new product. When
+it isn't sure and the user's `search_fallback` setting is on (the default),
+the printed line and the store's name are web-searched once (cached, through
+`spending.search_provider`, else the main search's provider) and the chat
+model looks again with the results as untrusted data. Labels still unsure
+are applied and marked `unsure`; the sweep gives each unsure label that never
+had a searched look (labelled while search was off) one. Only confident and corrected
 labels become aliases. Unapproved and discarded receipts are never matched.
 
 **`PUT /api/spending/lines/{id}/product`** `{ "product_id" }` or `{ "new": {
@@ -1772,6 +1777,12 @@ name, brand?, category? } }` → `{ "product_id", "lines": [ids] }`: the user's
 label. Every approved line the store printed the same way takes it, it
 becomes that store's alias, and the decisions that labelled them are marked
 corrected in the log. `422` with neither, `404` for no approved line.
+
+**`GET /api/spending/settings`** → `{ "settings": { "search_fallback": true },
+"search_provider": "brave" | "searxng" | null }`; **`PUT`** the same keys
+(each optional) → the same shape, `422` for an unknown key or wrong type.
+Per user (in `spending.db`). `search_provider` is what labelling would search
+with: null when no provider has its credential, and then nothing is searched.
 
 **`GET /api/spending/labels/unsure`** → `{ "lines": [{ id, raw_text,
 line_total_cents, transaction_id, datetime, store, product_id, product,

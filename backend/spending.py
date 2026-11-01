@@ -152,6 +152,17 @@ CREATE TABLE IF NOT EXISTS product_vectors (
     text TEXT NOT NULL,                       -- what was embedded (brand + name)
     vector TEXT NOT NULL                      -- JSON list of floats
 );
+-- The user's spending preferences (key → JSON value); see SETTINGS.
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+-- Web searches made while labelling, so a printed line is searched once.
+CREATE TABLE IF NOT EXISTS search_cache (
+    query TEXT PRIMARY KEY,
+    results TEXT NOT NULL,                    -- JSON [{title, snippet}]
+    at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE INDEX IF NOT EXISTS idx_tx_status ON transactions(status, datetime);
 CREATE INDEX IF NOT EXISTS idx_lines_tx ON line_items(transaction_id);
 CREATE INDEX IF NOT EXISTS idx_charges_tx ON charges(transaction_id);
@@ -165,6 +176,7 @@ _ADDED = (
     ("line_items", "match", "TEXT"),                  # alias | model | chat | unsure | user
     ("line_items", "matched_at", "TEXT"),
     ("line_items", "match_tries", "INTEGER NOT NULL DEFAULT 0"),
+    ("line_items", "searched", "INTEGER NOT NULL DEFAULT 0"),  # had its web-search second look
 )
 
 # The starting categories: fine-grained, flat, and short enough for one
@@ -177,6 +189,40 @@ SEED_CATEGORIES = (
     "cleaning supplies", "paper products", "personal care", "pet supplies",
     "prepared food",
 )
+
+
+# Per-user preferences, shown in Settings, with their defaults.
+SETTINGS = {
+    # When the models are unsure of a line, search the web for its printed
+    # text (and the store's name) and look again with the results.
+    "search_fallback": True,
+}
+
+
+def get_settings(db_path: str) -> dict:
+    conn = connect(db_path)
+    try:
+        saved = {r["key"]: json.loads(r["value"]) for r in conn.execute("SELECT * FROM settings")}
+    finally:
+        conn.close()
+    return {k: saved.get(k, default) for k, default in SETTINGS.items()}
+
+
+def set_settings(db_path: str, changes: dict) -> dict:
+    """Save known keys (with their default's type); returns them all."""
+    conn = connect(db_path)
+    try:
+        for k, v in changes.items():
+            if k not in SETTINGS:
+                raise ValueError(f"unknown setting: {k}")
+            if not isinstance(v, type(SETTINGS[k])):
+                raise ValueError(f"{k} must be {type(SETTINGS[k]).__name__}")
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                         (k, json.dumps(v)))
+        conn.commit()
+    finally:
+        conn.close()
+    return get_settings(db_path)
 
 
 def connect(db_path: str) -> sqlite3.Connection:
