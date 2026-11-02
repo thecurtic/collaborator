@@ -77,6 +77,11 @@ export function CameraSheet({
   const fallbackRef = useRef<HTMLInputElement>(null);
   const sessionRef = useRef(sessionKeys);
   sessionRef.current = sessionKeys;
+  // Bumped by a discard: a photo still encoding then is dropped, not handed.
+  const generation = useRef(0);
+  // Done while photos are still encoding: closes once they're handed over,
+  // so they're in the owner's tray (uploading) the moment the sheet goes.
+  const [closing, setClosing] = useState(false);
   const taken = shots.length + encoding.length;
 
   const hand = (file: File) => {
@@ -85,10 +90,22 @@ export function CameraSheet({
   };
 
   const finish = () => {
-    setSessionKeys([]);
     setConfirmDiscard(false);
+    if (encoding.length > 0) {
+      setClosing(true);
+      return;
+    }
+    setClosing(false);
+    setSessionKeys([]);
     onClose();
   };
+
+  useEffect(() => {
+    if (!closing || encoding.length > 0) return;
+    setClosing(false);
+    setSessionKeys([]);
+    onClose();
+  }, [closing, encoding.length, onClose]);
 
   const discard = () => {
     if (taken > 0 && !confirmDiscard) {
@@ -96,6 +113,8 @@ export function CameraSheet({
       return;
     }
     sessionRef.current.forEach(onRemove);
+    generation.current += 1;
+    setEncoding([]);
     setSessionKeys([]);
     setConfirmDiscard(false);
     onClose();
@@ -186,6 +205,7 @@ export function CameraSheet({
     // The tray shows the shot now: a small thumbnail is quick to draw, the
     // full-size JPEG takes a moment longer.
     const n = ++shotSeq;
+    const gen = generation.current;
     const scale = THUMB_PX / Math.max(canvas.width, canvas.height);
     const thumb = document.createElement('canvas');
     thumb.width = Math.round(canvas.width * scale);
@@ -196,7 +216,7 @@ export function CameraSheet({
     canvas.toBlob(
       (blob) => {
         setEncoding((prev) => prev.filter((e) => e.key !== n));
-        if (blob) hand(new File([blob], photoName(n), { type: 'image/jpeg' }));
+        if (blob && gen === generation.current) hand(new File([blob], photoName(n), { type: 'image/jpeg' }));
       },
       'image/jpeg',
       0.92,
@@ -351,8 +371,14 @@ export function CameraSheet({
             />
             <span className="flex flex-1 justify-end">
               {taken > 0 && (
-                <Button onClick={finish} className="rounded-full px-5">
-                  Done · {taken}
+                <Button onClick={finish} disabled={closing} className="rounded-full px-5">
+                  {closing ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Saving
+                    </>
+                  ) : (
+                    <>Done · {taken}</>
+                  )}
                 </Button>
               )}
             </span>
