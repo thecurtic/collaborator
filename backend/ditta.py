@@ -8,10 +8,12 @@ reusable token to store. The whole loop lives inside this one tool call:
 1. GET /client/quote — the price is known before anything is paid; over the
    per-query cap, nothing happens.
 2. POST /client/search — a free broker answers 200; a paid one answers 402
-   with an L402 header and a payment challenge signed by the broker's own
-   key. The signature is checked against the pubkey pinned in config, the
-   challenge must answer this request, agree with its header and not have
-   expired, and the invoice must fit under the cap — or nothing is paid.
+   with an L402 header and a plain-JSON body (invoice, macaroon, amount,
+   expiries). /client is the broker's product API, not the DITTA wire, so
+   there is no protocol signature to check: who is being paid rests on the
+   transport (TLS to the configured URL, or the onion address). The body
+   must answer this request, agree with its header, not have expired and
+   fit under the cap — or nothing is paid.
 3. Pay from the wallet (wallet.pay: ledger, caps, recovery), then replay the
    byte-identical body with `Authorization: L402 <macaroon>:<preimage>`.
 
@@ -42,9 +44,6 @@ import wallet
 
 _CHALLENGE_RE = re.compile(
     r'(?:L402|LSAT)\s+macaroon="([^"]+)",\s*invoice="([^"]+)"')
-_HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_HEX128 = re.compile(r"^[0-9a-f]{128}$")
-_TAG = "ditta/v0/payment_challenge"
 
 
 class DittaError(Exception):
@@ -56,71 +55,7 @@ def _cfg() -> dict:
 
 
 def configured() -> bool:
-    cfg = _cfg()
-    return bool((cfg.get("url") or "").strip()) and bool(
-        _HEX64.match(str(cfg.get("pubkey") or "").strip().lower()))
-
-
-# --- the broker's signature (DITTA v0 canonical serialization + BIP-340) ---------
-
-
-def _escape(s: str) -> str:
-    short = {0x08: "\\b", 0x09: "\\t", 0x0A: "\\n", 0x0C: "\\f", 0x0D: "\\r"}
-    out = ['"']
-    for ch in s:
-        code = ord(ch)
-        if ch == '"':
-            out.append('\\"')
-        elif ch == "\\":
-            out.append("\\\\")
-        elif code <= 0x1F:
-            out.append(short.get(code, f"\\u{code:04x}"))
-        else:
-            out.append(ch)            # '/' unescaped, non-ASCII literal
-    out.append('"')
-    return "".join(out)
-
-
-def canonical_bytes(value) -> bytes:
-    """One byte sequence per message: keys sorted by UTF-8 bytes, no
-    whitespace, integers only (the protocol has no floats, bools or null)."""
-    def ser(v) -> str:
-        if isinstance(v, bool) or v is None:
-            raise DittaError("not representable in the protocol")
-        if isinstance(v, int):
-            return str(v)
-        if isinstance(v, str):
-            return _escape(v)
-        if isinstance(v, dict):
-            items = sorted(v.items(), key=lambda kv: kv[0].encode("utf-8"))
-            return "{" + ",".join(f"{_escape(k)}:{ser(x)}" for k, x in items) + "}"
-        if isinstance(v, list):
-            return "[" + ",".join(ser(x) for x in v) + "]"
-        raise DittaError(f"cannot serialize {type(v).__name__}")
-    return ser(value).encode("utf-8")
-
-
-def _tagged_hash(tag: str, msg: bytes) -> bytes:
-    t = hashlib.sha256(tag.encode("utf-8")).digest()
-    return hashlib.sha256(t + t + msg).digest()
-
-
-def verify_challenge(body: dict, pubkey: str) -> bool:
-    """The payment challenge's BIP-340 signature, by the pinned key."""
-    try:
-        from coincurve.keys import PublicKeyXOnly
-    except ImportError:
-        raise DittaError("cannot verify the broker's signature: coincurve is "
-                         "not installed — refusing to pay")
-    sig = str(body.get("sig") or "")
-    if not _HEX128.match(sig):
-        return False
-    digest = _tagged_hash(_TAG, canonical_bytes(
-        {k: v for k, v in body.items() if k != "sig"}))
-    try:
-        return PublicKeyXOnly(bytes.fromhex(pubkey)).verify(bytes.fromhex(sig), digest)
-    except Exception:
-        return False
+    return bool((_cfg().get("url") or "").strip())
 
 
 # --- transport --------------------------------------------------------------------
@@ -217,7 +152,7 @@ def _results(data: dict, charged_msat: int) -> dict:
     }
 
 
-def _challenge(resp, request_id: str, pubkey: str):
+def _challenge(resp, request_id: str, cap_msat: int):
     """(macaroon, invoice) from a 402, or DittaError if it mustn't be paid."""
     header = resp.headers.get("WWW-Authenticate") or ""
     m = _CHALLENGE_RE.search(header)
@@ -226,58 +161,31 @@ def _challenge(resp, request_id: str, pubkey: str):
     try:
         body = resp.json()
     except ValueError:
-        raise DittaError("the 402 has no signed payment challenge — not paying")
-    if not isinstance(body, dict):
-        raise DittaError("the 402 has no signed payment challenge — not paying")
-    pinned = str(_cfg().get("pubkey") or "").strip().lower()
-    signer = str(body.get("pubkey") or "")
-    if signer != pinned:
-        raise DittaError(
-            f"the payment challenge is signed by a different key ({signer[:16]}…) "
-            f"than the one pinned in tools.ditta.pubkey ({pinned[:16]}…) — not "
-            "paying. The pin must be the broker's DITTA identity: the `pubkey` "
-            "in its GET / description, not its Lightning node key or L402 secret"
-            + _advertised_hint(signer))
-    if not verify_challenge(body, pinned):
-        fields = ", ".join(sorted(body))
-        raise DittaError(
-            "the payment challenge names the pinned key but its signature "
-            f"doesn't verify — not paying (challenge fields: {fields}). If the "
-            "broker is a different version from this tool, the signed message "
-            "may differ")
+        body = None
+    if not isinstance(body, dict) or body.get("error") != "payment_required":
+        raise DittaError("the 402 has no payment challenge body — not paying")
     if body.get("request_id") != request_id:
         raise DittaError("the payment challenge answers a different request — "
                          "not paying")
     if body.get("macaroon") != m.group(1) or body.get("invoice") != m.group(2):
-        raise DittaError("the 402's header disagrees with its signed body — "
-                         "not paying")
-    if not isinstance(body.get("expiry"), int) or body["expiry"] < int(time.time()):
+        raise DittaError("the 402's header disagrees with its body — not paying")
+    expires = body.get("invoice_expires")
+    if not isinstance(expires, int) or isinstance(expires, bool) \
+            or expires < int(time.time()):
         raise DittaError("the payment challenge has already expired")
+    amount = body.get("amount_msat")
+    if isinstance(amount, int) and not isinstance(amount, bool) \
+            and amount > cap_msat:
+        raise DittaError(f"the invoice asks {amount / 1000:g} sats, over the "
+                         f"{cap_msat / 1000:g}-sat per-query cap "
+                         "(tools.ditta.max_sats_per_query) — not paying")
     return m.group(1), m.group(2)
-
-
-def _advertised_hint(signer: str) -> str:
-    """Diagnostics for a key mismatch: what the broker at the configured URL
-    says its key is. Never used to decide whether to pay."""
-    try:
-        r = _request("GET", _cfg()["url"].strip().rstrip("/") + "/")
-        advertised = str(r.json().get("pubkey") or "")
-    except Exception:
-        return ""
-    if not advertised:
-        return ""
-    if advertised == signer:
-        return (f". The broker at tools.ditta.url describes itself with "
-                f"{advertised[:16]}… too: if this is your broker, pin that key")
-    return (f". The broker at tools.ditta.url describes itself with "
-            f"{advertised[:16]}…, which matches neither")
 
 
 def ditta_search(db_path: str, user_key: str, query: str, n: int = None) -> dict:
     """One federated search through the broker, paid if it asks, in one call."""
     if not configured():
-        return {"error": "DITTA search is not configured (tools.ditta.url and "
-                         "tools.ditta.pubkey)"}
+        return {"error": "DITTA search is not configured (tools.ditta.url)"}
     query = (query or "").strip()
     if not query:
         return {"error": "query is required"}
@@ -332,7 +240,8 @@ def _send(db_path, user_key, base, key, query, body, request_id,
             return _finish(db_path, key, body, r, None, None)
         if r.status_code != 402:
             return _refused(r)
-        macaroon, invoice = _challenge(r, request_id, str(_cfg()["pubkey"]).lower())
+        cap_msat = int(float(_cfg().get("max_sats_per_query", 10)) * 1000)
+        macaroon, invoice = _challenge(r, request_id, cap_msat)
     return _pay_and_replay(db_path, user_key, base, key, query, body,
                            macaroon, invoice)
 

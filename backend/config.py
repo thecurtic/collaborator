@@ -438,7 +438,7 @@ def load_config() -> dict:
                 "read_attachment": True,   # an attachment's extracted text, paged
                 "read_logs": True,     # agent can read its own recent server logs
                 "wallet": True,        # self-gating: needs a wallet for the user
-                "ditta_search": True,  # self-gating: needs tools.ditta.url + pubkey
+                "ditta_search": True,  # self-gating: needs tools.ditta.url
                 "spending_lookup": True,  # resolve store/category/brand/card names (spending.enabled)
                 "spending_query": True,   # spending totals, summed in SQL
             },
@@ -464,11 +464,10 @@ def load_config() -> dict:
             },
             "ditta": {
                 # The user's DITTA broker (ditta.py). url may be a domain, an
-                # IP or an onion (onion needs proxy); pubkey pins the broker's
-                # signing key, so a challenge signed by anyone else is never
-                # paid. Payments come from tools.wallet.
+                # IP or an onion (onion needs proxy). /client is plain JSON
+                # with no protocol signature: who is paid rests on TLS or the
+                # onion address. Payments come from tools.wallet.
                 "url": None,
-                "pubkey": None,
                 "max_sats_per_query": 10,
                 "results": 10,
                 "proxy": None,            # e.g. "socks5h://127.0.0.1:9050"

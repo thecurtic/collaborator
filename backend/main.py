@@ -1211,7 +1211,7 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                          "description": "create_invoice only: the invoice's "
                                         "description"}},
                 "required": []}}})
-    # ditta_search is self-gating: needs the broker's url + pinned pubkey.
+    # ditta_search is self-gating: needs the broker's url.
     # A broker that charges also needs the user's wallet (checked at call).
     if avail.get("ditta_search", True) and ditta.configured():
         schemas.append({"type": "function", "function": {

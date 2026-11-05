@@ -1,6 +1,6 @@
-"""Tests for ditta.py: the broker's signed payment challenge (checked against
-the DITTA spec's own vectors), and the quote -> 402 -> pay -> replay loop
-against a fake broker. No network, no node: HTTP and the wallet are mocked."""
+"""Tests for ditta.py: the quote -> 402 -> pay -> replay loop against a fake
+broker that speaks /client's plain-JSON 402. No network, no node: HTTP and
+the wallet are mocked."""
 
 import json
 import os
@@ -18,56 +18,8 @@ import importlib, db, main, ditta, wallet
 importlib.reload(db)
 importlib.reload(main)
 
-coincurve = pytest.importorskip("coincurve")
-
-# The DITTA spec's published test-vector key for a broker (spec/vectors.json).
-BROKER_SECKEY = "371ceb18f5e01877e33489d2c48398114339ed7f77e882acddaed063b313a995"
-BROKER_PUBKEY = "88c5204e618b7294b22867984e31db7c3980c8f1fa76e52e6d12328f97fa2e9b"
-SPEC_CHALLENGE = {
-    "pubkey": "4af8136ba2e2c7027f55742d1d75b0a03f3388367c139f51ef19420562d129c8",
-    "request_id": "q-7730",
-    "invoice": "lnbc500n1pn0examplequeryinvoicebodyisopaquehere",
-    "macaroon": "AgEEbGV0aGUCAgABAAISbGV0aGUgYmF0Y2ggbWFjYXJvb24AAAYg",
-    "expiry": 1788307200,
-    "sig": "03276ff2444567a75f272dd9ca28a5e74510059ea70c67b51da5f3e9676dad04"
-           "8d0d4186dbcaf5121fa9ee3e7e8d765c698d5125dc6058b4312407956b0b8bbd",
-}
-
-
-def test_canonical_bytes_match_the_spec_vectors():
-    assert ditta.canonical_bytes(
-        {k: v for k, v in SPEC_CHALLENGE.items() if k != "sig"}) == (
-        b'{"expiry":1788307200,"invoice":"lnbc500n1pn0examplequeryinvoicebody'
-        b'isopaquehere","macaroon":"AgEEbGV0aGUCAgABAAISbGV0aGUgYmF0Y2ggbWFjYX'
-        b'Jvb24AAAYg","pubkey":"4af8136ba2e2c7027f55742d1d75b0a03f3388367c139f'
-        b'51ef19420562d129c8","request_id":"q-7730"}')
-    escapes = {"pubkey": BROKER_PUBKEY, "max_results": 1,
-               "query": 'he said "p\\q" a/b\tx\ny\u0001 café 🔍',
-               "request_id": "€" * 21 + "x", "pricing_type": "per_query",
-               "max_price": 9007199254740991}
-    assert ditta.canonical_bytes(escapes) == (
-        '{"max_price":9007199254740991,"max_results":1,"pricing_type":'
-        f'"per_query","pubkey":"{BROKER_PUBKEY}","query":'
-        r'"he said \"p\\q\" a/b\tx\ny\u0001 café 🔍",'
-        f'"request_id":"{"€" * 21}x"}}').encode()
-    print("✓ canonical serialization matches the spec's vectors")
-
-
-def test_spec_challenge_signature_verifies():
-    assert ditta.verify_challenge(SPEC_CHALLENGE, SPEC_CHALLENGE["pubkey"])
-    assert not ditta.verify_challenge({**SPEC_CHALLENGE, "invoice": "lnbc1x"},
-                                      SPEC_CHALLENGE["pubkey"])
-    assert not ditta.verify_challenge(SPEC_CHALLENGE, BROKER_PUBKEY)
-    print("✓ the spec's signed payment challenge verifies; tampering doesn't")
-
 
 # --- a fake broker ----------------------------------------------------------------
-
-def _sign(body: dict, seckey=BROKER_SECKEY) -> dict:
-    digest = ditta._tagged_hash(ditta._TAG, ditta.canonical_bytes(body))
-    sig = coincurve.PrivateKey(bytes.fromhex(seckey)).sign_schnorr(digest)
-    return {**body, "sig": sig.hex()}
-
 
 class _Resp:
     def __init__(self, status_code, payload=None, headers=None):
@@ -90,7 +42,6 @@ class FakeBroker:
         self.searches = []          # (body bytes, Authorization or None)
         self.retain = False         # answer the paid search "no indexer replied"
         self.tamper = None          # mutate the challenge body before sending
-        self.seckey = BROKER_SECKEY
         self.spent = set()
 
     def request(self, method, url, timeout=None, params=None, data=None,
@@ -112,12 +63,13 @@ class FakeBroker:
                              {"X-Credential-Retained": "1"})
             self.spent.add(data)
             return _Resp(200, results)
-        challenge = {"pubkey": BROKER_PUBKEY, "request_id": ask["request_id"],
-                     "invoice": self.invoice, "macaroon": "MAC",
-                     "expiry": int(time.time()) + 600}
+        now = int(time.time())
+        body = {"error": "payment_required", "request_id": ask["request_id"],
+                "invoice": self.invoice, "macaroon": "MAC",
+                "payment_hash": "cd" * 32, "amount_msat": self.price,
+                "invoice_expires": now + 600, "credential_expires": now + 86400}
         if self.tamper:
-            challenge = self.tamper(challenge)
-        body = challenge if "sig" in challenge else _sign(challenge, self.seckey)
+            body = self.tamper(body)
         return _Resp(402, body, {"WWW-Authenticate":
                                  f'L402 macaroon="MAC", invoice="{self.invoice}"'})
 
@@ -126,7 +78,6 @@ def _setup(monkeypatch, broker, **over):
     import requests
     tools = config.get_config().setdefault("tools", {})
     monkeypatch.setitem(tools, "ditta", {"url": "https://broker.example.com/",
-                                         "pubkey": BROKER_PUBKEY,
                                          "max_sats_per_query": 10, **over})
     monkeypatch.setattr(requests, "request", broker.request)
     paid = []
@@ -174,13 +125,12 @@ def test_over_cap_quote_pays_nothing(monkeypatch):
 
 
 @pytest.mark.parametrize("tamper,why", [
-    (lambda c: {**c, "sig": "00" * 64}, "signature"),
-    (lambda c: _sign({**c, "pubkey": "4af8136ba2e2c7027f55742d1d75b0a03f3388367c139f51ef19420562d129c8"},
-                     "f1c4d22b1f9b4cf3362ab0f245b092537eebbea0c8f48d61a106c5e8e8dc89ce"),
-     "different key"),
+    (lambda c: {**c, "error": "something_else"}, "no payment challenge"),
     (lambda c: {**c, "request_id": "someone-elses"}, "different request"),
     (lambda c: {**c, "invoice": "lnbc1pswapped"}, "disagrees"),
-    (lambda c: {**c, "expiry": 1}, "expired"),
+    (lambda c: {**c, "invoice_expires": 1}, "expired"),
+    (lambda c: {k: v for k, v in c.items() if k != "invoice_expires"}, "expired"),
+    (lambda c: {**c, "amount_msat": 50_000}, "over the 10-sat per-query cap"),
 ])
 def test_bad_challenges_are_never_paid(monkeypatch, tamper, why):
     broker = FakeBroker()
@@ -251,24 +201,7 @@ def test_onion_needs_a_proxy_and_config_gates_the_tool(monkeypatch):
     tools = config.get_config()["tools"]
     names = {s["function"]["name"] for s in main._build_tools(os.environ["DB_PATH"])[0]}
     assert "ditta_search" in names
-    monkeypatch.setitem(tools, "ditta", {"url": "https://broker.example.com"})
+    monkeypatch.setitem(tools, "ditta", {"url": ""})
     names = {s["function"]["name"] for s in main._build_tools(os.environ["DB_PATH"])[0]}
-    assert "ditta_search" not in names            # no pinned pubkey, no tool
-    print("✓ onion refused without a proxy; the tool needs url + pinned key")
-
-
-def test_key_mismatch_says_what_the_broker_advertises(monkeypatch):
-    broker = FakeBroker()
-    dbp, paid = _setup(monkeypatch, broker, pubkey="4af8136ba2e2c7027f55742d1d75b0a03f3388367c139f51ef19420562d129c8")
-    inner = broker.request
-
-    def with_root(method, url, **kw):
-        if url.endswith("broker.example.com/"):
-            return _Resp(200, {"pubkey": BROKER_PUBKEY})
-        return inner(method, url, **kw)
-    import requests
-    monkeypatch.setattr(requests, "request", with_root)
-    out = ditta.ditta_search(dbp, "default", "q")
-    assert "different key (88c5204e618b7294…)" in out["error"]
-    assert "pin that key" in out["error"] and paid == []
-    print("✓ a key mismatch names both keys and what the broker advertises")
+    assert "ditta_search" not in names            # no url, no tool
+    print("✓ onion refused without a proxy; the tool needs a broker url")
