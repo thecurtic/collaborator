@@ -14,8 +14,13 @@ import importlib, db, main, logbuffer
 importlib.reload(db)
 importlib.reload(main)
 
+# pytest swaps its own capture stream onto sys.stdout for every test phase,
+# replacing the tee main installed at import. Each test re-wraps the current
+# stream first; install() is idempotent, so this is harmless outside pytest.
+
 
 def test_buffer_captures_print_and_logging():
+    logbuffer.install()
     print("read_logs sentinel: PRINTED line")
     logging.getLogger("uvicorn.error").error("read_logs sentinel: LOGGED line")
     lines = logbuffer.get_lines(500)
@@ -27,6 +32,7 @@ def test_buffer_captures_print_and_logging():
 
 
 def test_grep_and_caps():
+    logbuffer.install()
     for i in range(12):
         print(f"greptest line {i}")
     hits = logbuffer.get_lines(500, grep="GREPTEST")     # case-insensitive
@@ -38,6 +44,7 @@ def test_grep_and_caps():
 
 
 def test_registry_and_executor():
+    logbuffer.install()
     cfg = config.get_config._config
     schemas, execute, _ = main._build_tools(os.environ["DB_PATH"])
     assert "read_logs" in {s["function"]["name"] for s in schemas}
@@ -57,6 +64,7 @@ def test_registry_and_executor():
 
 def test_install_idempotent():
     import sys
+    logbuffer.install()
     before = sys.stdout
     logbuffer.install()
     logbuffer.install()
