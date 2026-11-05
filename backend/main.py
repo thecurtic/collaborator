@@ -720,13 +720,14 @@ DEFAULT_TOOL_DESCRIPTIONS = {
                "pay, to top the wallet up. A timeout is UNCONFIRMED, not "
                "failed — retry with the SAME invoice (the tool checks before "
                "it pays); never fetch a fresh invoice for the same purchase."),
-    "ditta_search": ("Federated search through the user's DITTA broker: it "
-                     "routes the query to independent indexers and merges "
-                     "what they return. Paid per query from the wallet "
-                     "automatically, within a per-query cap — you never "
-                     "handle an invoice. Distinct from web_search; reach for "
-                     "it when the user asks for DITTA or when its indexers "
-                     "fit the question."),
+    "ditta": ("The user's DITTA broker: federated search across independent "
+              "indexers. search (default): paid per query from the wallet "
+              "automatically, within a per-query cap — you never handle an "
+              "invoice. quote: what a search would cost and which indexers "
+              "it would ask, nothing paid. indexers: the indexers the broker "
+              "knows (name, id, coverage, price). `indexers` scopes a search "
+              "or quote by name or id. Distinct from web_search; reach for it "
+              "when the user asks for DITTA or its indexers fit the question."),
     "stage_note_send": ("Stage one of the user's notes to be sent to its "
                         "project's agents. Nothing is sent: the note view shows "
                         "the pending send and the user presses send. Only for "
@@ -1211,17 +1212,27 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                          "description": "create_invoice only: the invoice's "
                                         "description"}},
                 "required": []}}})
-    # ditta_search is self-gating: needs the broker's url.
-    # A broker that charges also needs the user's wallet (checked at call).
-    if avail.get("ditta_search", True) and ditta.configured():
+    # ditta is self-gating: needs the broker's url. A broker that charges
+    # also needs the user's wallet (checked at call). The old key
+    # tools.available.ditta_search still switches it off.
+    if (avail.get("ditta", True) and avail.get("ditta_search", True)
+            and ditta.configured()):
         schemas.append({"type": "function", "function": {
-            "name": "ditta_search",
-            "description": descs["ditta_search"],
+            "name": "ditta",
+            "description": descs["ditta"],
             "parameters": {"type": "object", "properties": {
-                "query": {"type": "string", "description": "what to search for"},
+                "action": {"type": "string", "enum": list(ditta.ACTIONS),
+                           "description": "what to do (default search)"},
+                "query": {"type": "string",
+                          "description": "what to search for (search, quote)"},
                 "n": {"type": "integer",
-                      "description": "how many results (default from config)"}},
-                "required": ["query"]}}})
+                      "description": "how many results (default from config)"},
+                "indexers": {"type": "array", "items": {"type": "string"},
+                             "description": "optional scope for search or "
+                                            "quote: indexer names or ids as "
+                                            "the indexers action lists them; "
+                                            "omit for the whole network"}},
+                "required": []}}})
     # The agent seam's two tools exist only once agents serve a project.
     # Channel content otherwise stays out of the model's reach (like Scratch).
     try:
@@ -1751,10 +1762,12 @@ def _build_tools(db_path: str, exclude_ids: Optional[List[int]] = None):
                 action=args.get("action") or "get_balance",
                 invoice=args.get("invoice"), reason=args.get("reason"),
                 amount_sats=args.get("amount_sats"), memo=args.get("memo")))
-        if name == "ditta_search":
-            return json.dumps(ditta.ditta_search(
-                db_path, wallet_user_key, args.get("query") or "",
-                n=args.get("n")))
+        if name in ("ditta", "ditta_search"):
+            return json.dumps(ditta.ditta(
+                db_path, wallet_user_key,
+                action=args.get("action") or "search",
+                query=args.get("query") or "", n=args.get("n"),
+                indexers=args.get("indexers")))
         if name == "stage_note_send":
             return json.dumps(_stage_note_send(db_path, args.get("title") or "",
                                                args.get("comment")))

@@ -778,6 +778,31 @@ Photograph a receipt in Scratch, hold send, and it becomes spending rows
 - **Last four only.** Full card and account numbers, auth codes, balances
   and Bitcoin addresses are left out at extraction.
 
+## Decision: DITTA Is One Tool Over /client, Not an MCP Client
+
+Decided 2026-11-05, when the broker shipped an MCP server (`search`,
+`redeem`, `quote`, `list_indexers`) and made `/client` plain JSON.
+
+- **The broker's API directly, no MCP.** The MCP tools are a thin layer
+  over `/client`; speaking MCP would add a dependency and a moving part for
+  nothing Collaborator lacks. A general MCP client stays out: remote tool
+  descriptions would enter the prompt, and the toolkit would grow with
+  every server attached.
+- **No redeem.** The MCP split of search and redeem exists because an MCP
+  agent pays with its own wallet. Here the code pays, so the model never
+  sees an invoice and the caps stay the only control.
+- **One tool, an `action`.** `ditta` (formerly `ditta_search`) does
+  `search`, `quote` and `indexers`, like `wallet`, so the toolkit gains no
+  entries. Only `search` counts as money in the tool log.
+- **Code resolves the scope.** The model names indexers by name (whole,
+  case-insensitive) or by a pubkey prefix of 8+ hex; `ditta.py` resolves
+  them against `/client/peers` and refuses anything unknown or ambiguous
+  before anything is quoted or paid, so a scope is never silently narrowed
+  or widened. Models garble 64-hex keys; they don't garble names.
+- **No pinned key.** `/client` is a product API with no DITTA signature;
+  who is paid rests on TLS to the configured URL, or the onion address.
+  The per-query cap is checked on the quote and again on the 402's amount.
+
 ## Future Considerations (User-Defined)
 
 - [ ] Priority levels for recall

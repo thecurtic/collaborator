@@ -438,7 +438,7 @@ def load_config() -> dict:
                 "read_attachment": True,   # an attachment's extracted text, paged
                 "read_logs": True,     # agent can read its own recent server logs
                 "wallet": True,        # self-gating: needs a wallet for the user
-                "ditta_search": True,  # self-gating: needs tools.ditta.url
+                "ditta": True,         # self-gating: needs tools.ditta.url
                 "spending_lookup": True,  # resolve store/category/brand/card names (spending.enabled)
                 "spending_query": True,   # spending totals, summed in SQL
             },

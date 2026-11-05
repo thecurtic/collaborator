@@ -354,7 +354,7 @@ tools:
     read_logs: true           # agent can read its own recent server logs (ring buffer)
     wallet: true              # self-gating: active only when the requesting user has a
                               # wallet under the selected tools.wallet.provider
-    ditta_search: true        # self-gating: active only when tools.ditta.url is set
+    ditta: true               # self-gating: active only when tools.ditta.url is set
     spending_lookup: true     # resolve store/category/brand/card names (needs spending.enabled)
     spending_query: true      # spending totals and breakdowns, summed by the database
   transcribe_video:
@@ -446,7 +446,7 @@ tools:
     timeout: 30               # seconds to wait for the wallet's NIP-47 response
     encryption: "auto"        # auto (read the wallet's info event: nip44_v2 when
                               # advertised, else nip04) | nip44 | nip04 to pin one
-  ditta:                      # DITTA federated search (ditta_search tool) via your broker
+  ditta:                      # DITTA federated search (ditta tool) via your broker
     url: ""                   # the broker's base URL: a domain, an IP or an onion, e.g.
                               # "https://<broker-host>". Empty = tool disabled. Use
                               # https or an onion: the 402 is unsigned, so the

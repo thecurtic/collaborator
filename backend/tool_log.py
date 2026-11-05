@@ -28,7 +28,7 @@ from config import get_config
 
 # What a tool can do. Unknown tools land in "other", which counts as risk.
 _CATEGORY = {
-    "ditta_search": "money",
+    "ditta_search": "money",     # the ditta tool's old name, in older logs
     "web_search": "outbound", "fetch_url": "outbound",
     "screenshot_page": "outbound", "git_issue": "outbound",
     "propose_note": "writes", "propose_edit": "writes",
@@ -74,6 +74,8 @@ def category(name: str, args: Optional[Dict] = None) -> str:
     if name == "wallet":
         action = args.get("action") or "get_balance"
         return "reads" if action == "get_balance" else "money"
+    if name == "ditta":
+        return "money" if (args.get("action") or "search") == "search" else "reads"
     if name == "transcribe_video":
         # With a URL it downloads; without, it searches the saved ones.
         return "outbound" if (args.get("url") or "").strip() else "reads"

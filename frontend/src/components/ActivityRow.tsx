@@ -35,7 +35,7 @@ export function toolIcon(tool: string) {
   if (tool === 'calculate') return Calculator;
   if (tool === 'git_read') return FolderGit2;
   if (tool === 'transcribe_video') return FileVideo;
-  if (tool === 'ditta_search') return Network;
+  if (tool === 'ditta' || tool === 'ditta_search') return Network;
   if (tool === 'wallet') return Zap;
   return Wrench;
 }
