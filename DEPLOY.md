@@ -5,7 +5,7 @@ files behind a reverse proxy), and whatever inference server you point it at.
 
 ## Prerequisites
 
-- Linux host with Python 3.10 to 3.12, Node 20+, git, ffmpeg. On a system
+- Linux host with Python 3.10 to 3.12, Node 22+, git, ffmpeg. On a system
   whose default Python is 3.13 (Ubuntu 25.04 and later), install 3.12 beside
   it (Ubuntu: the deadsnakes PPA) and create the venv with
   `python3.12 -m venv backend/.venv`.
