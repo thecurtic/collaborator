@@ -41,6 +41,25 @@
                 <data android:scheme="collaborator" android:host="open" />
             </intent-filter>
 
+            <!-- Long-press launcher shortcut to the server-URL screen. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+
+        </activity>
+
+        <!-- Server URL setting (SettingsActivity). APPLICATION_PREFERENCES
+             puts it behind Android's App info → "Additional settings in the
+             app"; the launcher shortcut and first launch reach it too. -->
+        <activity
+            android:name=".SettingsActivity"
+            android:label="@string/settings_title"
+            android:theme="@style/AppTheme.Settings"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.APPLICATION_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <!-- The mic-type foreground service (capawesome plugin) that keeps

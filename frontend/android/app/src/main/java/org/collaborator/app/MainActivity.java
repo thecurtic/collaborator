@@ -7,12 +7,30 @@ import android.os.Bundle;
 import androidx.activity.OnBackPressedCallback;
 
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.Logger;
 
 public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // The server comes from the in-app setting (SettingsActivity), falling
+        // back to the URL baked in at sync time. Set before super.onCreate,
+        // which builds the bridge from `config`.
+        String saved = ServerUrl.saved(this);
+        if (saved != null) {
+            try {
+                config = ServerUrl.configFor(this, saved);
+            } catch (Exception e) {
+                Logger.error("Couldn't apply the saved server URL; using the built-in one", e);
+            }
+        }
         super.onCreate(savedInstanceState);
+        if (ServerUrl.effective(this) == null) {
+            // Built without COLLABORATOR_URL and never configured: ask first.
+            startActivity(new Intent(this, SettingsActivity.class));
+            finish();
+            return;
+        }
         handleSendIntent(getIntent());
         handleViewIntent(getIntent());
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {

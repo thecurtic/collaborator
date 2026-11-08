@@ -4,4 +4,20 @@
     <string name="title_activity_main">Collaborator</string>
     <string name="package_name">org.collaborator.app</string>
     <string name="custom_url_scheme">org.collaborator.app</string>
+    <string name="settings_title">Collaborator server</string>
+    <string name="settings_label">Server URL</string>
+    <string name="settings_hint">https://collaborator.example.com</string>
+    <string name="settings_status_unset">No server set yet. Enter the address you open Collaborator at.</string>
+    <string name="settings_status_saved">Currently: %1$s</string>
+    <string name="settings_status_bundled">Currently: %1$s (built-in default)</string>
+    <string name="settings_explainer">The app loads Collaborator from this address. Changing it signs you out: each server keeps its own session.</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_checking">Checking…</string>
+    <string name="settings_reset">Reset to %1$s</string>
+    <string name="settings_invalid">Enter an https:// address</string>
+    <string name="settings_unreachable_title">Server not reachable</string>
+    <string name="settings_unreachable_body">Couldn\'t reach Collaborator at %1$s (%2$s). Save it anyway?</string>
+    <string name="settings_save_anyway">Save anyway</string>
+    <string name="shortcut_server_url">Server URL</string>
+    <string name="shortcut_server_url_long">Change server URL</string>
 </resources>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the launcher icon → "Server URL". -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="server_url"
+        android:shortcutLongLabel="@string/shortcut_server_url_long"
+        android:shortcutShortLabel="@string/shortcut_server_url">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="org.collaborator.app.SettingsActivity"
+            android:targetPackage="org.collaborator.app" />
+    </shortcut>
+</shortcuts>

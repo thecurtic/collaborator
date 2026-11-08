@@ -145,13 +145,25 @@ forwards share-sheet text to Scratch and opens `collaborator://open/…` links
 (ntfy taps with `notifications.open_in: app`) in the app instead of the
 phone's browser.
 
-Point it at your deployment and build (needs an Android SDK):
+Build (needs an Android SDK):
 
 ```bash
-COLLABORATOR_URL=https://collaborator.example.com npm run android:sync
+npm run android:sync          # optionally COLLABORATOR_URL=https://… to bake in a default
 cd android && ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+The server URL is a **setting in the app**, not a build input, so moving the
+deployment doesn't need a new APK. The native settings screen
+(`SettingsActivity`) is reachable three ways: long-press the launcher icon →
+**Server URL**; Android Settings → Apps → Collaborator → **Additional
+settings in the app** (the gear on App info; wording varies by vendor); and on
+first launch when no URL is set. It accepts `https://` addresses only (the
+microphone needs a secure context), checks `GET /api/health` before saving
+(you can save anyway), then restarts the shell against the new server. A
+`COLLABORATOR_URL` given at sync time is the default it falls back to and can
+be reset to. Each server origin keeps its own WebView storage, so switching
+means signing in again.
 
 The first call prompts for microphone and notification permissions. The
 debug APK is fine for personal sideloading; set up a signing config in

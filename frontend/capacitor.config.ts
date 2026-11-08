@@ -7,11 +7,15 @@ import type { CapacitorConfig } from '@capacitor/cli';
  * exists only for what the web platform can't do — the microphone foreground
  * service that keeps calls alive with the screen off.
  *
- * Point the shell at YOUR deployment before `npm run android:sync`:
+ * The server URL is a setting in the app (long-press the launcher icon →
+ * Server URL, or Android's App info → Additional settings in the app). This
+ * value is only the default it starts from; without one the app asks on
+ * first launch. To bake one in:
  *
  *   COLLABORATOR_URL=https://collaborator.example.com npm run android:sync
  *
- * The value is baked into the APK at sync time; rebuild after changing it.
+ * MainActivity rewrites server.url / allowNavigation at runtime from the
+ * saved setting (see ServerUrl.java).
  */
 const SERVER_URL = process.env.COLLABORATOR_URL ?? 'https://collaborator.example.com';
 
