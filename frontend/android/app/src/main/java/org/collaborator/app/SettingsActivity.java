@@ -12,6 +12,10 @@ import android.widget.TextView;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -31,8 +35,12 @@ public class SettingsActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Edge-to-edge on every version (Android 15+ forces it anyway), so
+        // the insets padding below is the one layout path.
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_settings);
         setTitle(R.string.settings_title);
+        padForSystemBars(findViewById(R.id.root));
 
         urlField = findViewById(R.id.server_url);
         saveButton = findViewById(R.id.save);
@@ -72,6 +80,22 @@ public class SettingsActivity extends AppCompatActivity {
                 return true;
             }
             return false;
+        });
+    }
+
+    /**
+     * Android 15+ draws edge-to-edge: keep the content clear of the status
+     * bar, navigation bar, cutout and keyboard.
+     */
+    private static void padForSystemBars(View root) {
+        final int l = root.getPaddingLeft(), t = root.getPaddingTop();
+        final int r = root.getPaddingRight(), b = root.getPaddingBottom();
+        ViewCompat.setOnApplyWindowInsetsListener(root, (v, windowInsets) -> {
+            Insets in = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars()
+                    | WindowInsetsCompat.Type.displayCutout()
+                    | WindowInsetsCompat.Type.ime());
+            v.setPadding(l + in.left, t + in.top, r + in.right, b + in.bottom);
+            return WindowInsetsCompat.CONSUMED;
         });
     }
 
