@@ -106,6 +106,9 @@ def load_config() -> dict:
             # keeps proxies from timing out during long thinks; when off, a
             # periodic heartbeat status covers that instead.
             "stream_reasoning": True,
+            # Cut a reply whose reasoning starts looping (the same sentences
+            # over and over) and retry it once with a "think briefly" nudge.
+            "reasoning_loop_retry": True,
             # OpenAI-style reasoning effort for models that take it (gpt-oss:
             # "low" | "medium" | "high"). None = not sent (other servers 400).
             "reasoning_effort": None,

@@ -158,6 +158,12 @@ data: {"type":"done", ...}
   genuinely nothing), or `"error"` (with `error` text — e.g. all search engines down).
   Lets the UI distinguish "found nothing" from "search failed" from "never searched".
 - `tool_result` — the raw tool output, only when `tools.show_step_results` is on.
+- `status` with only a `label` (no `tool`) is a general progress note, e.g.
+  "Thinking went in circles — retrying more briefly…": the reasoning looped, the
+  generation was cut, and it restarts once with a brevity nudge
+  (`inference.reasoning_loop_retry`). This applies to replies without tools too. The
+  reasoning pane gets a `[looping — restarted]` marker, and the retry's thinking
+  follows it.
 - If the model calls the `synthesize` tool, its output is persisted as the turn's
   recall block (see `node.recall` in `GET /api/tree`).
 - The old single `recall` event is **removed** — recall is now tool-driven.

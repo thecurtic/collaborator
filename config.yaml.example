@@ -38,6 +38,9 @@ inference:
   # gpt-oss harmony <|channel|>analysis). Set false to hide it (a keepalive
   # heartbeat covers long thinks instead).
   # stream_reasoning: true
+  # When the model's thinking goes in circles (the same sentences repeating),
+  # cut the reply and retry it once with a "think briefly" nudge.
+  # reasoning_loop_retry: true
   # gpt-oss reasoning depth ("low" | "medium" | "high"). Leave unset for
   # models/servers that don't accept the field.
   # reasoning_effort: "medium"

@@ -803,6 +803,20 @@ Decided 2026-11-05, when the broker shipped an MCP server (`search`,
   who is paid rests on TLS to the configured URL, or the onion address.
   The per-query cap is checked on the quote and again on the 402's amount.
 
+## Decision: Looping Thoughts Are Cut and Retried Once (2026-11-13)
+
+Quantized reasoning models sometimes think in circles on hard ideas, repeating
+the same sentences until the token budget runs out. The user's manual fix
+worked: stop, resend the same prompt with "don't think too hard on this". The
+backend now does that automatically. A detector on the reasoning stream trips
+when a sentence of 6+ words recurs 4 times, or when the last 4,000 characters
+compress below 0.2 with zlib (normal prose sits at about 0.35–0.5, loops at
+about 0.05–0.1). Then the generation is cut and retried once with the nudge
+added as a system message. The saved user message is never changed. The
+detector only trips before any answer text or tool call, and there is only one
+retry per turn, so the guard can never loop itself. This is code enforcement,
+not a per-model prompt.
+
 ## Future Considerations (User-Defined)
 
 - [ ] Priority levels for recall

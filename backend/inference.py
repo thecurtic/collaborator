@@ -5,7 +5,9 @@ and context-aware messaging. Supports both streaming and non-streaming modes.
 """
 
 import os
+import re
 import time
+import zlib
 import requests
 from typing import List, Dict, Optional, AsyncGenerator, Tuple
 from functools import lru_cache
@@ -417,6 +419,67 @@ def _build_payload(messages: List[Dict], stream: bool) -> Dict:
     return payload
 
 
+# Reasoning-loop guard. Quantized reasoning models sometimes get stuck
+# thinking in circles, repeating the same sentences until max_tokens runs out.
+# The detector watches the reasoning stream; on a trip the generation is cut
+# and retried ONCE with a "think briefly" nudge (inference.reasoning_loop_retry).
+LOOP_RETRY_NUDGE = (
+    "Your previous attempt at this reply got stuck going in circles while "
+    "thinking. Don't think too hard on this: reason briefly, then answer.")
+LOOP_RETRY_LABEL = "Thinking went in circles — retrying more briefly…"
+
+
+class _LoopDetector:
+    """feed(reasoning text) -> True once the reasoning is looping.
+
+    Two signals: one sentence of real length (6+ words) recurring
+    REPEAT_LIMIT times, or the recent window compressing below
+    COMPRESS_RATIO (normal prose sits at ~0.35-0.5 under zlib; a loop that
+    rewords itself slightly lands near 0.05-0.1)."""
+
+    REPEAT_LIMIT = 4
+    MIN_WORDS = 6
+    WINDOW = 4000
+    COMPRESS_RATIO = 0.2
+    CHECK_EVERY = 500
+
+    def __init__(self):
+        self.counts: Dict[str, int] = {}
+        self.pending = ""
+        self.window = ""
+        self.since_check = 0
+
+    def feed(self, text: str) -> bool:
+        self.pending += text
+        *sentences, self.pending = re.split(r"(?<=[.!?\n])", self.pending)
+        for sentence in sentences:
+            key = " ".join(re.sub(r"[^\w\s]", " ", sentence.lower()).split())
+            if len(key.split()) >= self.MIN_WORDS:
+                self.counts[key] = self.counts.get(key, 0) + 1
+                if self.counts[key] >= self.REPEAT_LIMIT:
+                    return True
+        self.window = (self.window + text)[-self.WINDOW:]
+        self.since_check += len(text)
+        if len(self.window) >= self.WINDOW and self.since_check >= self.CHECK_EVERY:
+            self.since_check = 0
+            raw = self.window.encode("utf-8")
+            if len(zlib.compress(raw)) / len(raw) < self.COMPRESS_RATIO:
+                return True
+        return False
+
+
+class _ReasoningLoop(Exception):
+    """Internal: the reasoning stream tripped the loop detector."""
+
+
+def _loop_retry_enabled() -> bool:
+    return bool(_get_config().get("inference", {}).get("reasoning_loop_retry", True))
+
+
+def _with_nudge(extra_system: Optional[str]) -> str:
+    return f"{extra_system}\n\n{LOOP_RETRY_NUDGE}" if extra_system else LOOP_RETRY_NUDGE
+
+
 def stream_llm_tokens(
     message: str,
     context_turns: Optional[List[Dict]] = None,
@@ -427,6 +490,36 @@ def stream_llm_tokens(
     images: Optional[List[tuple]] = None,
 ):
     """Yield tokens from the local LLM endpoint as they arrive (true streaming).
+
+    See _stream_llm_tokens_once. If the reasoning starts looping before any
+    answer text, the generation is cut and retried once with a brevity nudge
+    (a status event announces it when include_reasoning is on)."""
+    kwargs = dict(context_turns=context_turns, mode=mode, recall=recall,
+                  include_reasoning=include_reasoning, images=images)
+    guard = _loop_retry_enabled()
+    try:
+        yield from _stream_llm_tokens_once(message, extra_system=extra_system,
+                                           loop_guard=guard, **kwargs)
+    except _ReasoningLoop:
+        print("Warning: reasoning loop detected — retrying once with a brevity nudge")
+        if include_reasoning:
+            yield {"type": "status", "label": LOOP_RETRY_LABEL}
+            yield {"type": "reasoning", "content": "\n\n[looping — restarted]\n\n"}
+        yield from _stream_llm_tokens_once(message, extra_system=_with_nudge(extra_system),
+                                           loop_guard=False, **kwargs)
+
+
+def _stream_llm_tokens_once(
+    message: str,
+    context_turns: Optional[List[Dict]] = None,
+    mode: Optional[str] = None,
+    recall: Optional[str] = None,
+    extra_system: Optional[str] = None,
+    include_reasoning: bool = False,
+    images: Optional[List[tuple]] = None,
+    loop_guard: bool = False,
+):
+    """One streaming generation.
 
     Args:
         message: The user's input message
@@ -453,9 +546,17 @@ def stream_llm_tokens(
     want_reasoning = include_reasoning and _stream_reasoning_enabled()
     splitter = _ThinkSplitter()   # inline <think>/harmony markers -> reasoning
     logged_keys = False
+    detector = _LoopDetector() if loop_guard else None
+    response = None
 
     def _emit_token(text):
         return {"type": "token", "content": text} if include_reasoning else text
+
+    def _check_loop(text):
+        """Cut the generation if reasoning loops before any answer text."""
+        if detector and not emitted_any and detector.feed(text):
+            response.close()
+            raise _ReasoningLoop()
 
     try:
         response = requests.post(
@@ -499,6 +600,7 @@ def stream_llm_tokens(
                     side = _delta_reasoning(delta)
                     if side:
                         saw_reasoning = True
+                        _check_loop(side)
                         if want_reasoning:
                             yield {"type": "reasoning", "content": side}
                     if choice.get("finish_reason") == "length":
@@ -509,6 +611,7 @@ def stream_llm_tokens(
                         thought, answer = splitter.feed(content)
                         if thought:
                             saw_reasoning = True
+                            _check_loop(thought)
                             if want_reasoning:
                                 yield {"type": "reasoning", "content": thought}
                         if answer:
@@ -2142,23 +2245,28 @@ def _iter_stream_events(payload: Dict):
     response = requests.post(
         f"{_get_endpoint_url()}/chat/completions", json=payload, timeout=120, stream=True)
     response.raise_for_status()
-    for raw in response.iter_lines():  # bytes; json.loads decodes UTF-8 correctly
-        if not raw or not raw.startswith(b"data:"):
-            continue
-        data_bytes = raw[5:].strip()
-        if data_bytes == b"[DONE]":
-            break
-        try:
-            obj = json.loads(data_bytes)
-        except Exception:
-            continue
-        if isinstance(obj, dict) and obj.get("error"):
-            err = obj["error"]
-            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-            raise RuntimeError(f"LM Studio error: {msg}")
-        if obj.get("choices"):
-            choice = obj["choices"][0]
-            yield choice, (choice.get("delta") or {})
+    try:
+        for raw in response.iter_lines():  # bytes; json.loads decodes UTF-8 correctly
+            if not raw or not raw.startswith(b"data:"):
+                continue
+            data_bytes = raw[5:].strip()
+            if data_bytes == b"[DONE]":
+                break
+            try:
+                obj = json.loads(data_bytes)
+            except Exception:
+                continue
+            if isinstance(obj, dict) and obj.get("error"):
+                err = obj["error"]
+                msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                raise RuntimeError(f"LM Studio error: {msg}")
+            if obj.get("choices"):
+                choice = obj["choices"][0]
+                yield choice, (choice.get("delta") or {})
+    finally:
+        # Closing early (a cut reasoning loop) drops the connection, which
+        # stops the server generating.
+        response.close()
 
 
 # Reasoning streaming: forwarded as its own event type so the UI can show a
@@ -2219,8 +2327,11 @@ def generate_with_tools(
 
     known_names = {s["function"]["name"] for s in tool_schemas}
     nudged_about_textual_calls = False
+    loop_retried = not _loop_retry_enabled()   # one loop retry per turn
 
-    for round_index in range(max_rounds + 1):
+    round_index = -1
+    while round_index < max_rounds:
+        round_index += 1
         # Last iteration: drop tools so the model must produce a final answer.
         use_tools = tool_schemas and round_index < max_rounds
         if tool_schemas and not use_tools:
@@ -2254,12 +2365,17 @@ def generate_with_tools(
         stream_reasoning = _stream_reasoning_enabled()
         reasoning_buf = ""
         last_heartbeat = time.monotonic()
+        detector = None if loop_retried else _LoopDetector()
 
         def _take_reasoning(text):
             """Buffer reasoning for flushing (or heartbeat when display is off).
-            Returns an event to yield, or None."""
+            Returns an event to yield, or None. Raises _ReasoningLoop when the
+            reasoning loops before anything else was produced this round."""
             nonlocal reasoning_buf, last_heartbeat, saw_reasoning
             saw_reasoning = True
+            if (detector and not content_parts and not tool_calls
+                    and detector.feed(text)):
+                raise _ReasoningLoop()
             if stream_reasoning:
                 reasoning_buf += text
                 if len(reasoning_buf) >= _REASONING_FLUSH_CHARS:
@@ -2273,8 +2389,9 @@ def generate_with_tools(
                 return {"type": "status", "label": "Thinking…", "heartbeat": True}
             return None
 
+        events = _iter_stream_events(payload)
         try:
-            for choice, delta in _iter_stream_events(payload):
+            for choice, delta in events:
                 if first_delta_at is None:
                     first_delta_at = time.monotonic()
                     print(f"timing: LLM first delta after "
@@ -2325,6 +2442,20 @@ def generate_with_tools(
                 if out:
                     emitted_parts.append(out)
                     yield {"type": "token", "content": out}
+        except _ReasoningLoop:
+            events.close()
+            loop_retried = True
+            print(f"Warning: reasoning loop detected (round {round_index}) — "
+                  "retrying once with a brevity nudge")
+            if reasoning_buf:
+                yield {"type": "reasoning", "content": reasoning_buf}
+            if stream_reasoning:
+                yield {"type": "reasoning", "content": "\n\n[looping — restarted]\n\n"}
+            if emit_status:
+                yield {"type": "status", "label": LOOP_RETRY_LABEL}
+            messages.append({"role": "system", "content": LOOP_RETRY_NUDGE})
+            round_index -= 1   # the retry redoes this round
+            continue
         except requests.exceptions.RequestException as e:
             print(f"LLM request failed: {e} — message shape: {_message_shape(messages)}")
             yield {"type": "error", "detail": f"LLM request failed: {e}"}
